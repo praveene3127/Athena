@@ -1,0 +1,9 @@
+version: 1
+bundleID: com.athena.reading
+product: Athena
+infoPath: Runner/Info.plist
+entitlementsPath: Runner/Runner.entitlements
+iconPath: Runner/Assets.xcassets/AppIcon.appiconset
+resources:
+  - Runner/Assets.xcassets
+  - Runner/Base.lproj

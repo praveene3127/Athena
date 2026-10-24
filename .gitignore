@@ -1,0 +1,122 @@
+# ==============================================================================
+# Athena (.gitignore) — Comprehensive Workspace Ignores
+# ==============================================================================
+
+# --- Python & Backend ---
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+env/
+venv/
+.venv/
+ENV/
+*.egg-info/
+.installed.cfg
+*.egg
+.pytest_cache/
+backend/.pytest_cache/
+backend/__pycache__/
+*.coverage
+htmlcov/
+.tox/
+
+# --- Environment Secrets & Credentials ---
+.env
+.env.*
+!.env.example
+*.key
+*.pem
+*.p12
+*.p8
+*.cer
+*.mobileprovision
+AuthKey_*.p8
+
+# --- Athena Application Data & Databases ---
+data/
+backend/data/
+*.db
+*.db-wal
+*.db-shm
+*.sqlite
+*.sqlite3
+
+# --- Tools & Binaries ---
+tools/cloudflared.exe
+*.exe
+
+# --- Flutter / Dart Build & Dependency Artifacts ---
+.dart_tool/
+.packages
+.pub-cache/
+.pub/
+build/
+app/build/
+app/.dart_tool/
+app/.packages
+app/.pub-cache/
+app/.pub/
+app/.flutter-plugins
+app/.flutter-plugins-dependencies
+.flutter-plugins
+.flutter-plugins-dependencies
+
+# --- Android Native Build Artifacts ---
+.gradle/
+android/.gradle/
+app/android/.gradle/
+local.properties
+app/android/local.properties
+**/android/app/debug/
+**/android/app/profile/
+**/android/app/release/
+*.apk.sha1
+*.aab
+
+# --- iOS & macOS Native Artifacts ---
+ios/Pods/
+app/ios/Pods/
+ios/.symlinks/
+app/ios/.symlinks/
+**/Flutter/ephemeral/
+*.xcworkspace
+*.xcuserdata
+DerivedData/
+*.moved-aside
+*.xcuserstate
+
+# --- IDEs & OS Metadata ---
+.idea/
+*.iml
+*.ipr
+*.iws
+.vscode/
+*.swp
+*.swo
+*~
+.DS_Store
+.DS_Store?
+._*
+Thumbs.db
+ehthumbs.db
+
+# --- Quarantine, Cache & Scratch Files ---
+_quarantine/
+.repowise/
+graphify-out/
+*.log
+
+# --- xtool (Cross-Platform iOS Toolchain) ---
+xtool/.xtool-tmp/
+**/xtool/.xtool-tmp/
+.bsp/
+*.AppImage
+*.AppImage.zsync
+
+# --- Official App Releases ---
+!releases/
+!releases/*.apk
+!releases/*.ipa
+

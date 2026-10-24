@@ -1,0 +1,42 @@
+workflows:
+  ios-release:
+    name: Athena iOS Release Build & TestFlight
+    instance_type: mac_mini_m1
+    max_build_duration: 60
+    environment:
+      flutter: 3.24.5
+      xcode: 16.0
+      cocoapods: default
+      groups:
+        - appstore_credentials # Stores APP_STORE_CONNECT_KEY_IDENTIFIER, APP_STORE_CONNECT_ISSUER_ID, APP_STORE_CONNECT_PRIVATE_KEY, CERTIFICATE_PRIVATE_KEY
+      vars:
+        BUNDLE_ID: "com.athena.reading"
+    triggering:
+      events:
+        - push
+      branch_patterns:
+        - pattern: main
+          include: true
+          source: true
+    scripts:
+      - name: Set up code signing settings on Xcode project
+        script: |
+          xcode-project use-profiles
+      - name: Get Flutter packages
+        script: |
+          cd app && flutter packages pub get
+      - name: Flutter analyze & test
+        script: |
+          cd app && flutter analyze && flutter test
+      - name: Build IPA with production API base URL
+        script: |
+          cd app && flutter build ipa --release \
+            --dart-define=API_BASE_URL="https://reading.athena.internal" \
+            --export-options-plist=/Users/builder/export_options.plist
+    artifacts:
+      - app/build/ios/ipa/*.ipa
+      - /tmp/xcodebuild_logs/*.log
+    publishing:
+      app_store_connect:
+        auth: integration
+        submit_to_testflight: true

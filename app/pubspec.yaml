@@ -1,0 +1,70 @@
+name: athena
+description: "Athena Android reading app — preserves source text fidelity with grounded AI context."
+publish_to: "none"
+version: 0.1.0+1
+
+environment:
+  sdk: ">=3.2.0 <4.0.0"
+  flutter: ">=3.16.0"
+
+dependencies:
+  flutter:
+    sdk: flutter
+  flutter_riverpod: ^2.5.1
+  go_router: ^14.1.4
+  dio: ^5.4.3+1
+  file_picker: ^8.0.3
+  url_launcher: ^6.3.0
+  shared_preferences: ^2.2.3
+  scrollable_positioned_list: ^0.3.8
+  connectivity_plus: ^7.3.2
+  sqflite: ^2.4.4+1
+  path_provider: ^2.1.6
+  path: ^1.9.1
+  crypto: ^3.0.7
+  flutter_secure_storage: ^10.3.4
+
+dev_dependencies:
+  flutter_test:
+    sdk: flutter
+  flutter_lints: ^3.0.0
+
+flutter:
+  uses-material-design: true
+  assets:
+    - assets/avatars/
+    - assets/fonts/
+  fonts:
+    - family: DM Serif Display
+      fonts:
+        - asset: assets/fonts/dm-serif-display-400-normal.ttf
+        - asset: assets/fonts/dm-serif-display-400-italic.ttf
+          style: italic
+    - family: Newsreader
+      fonts:
+        - asset: assets/fonts/newsreader-400-normal.ttf
+          weight: 400
+        - asset: assets/fonts/newsreader-500-normal.ttf
+          weight: 500
+        - asset: assets/fonts/newsreader-600-normal.ttf
+          weight: 600
+        - asset: assets/fonts/newsreader-700-normal.ttf
+          weight: 700
+        - asset: assets/fonts/newsreader-400-italic.ttf
+          style: italic
+          weight: 400
+        - asset: assets/fonts/newsreader-600-italic.ttf
+          style: italic
+          weight: 600
+    - family: Geist
+      fonts:
+        - asset: assets/fonts/geist-400-normal.ttf
+          weight: 400
+        - asset: assets/fonts/geist-500-normal.ttf
+          weight: 500
+        - asset: assets/fonts/geist-600-normal.ttf
+          weight: 600
+        - asset: assets/fonts/geist-700-normal.ttf
+          weight: 700
+
+

@@ -1,0 +1,13 @@
+fastapi
+uvicorn[standard]
+python-multipart
+pymupdf
+rapidocr>=2.0.6
+onnxruntime
+sqlmodel
+httpx
+openai
+google-genai>=2.29.0
+yake
+python-dotenv
+pytest
