@@ -19,6 +19,8 @@ import 'original_page_sheet.dart';
 import '../saved/saved_screen.dart';
 import '../ask/ask_sheet.dart';
 import '../settings/byok_settings_sheet.dart';
+import '../../widgets/athena_avatar.dart';
+import '../../widgets/athena_logo.dart';
 
 /// Provider for loading ReaderData for a given documentId.
 final readerDataProvider =
@@ -114,47 +116,144 @@ class _ReaderScreenState extends ConsumerState<ReaderScreen> {
           (localKey != null && localKey.isNotEmpty);
 
       if (!isConfigured && mounted) {
+        final isDark = Theme.of(context).brightness == Brightness.dark;
         showDialog(
           context: context,
           barrierDismissible: false,
-          builder: (ctx) => AlertDialog(
-            backgroundColor: AppTheme.surfaceWarm,
-            title: const Text(
-              'API Key Required',
-              style: TextStyle(
-                  fontFamily: AppTheme.fontDisplay,
-                  fontWeight: FontWeight.w600),
-            ),
-            content: const Text(
-              'Athena requires an AI API key (Gemini, OpenRouter, Groq, etc.) to analyze context, generate marginalia, and explain concepts.',
-              style: TextStyle(fontFamily: AppTheme.fontUI, fontSize: 13.5),
-            ),
-            actions: [
-              TextButton(
-                onPressed: () {
-                  Navigator.of(ctx).pop();
-                  if (context.canPop()) {
-                    context.pop();
-                  } else {
-                    context.go('/library');
-                  }
-                },
-                child: const Text('Return to Library'),
+          builder: (ctx) => Dialog(
+            backgroundColor: Colors.transparent,
+            insetPadding: const EdgeInsets.symmetric(horizontal: 20, vertical: 24),
+            child: Container(
+              padding: const EdgeInsets.all(4),
+              decoration: BoxDecoration(
+                color: isDark ? const Color(0xFF181818) : const Color(0xFFF7F6F2),
+                borderRadius: BorderRadius.circular(28),
+                border: Border.all(
+                  color: isDark ? const Color(0xFF282828) : const Color(0xFFE5E7DC),
+                  width: 1.0,
+                ),
+                boxShadow: [
+                  BoxShadow(
+                    color: isDark ? Colors.black54 : const Color(0x18141714),
+                    blurRadius: 28,
+                    offset: const Offset(0, 8),
+                  ),
+                ],
               ),
-              ElevatedButton(
-                onPressed: () {
-                  Navigator.of(ctx).pop();
-                  BYOKSettingsSheet.show(
-                    context,
-                    apiClient: client,
-                    onConfigSaved: () {
-                      _checkAIKeyConfigured();
-                    },
-                  );
-                },
-                child: const Text('Configure API Key'),
+              child: Container(
+                padding: const EdgeInsets.all(22),
+                decoration: BoxDecoration(
+                  color: isDark ? const Color(0xFF202020) : Colors.white,
+                  borderRadius: BorderRadius.circular(24),
+                  border: Border.all(
+                    color: isDark ? const Color(0xFF2E2E2E) : const Color(0xFFECEEE4),
+                    width: 1.0,
+                  ),
+                ),
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Row(
+                      children: [
+                        const AthenaAvatar(
+                          expression: AthenaExpression.sleepy,
+                          size: 38,
+                          showBezel: true,
+                        ),
+                        const SizedBox(width: 12),
+                        Expanded(
+                          child: Text(
+                            'API Key Required',
+                            style: TextStyle(
+                              fontFamily: AppTheme.fontDisplay,
+                              color: isDark ? Colors.white : AppTheme.ink,
+                              fontSize: 20,
+                              fontWeight: FontWeight.w400,
+                            ),
+                          ),
+                        ),
+                      ],
+                    ),
+                    const SizedBox(height: 14),
+                    Text(
+                      'Athena requires an AI API key (Gemini, OpenRouter, Groq, Anthropic, or local Ollama) to synthesize grounded context, explain concepts, and answer passage questions.',
+                      style: TextStyle(
+                        fontFamily: AppTheme.fontUI,
+                        color: isDark ? AppTheme.darkTextMuted : AppTheme.textMuted,
+                        fontSize: 13.5,
+                        height: 1.5,
+                      ),
+                    ),
+                    const SizedBox(height: 22),
+                    Row(
+                      children: [
+                        Expanded(
+                          child: OutlinedButton(
+                            onPressed: () {
+                              Navigator.of(ctx).pop();
+                              if (context.canPop()) {
+                                context.pop();
+                              } else {
+                                context.go('/library');
+                              }
+                            },
+                            style: OutlinedButton.styleFrom(
+                              foregroundColor: isDark ? Colors.white : AppTheme.ink,
+                              side: BorderSide(
+                                color: isDark ? const Color(0xFF333333) : const Color(0xFFE0E0E0),
+                              ),
+                              shape: RoundedRectangleBorder(
+                                borderRadius: BorderRadius.circular(14),
+                              ),
+                              padding: const EdgeInsets.symmetric(vertical: 13),
+                            ),
+                            child: const Text(
+                              'Return to Library',
+                              style: TextStyle(
+                                fontFamily: AppTheme.fontUI,
+                                fontWeight: FontWeight.w600,
+                              ),
+                            ),
+                          ),
+                        ),
+                        const SizedBox(width: 12),
+                        Expanded(
+                          child: ElevatedButton(
+                            onPressed: () {
+                              Navigator.of(ctx).pop();
+                              BYOKSettingsSheet.show(
+                                context,
+                                apiClient: client,
+                                onConfigSaved: () {
+                                  _checkAIKeyConfigured();
+                                },
+                              );
+                            },
+                            style: ElevatedButton.styleFrom(
+                              backgroundColor: isDark ? Colors.white : AppTheme.ink,
+                              foregroundColor: isDark ? AppTheme.ink : Colors.white,
+                              elevation: 0,
+                              shape: RoundedRectangleBorder(
+                                borderRadius: BorderRadius.circular(14),
+                              ),
+                              padding: const EdgeInsets.symmetric(vertical: 13),
+                            ),
+                            child: const Text(
+                              'Configure API Key',
+                              style: TextStyle(
+                                fontFamily: AppTheme.fontUI,
+                                fontWeight: FontWeight.w700,
+                              ),
+                            ),
+                          ),
+                        ),
+                      ],
+                    ),
+                  ],
+                ),
               ),
-            ],
+            ),
           ),
         );
       } else if (!config.isConfigured && localKey != null && localKey.isNotEmpty) {
@@ -1185,72 +1284,160 @@ class _ReaderScreenState extends ConsumerState<ReaderScreen> {
   }
 
   void _showIntegrityDialog(ReaderData data) {
+    final isDark = Theme.of(context).brightness == Brightness.dark;
     showDialog(
       context: context,
-      builder: (context) => AlertDialog(
-        backgroundColor: AppTheme.surface,
-        shape: RoundedRectangleBorder(
-          side: const BorderSide(color: AppTheme.border),
-          borderRadius: BorderRadius.circular(16),
-        ),
-        title: const Row(
-          children: [
-            Icon(Icons.verified, color: Color(0xFF005E54), size: 22),
-            SizedBox(width: 8),
-            Text('Cryptographic Integrity', style: TextStyle(fontSize: 16)),
-          ],
-        ),
-        content: Column(
-          mainAxisSize: MainAxisSize.min,
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            const Text(
-              'This check confirms that chunking preserved every extracted character in order. It cannot guarantee that PDF extraction or reading order was perfect; use the original page to verify complex layouts.',
-              style: TextStyle(color: AppTheme.textMuted, fontSize: 13),
+      builder: (context) => Dialog(
+        backgroundColor: Colors.transparent,
+        insetPadding: const EdgeInsets.symmetric(horizontal: 20, vertical: 24),
+        child: Container(
+          padding: const EdgeInsets.all(4),
+          decoration: BoxDecoration(
+            color: isDark ? const Color(0xFF181818) : const Color(0xFFF7F6F2),
+            borderRadius: BorderRadius.circular(28),
+            border: Border.all(
+              color: isDark ? const Color(0xFF282828) : const Color(0xFFE5E7DC),
+              width: 1.0,
             ),
-            const SizedBox(height: 16),
-            _infoRow(
-                'Status',
-                data.integrityVerified ? 'Verified' : 'Unverified',
-                data.integrityVerified
-                    ? const Color(0xFF005E54)
-                    : Colors.redAccent),
-            _infoRow(
-                'Total Chunks', '${data.chunkCount}', AppTheme.textPrimary),
-            const SizedBox(height: 8),
-            const Text(
-              'Original SHA-256:',
-              style: TextStyle(color: AppTheme.textMuted, fontSize: 11),
-            ),
-            SelectableText(
-              data.originalChecksum ?? 'N/A',
-              style: const TextStyle(
-                fontFamily: 'monospace',
-                fontSize: 11,
-                color: AppTheme.cyan,
+            boxShadow: [
+              BoxShadow(
+                color: isDark ? Colors.black54 : const Color(0x18141714),
+                blurRadius: 28,
+                offset: const Offset(0, 8),
               ),
-            ),
-            const SizedBox(height: 8),
-            const Text(
-              'Reconstructed SHA-256:',
-              style: TextStyle(color: AppTheme.textMuted, fontSize: 11),
-            ),
-            SelectableText(
-              data.reconstructedChecksum ?? 'N/A',
-              style: const TextStyle(
-                fontFamily: 'monospace',
-                fontSize: 11,
-                color: AppTheme.cyan,
-              ),
-            ),
-          ],
-        ),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.of(context).pop(),
-            child: const Text('CLOSE', style: TextStyle(color: AppTheme.cyan)),
+            ],
           ),
-        ],
+          child: Container(
+            padding: const EdgeInsets.all(22),
+            decoration: BoxDecoration(
+              color: isDark ? const Color(0xFF202020) : Colors.white,
+              borderRadius: BorderRadius.circular(24),
+              border: Border.all(
+                color: isDark ? const Color(0xFF2E2E2E) : const Color(0xFFECEEE4),
+                width: 1.0,
+              ),
+            ),
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Row(
+                  children: [
+                    Container(
+                      width: 40,
+                      height: 40,
+                      decoration: BoxDecoration(
+                        color: const Color(0xFF005E54).withValues(alpha: isDark ? 0.25 : 0.1),
+                        borderRadius: BorderRadius.circular(12),
+                        border: Border.all(
+                          color: const Color(0xFF005E54).withValues(alpha: 0.3),
+                          width: 1,
+                        ),
+                      ),
+                      child: const Icon(
+                        Icons.verified_rounded,
+                        color: Color(0xFF005E54),
+                        size: 22,
+                      ),
+                    ),
+                    const SizedBox(width: 12),
+                    Expanded(
+                      child: Text(
+                        'Cryptographic Integrity',
+                        style: TextStyle(
+                          fontFamily: AppTheme.fontDisplay,
+                          color: isDark ? Colors.white : AppTheme.ink,
+                          fontSize: 20,
+                          fontWeight: FontWeight.w400,
+                        ),
+                      ),
+                    ),
+                  ],
+                ),
+                const SizedBox(height: 14),
+                Text(
+                  'This check mathematically confirms that chunking preserved every character in contiguous sequence ("".join(chunks) == canonical_text).',
+                  style: TextStyle(
+                    fontFamily: AppTheme.fontUI,
+                    color: isDark ? AppTheme.darkTextMuted : AppTheme.textMuted,
+                    fontSize: 13,
+                    height: 1.5,
+                  ),
+                ),
+                const SizedBox(height: 16),
+                _infoRow(
+                  'Status',
+                  data.integrityVerified ? 'Verified Lossless' : 'Unverified',
+                  data.integrityVerified ? const Color(0xFF005E54) : Colors.redAccent,
+                ),
+                _infoRow(
+                  'Total Chunks',
+                  '${data.chunkCount}',
+                  isDark ? Colors.white : AppTheme.ink,
+                ),
+                const SizedBox(height: 12),
+                Container(
+                  width: double.infinity,
+                  padding: const EdgeInsets.all(12),
+                  decoration: BoxDecoration(
+                    color: isDark ? const Color(0xFF141414) : const Color(0xFFF7F6F2),
+                    borderRadius: BorderRadius.circular(14),
+                    border: Border.all(
+                      color: isDark ? const Color(0xFF282828) : const Color(0xFFE5E7DC),
+                    ),
+                  ),
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text(
+                        'SHA-256 INTEGRITY CHECKSUM',
+                        style: TextStyle(
+                          fontFamily: AppTheme.fontUI,
+                          fontSize: 10.5,
+                          fontWeight: FontWeight.w700,
+                          color: isDark ? AppTheme.darkTextMuted : AppTheme.textMuted,
+                          letterSpacing: 0.8,
+                        ),
+                      ),
+                      const SizedBox(height: 6),
+                      SelectableText(
+                        data.reconstructedChecksum ?? data.originalChecksum ?? 'N/A',
+                        style: TextStyle(
+                          fontFamily: 'monospace',
+                          fontSize: 11,
+                          color: isDark ? Colors.white70 : AppTheme.ink,
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+                const SizedBox(height: 20),
+                SizedBox(
+                  width: double.infinity,
+                  child: ElevatedButton(
+                    onPressed: () => Navigator.of(context).pop(),
+                    style: ElevatedButton.styleFrom(
+                      backgroundColor: isDark ? Colors.white : AppTheme.ink,
+                      foregroundColor: isDark ? AppTheme.ink : Colors.white,
+                      elevation: 0,
+                      shape: RoundedRectangleBorder(
+                        borderRadius: BorderRadius.circular(14),
+                      ),
+                      padding: const EdgeInsets.symmetric(vertical: 13),
+                    ),
+                    child: const Text(
+                      'Close',
+                      style: TextStyle(
+                        fontFamily: AppTheme.fontUI,
+                        fontWeight: FontWeight.w700,
+                      ),
+                    ),
+                  ),
+                ),
+              ],
+            ),
+          ),
+        ),
       ),
     );
   }
@@ -1274,29 +1461,116 @@ class _ReaderScreenState extends ConsumerState<ReaderScreen> {
   }
 
   void _showAboutDialog() {
+    final isDark = Theme.of(context).brightness == Brightness.dark;
     showDialog(
       context: context,
-      builder: (context) => AlertDialog(
-        backgroundColor: AppTheme.surface,
-        shape: RoundedRectangleBorder(
-          side: const BorderSide(color: AppTheme.border),
-          borderRadius: BorderRadius.circular(20),
-        ),
-        title: const Text('About Athena', style: TextStyle(fontSize: 16)),
-        content: const Text(
-          'Athena preserves source text fidelity with grounded AI context.\n\n'
-          'Extracted text is partitioned strictly into contiguous slices without rewriting. '
-          'AI context cards provide explanatory notes without modifying source material.',
-          style: TextStyle(
-              color: AppTheme.textPrimary, fontSize: 13, height: 1.45),
-        ),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.of(context).pop(),
-            child:
-                const Text('DISMISS', style: TextStyle(color: AppTheme.cyan)),
+      builder: (context) => Dialog(
+        backgroundColor: Colors.transparent,
+        insetPadding: const EdgeInsets.symmetric(horizontal: 20, vertical: 24),
+        child: Container(
+          padding: const EdgeInsets.all(4),
+          decoration: BoxDecoration(
+            color: isDark ? const Color(0xFF181818) : const Color(0xFFF7F6F2),
+            borderRadius: BorderRadius.circular(28),
+            border: Border.all(
+              color: isDark ? const Color(0xFF282828) : const Color(0xFFE5E7DC),
+              width: 1.0,
+            ),
+            boxShadow: [
+              BoxShadow(
+                color: isDark ? Colors.black54 : const Color(0x18141714),
+                blurRadius: 28,
+                offset: const Offset(0, 8),
+              ),
+            ],
           ),
-        ],
+          child: Container(
+            padding: const EdgeInsets.all(22),
+            decoration: BoxDecoration(
+              color: isDark ? const Color(0xFF202020) : Colors.white,
+              borderRadius: BorderRadius.circular(24),
+              border: Border.all(
+                color: isDark ? const Color(0xFF2E2E2E) : const Color(0xFFECEEE4),
+                width: 1.0,
+              ),
+            ),
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Row(
+                  children: [
+                    const AthenaLogoTile(
+                      size: 40,
+                      style: AthenaTileStyle.blackPrimary,
+                      borderRadius: 12,
+                    ),
+                    const SizedBox(width: 12),
+                    Expanded(
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Text(
+                            'About Athena',
+                            style: TextStyle(
+                              fontFamily: AppTheme.fontDisplay,
+                              color: isDark ? Colors.white : AppTheme.ink,
+                              fontSize: 20,
+                              fontWeight: FontWeight.w400,
+                            ),
+                          ),
+                          Text(
+                            'Version 0.1.2 · Build 3',
+                            style: TextStyle(
+                              fontFamily: AppTheme.fontUI,
+                              fontSize: 12,
+                              color: isDark ? AppTheme.darkTextMuted : AppTheme.textMuted,
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
+                  ],
+                ),
+                const SizedBox(height: 16),
+                Text(
+                  'Athena preserves source text fidelity with grounded AI context.\n\n'
+                  'Extracted text is partitioned strictly into contiguous slices without rewriting or summarizing. '
+                  'AI context cards provide explanatory notes without modifying source material.',
+                  style: TextStyle(
+                    fontFamily: AppTheme.fontUI,
+                    color: isDark ? AppTheme.darkTextMuted : AppTheme.textMuted,
+                    fontSize: 13.5,
+                    height: 1.5,
+                  ),
+                ),
+                const SizedBox(height: 22),
+                SizedBox(
+                  width: double.infinity,
+                  child: ElevatedButton(
+                    onPressed: () => Navigator.of(context).pop(),
+                    style: ElevatedButton.styleFrom(
+                      backgroundColor: isDark ? Colors.white : AppTheme.ink,
+                      foregroundColor: isDark ? AppTheme.ink : Colors.white,
+                      elevation: 0,
+                      shape: RoundedRectangleBorder(
+                        borderRadius: BorderRadius.circular(14),
+                      ),
+                      padding: const EdgeInsets.symmetric(vertical: 13),
+                    ),
+                    child: const Text(
+                      'Dismiss',
+                      style: TextStyle(
+                        fontFamily: AppTheme.fontUI,
+                        fontWeight: FontWeight.w700,
+                      ),
+                    ),
+                  ),
+                ),
+              ],
+            ),
+          ),
+        ),
       ),
     );
   }

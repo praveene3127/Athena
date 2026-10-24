@@ -498,6 +498,7 @@ class _BYOKSettingsSheetState extends State<BYOKSettingsSheet>
 
   @override
   Widget build(BuildContext context) {
+    final isDark = Theme.of(context).brightness == Brightness.dark;
     final bottomInset = MediaQuery.of(context).viewInsets.bottom;
     final maxHeight = MediaQuery.of(context).size.height * 0.88;
 
@@ -509,9 +510,12 @@ class _BYOKSettingsSheetState extends State<BYOKSettingsSheet>
         bottom: bottomInset > 0 ? bottomInset + 8 : 16,
       ),
       decoration: BoxDecoration(
-        color: AppTheme.surface,
+        color: isDark ? const Color(0xFF181818) : Colors.white,
         borderRadius: BorderRadius.circular(24),
-        border: Border.all(color: AppTheme.border, width: 1.5),
+        border: Border.all(
+          color: isDark ? const Color(0xFF282828) : AppTheme.border,
+          width: 1.5,
+        ),
         boxShadow: const [
           BoxShadow(
             color: Color(0x14000000),
@@ -523,10 +527,12 @@ class _BYOKSettingsSheetState extends State<BYOKSettingsSheet>
       child: ClipRRect(
         borderRadius: BorderRadius.circular(24),
         child: _loading
-            ? const SizedBox(
+            ? SizedBox(
                 height: 280,
                 child: Center(
-                  child: CircularProgressIndicator(color: AppTheme.ink),
+                  child: CircularProgressIndicator(
+                    color: isDark ? Colors.white : AppTheme.ink,
+                  ),
                 ),
               )
             : Column(
@@ -534,7 +540,10 @@ class _BYOKSettingsSheetState extends State<BYOKSettingsSheet>
                 crossAxisAlignment: CrossAxisAlignment.stretch,
                 children: [
                   _buildHeader(),
-                  const Divider(height: 1, color: AppTheme.hairline),
+                  Divider(
+                    height: 1,
+                    color: isDark ? const Color(0xFF282828) : AppTheme.hairline,
+                  ),
                   _buildTabBar(),
                   Flexible(
                     child: TabBarView(
@@ -545,7 +554,10 @@ class _BYOKSettingsSheetState extends State<BYOKSettingsSheet>
                       ],
                     ),
                   ),
-                  const Divider(height: 1, color: AppTheme.hairline),
+                  Divider(
+                    height: 1,
+                    color: isDark ? const Color(0xFF282828) : AppTheme.hairline,
+                  ),
                   _buildFooter(),
                 ],
               ),
@@ -554,6 +566,7 @@ class _BYOKSettingsSheetState extends State<BYOKSettingsSheet>
   }
 
   Widget _buildHeader() {
+    final isDark = Theme.of(context).brightness == Brightness.dark;
     return Padding(
       padding: const EdgeInsets.fromLTRB(20, 18, 16, 12),
       child: Row(
@@ -564,7 +577,7 @@ class _BYOKSettingsSheetState extends State<BYOKSettingsSheet>
             showBezel: true,
           ),
           const SizedBox(width: 12),
-          const Expanded(
+          Expanded(
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
@@ -574,23 +587,26 @@ class _BYOKSettingsSheetState extends State<BYOKSettingsSheet>
                     fontFamily: AppTheme.fontDisplay,
                     fontSize: 18,
                     fontWeight: FontWeight.w600,
-                    color: AppTheme.ink,
+                    color: isDark ? Colors.white : AppTheme.ink,
                   ),
                 ),
                 Text(
-                  'Open-Source Multi-Provider AI • Dual Failover',
+                  'Dynamic Multi-Provider AI • Dual Failover',
                   style: TextStyle(
                     fontFamily: AppTheme.fontUI,
                     fontSize: 12,
-                    color: AppTheme.textMuted,
+                    color: isDark ? AppTheme.darkTextMuted : AppTheme.textMuted,
                   ),
                 ),
               ],
             ),
           ),
           IconButton(
-            icon: const Icon(Icons.close_rounded,
-                size: 20, color: AppTheme.textMuted),
+            icon: Icon(
+              Icons.close_rounded,
+              size: 20,
+              color: isDark ? AppTheme.darkTextMuted : AppTheme.textMuted,
+            ),
             onPressed: () => Navigator.of(context).pop(),
           ),
         ],
@@ -599,13 +615,14 @@ class _BYOKSettingsSheetState extends State<BYOKSettingsSheet>
   }
 
   Widget _buildTabBar() {
+    final isDark = Theme.of(context).brightness == Brightness.dark;
     return Container(
-      color: AppTheme.surfaceWarm,
+      color: isDark ? const Color(0xFF202020) : AppTheme.surfaceWarm,
       child: TabBar(
         controller: _tabController,
-        labelColor: AppTheme.ink,
-        unselectedLabelColor: AppTheme.textMuted,
-        indicatorColor: AppTheme.ink,
+        labelColor: isDark ? Colors.white : AppTheme.ink,
+        unselectedLabelColor: isDark ? AppTheme.darkTextMuted : AppTheme.textMuted,
+        indicatorColor: isDark ? Colors.white : AppTheme.ink,
         indicatorWeight: 2,
         labelStyle: const TextStyle(
           fontFamily: AppTheme.fontUI,

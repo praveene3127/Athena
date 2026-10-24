@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import '../../core/config.dart';
 import '../../core/theme.dart';
 import '../../services/secure_storage_service.dart';
 
@@ -37,7 +38,7 @@ class _ConnectionSetupScreenState extends State<ConnectionSetupScreen> {
     final token = await storage.getContextToken();
     if (mounted) {
       setState(() {
-        _urlController.text = url;
+        _urlController.text = url.isNotEmpty ? url : AppConfig.apiBaseUrl;
         if (token != null) _tokenController.text = token;
       });
     }
@@ -95,6 +96,7 @@ class _ConnectionSetupScreenState extends State<ConnectionSetupScreen> {
     final storage = SecureStorageService.instance;
     await storage.setBackendUrl(url);
     await storage.setContextToken(_tokenController.text.trim());
+    await AppConfig.setBaseUrl(url);
 
     if (mounted) {
       setState(() => _saving = false);
@@ -106,6 +108,47 @@ class _ConnectionSetupScreenState extends State<ConnectionSetupScreen> {
       );
       Navigator.of(context).pop(true);
     }
+  }
+
+  Widget _buildPresetChip(String label, String url) {
+    final currentUrl =
+        _urlController.text.trim().replaceAll(RegExp(r'/+$'), '');
+    final targetUrl = url.trim().replaceAll(RegExp(r'/+$'), '');
+    final isSelected = currentUrl == targetUrl;
+
+    return InkWell(
+      onTap: () {
+        setState(() {
+          _urlController.text = url;
+          _testResult = null;
+          _testSuccess = null;
+        });
+      },
+      borderRadius: BorderRadius.circular(10),
+      child: Container(
+        padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+        decoration: BoxDecoration(
+          color: isSelected
+              ? const Color(0xFF005E54).withValues(alpha: 0.12)
+              : const Color(0xFFF2F0E8),
+          borderRadius: BorderRadius.circular(10),
+          border: Border.all(
+            color:
+                isSelected ? const Color(0xFF005E54) : const Color(0xFFE5E7DC),
+            width: isSelected ? 1.2 : 1,
+          ),
+        ),
+        child: Text(
+          label,
+          style: TextStyle(
+            fontSize: 11,
+            fontWeight: isSelected ? FontWeight.w700 : FontWeight.w500,
+            color:
+                isSelected ? const Color(0xFF005E54) : const Color(0xFF333333),
+          ),
+        ),
+      ),
+    );
   }
 
   @override
@@ -277,9 +320,33 @@ class _ConnectionSetupScreenState extends State<ConnectionSetupScreen> {
                             ),
                           ),
                         ),
-                        const SizedBox(height: 6),
+                        const SizedBox(height: 10),
                         const Text(
-                          'Use http://localhost:8000 (web/desktop) or http://10.0.2.2:8000 (Android emulator). Remote hosts require https://.',
+                          'Quick Presets:',
+                          style: TextStyle(
+                            color: Color(0xFF555555),
+                            fontSize: 11,
+                            fontWeight: FontWeight.w700,
+                          ),
+                        ),
+                        const SizedBox(height: 6),
+                        Wrap(
+                          spacing: 8,
+                          runSpacing: 6,
+                          children: [
+                            _buildPresetChip('Cloudflare Tunnel (Online)',
+                                'https://settled-penny-decades-reminder.trycloudflare.com'),
+                            _buildPresetChip('Home Wi-Fi (192.168.1.61)',
+                                'http://192.168.1.61:8000'),
+                            _buildPresetChip(
+                                'Localhost', 'http://localhost:8000'),
+                            _buildPresetChip(
+                                'Emulator', 'http://10.0.2.2:8000'),
+                          ],
+                        ),
+                        const SizedBox(height: 8),
+                        const Text(
+                          'Use Cloudflare Tunnel to connect seamlessly over cellular/any Wi-Fi, or Home Wi-Fi when on the same network as your PC.',
                           style:
                               TextStyle(color: Color(0xFF888888), fontSize: 11),
                         ),

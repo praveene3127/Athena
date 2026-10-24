@@ -31,10 +31,13 @@ class SecureStorageService {
     return AppConfig.apiBaseUrl.replaceAll(RegExp(r'/+$'), '');
   }
 
-  /// Saves the backend URL securely.
+  /// Saves the backend URL securely and updates runtime AppConfig.
   Future<void> setBackendUrl(String url) async {
     final sanitized = url.trim().replaceAll(RegExp(r'/+$'), '');
-    await _storage.write(key: _backendUrlKey, value: sanitized);
+    try {
+      await _storage.write(key: _backendUrlKey, value: sanitized);
+    } catch (_) {}
+    await AppConfig.setBaseUrl(sanitized);
   }
 
   /// Retrieves the proxy token for authenticated Gemini routes (X-Athena-Context-Token).

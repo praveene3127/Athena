@@ -1,11 +1,13 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'app.dart';
+import 'core/config.dart';
 import 'services/local_client_factory.dart';
 
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
   try {
+    await AppConfig.init();
     await initializeMobileProcessing();
   } catch (_) {
     // The app can still process in the foreground if background scheduling

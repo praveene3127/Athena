@@ -23,7 +23,18 @@ class ApiClient {
                 receiveTimeout: const Duration(seconds: 45),
                 headers: {'Accept': 'application/json'},
               ),
-            );
+            ) {
+    dio.interceptors.add(
+      InterceptorsWrapper(
+        onRequest: (options, handler) {
+          if (AppConfig.apiBaseUrl.isNotEmpty) {
+            options.baseUrl = AppConfig.apiBaseUrl;
+          }
+          return handler.next(options);
+        },
+      ),
+    );
+  }
 
   // --- Health ---
 
@@ -109,6 +120,14 @@ class ApiClient {
     CancelToken? cancelToken,
   }) async {
     if (AppConfig.apiBaseUrl.isEmpty) {
+      final lowerName = fileName.toLowerCase();
+      if (lowerName.endsWith('.pdf') || lowerName.endsWith('.epub')) {
+        throw const AppError(
+          code: 'BACKEND_DISCONNECTED',
+          message:
+              'Athena Backend connection required to process PDF/EPUB books losslessly. Please set your Backend URL in Settings.',
+        );
+      }
       final docId = 'doc_${DateTime.now().millisecondsSinceEpoch}';
       final bytes = <int>[];
       await for (final chunk in fileStream) {

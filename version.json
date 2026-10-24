@@ -1,9 +1,9 @@
 {
-  "version": "0.1.1",
-  "build_number": 2,
-  "title": "Athena v0.1.1 (Card Ask & Sync Update)",
-  "release_notes": "Ask Athena directly from context cards with auto-consultation, one-click Clear All Saved Deck, zero-keyword structural bouncer, and in-app update banner.",
-  "published_at": "2026-10-24T18:10:00Z",
+  "version": "0.1.2",
+  "build_number": 3,
+  "title": "Athena v0.1.2 Release",
+  "release_notes": "Official Athena brand logo & adaptive launcher icons, signature double-bezel offline network screen, dynamic backend tunnel discovery, and refined update banners.",
+  "published_at": "2026-10-24T20:45:00Z",
   "download_url_apk": "/releases/athena-release.apk",
   "download_url_ipa": "/releases/athena-ios-release.ipa",
   "download_url_web": "/"

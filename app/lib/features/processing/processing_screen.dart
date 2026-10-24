@@ -223,6 +223,7 @@ class _ProcessingScreenState extends ConsumerState<ProcessingScreen>
 
   @override
   Widget build(BuildContext context) {
+    final isDark = Theme.of(context).brightness == Brightness.dark;
     final stageIdx = _currentStageIndex();
     final percent = _status?.percent ?? 0;
     final isReady = (_status?.isReady ?? false) && percent >= 100;
@@ -232,34 +233,40 @@ class _ProcessingScreenState extends ConsumerState<ProcessingScreen>
 
     if (isUnsupported && _status != null) {
       return Scaffold(
-        backgroundColor: AppTheme.background,
+        backgroundColor: AppTheme.bgOf(context),
         appBar: AppBar(
-          backgroundColor: AppTheme.background,
+          backgroundColor: AppTheme.bgOf(context),
           elevation: 0,
           leading: Container(
             margin: const EdgeInsets.only(left: 16),
             child: IconButton(
               icon: Container(
-                width: 40,
-                height: 40,
+                width: 38,
+                height: 38,
                 decoration: BoxDecoration(
-                  color: AppTheme.surface,
+                  color: isDark ? const Color(0xFF202020) : const Color(0xFFF2F0E8),
                   shape: BoxShape.circle,
-                  border: Border.all(color: AppTheme.border),
+                  border: Border.all(
+                    color: isDark ? const Color(0xFF2E2E2E) : const Color(0xFFE5E7DC),
+                  ),
                 ),
-                child: const Icon(Icons.arrow_back_rounded,
-                    color: AppTheme.textPrimary, size: 20),
+                child: Icon(
+                  Icons.arrow_back_rounded,
+                  color: isDark ? Colors.white : AppTheme.ink,
+                  size: 18,
+                ),
               ),
               onPressed: () => context.go('/'),
             ),
           ),
-          title: const Text(
+          title: Text(
             'Document Admission',
             style: TextStyle(
-              color: AppTheme.textPrimary,
-              fontSize: 18,
-              fontWeight: FontWeight.w800,
-              letterSpacing: -0.3,
+              fontFamily: AppTheme.fontDisplay,
+              color: isDark ? Colors.white : AppTheme.ink,
+              fontSize: 19,
+              fontWeight: FontWeight.w400,
+              letterSpacing: -0.2,
             ),
           ),
         ),
@@ -270,34 +277,40 @@ class _ProcessingScreenState extends ConsumerState<ProcessingScreen>
     }
 
     return Scaffold(
-      backgroundColor: AppTheme.background,
+      backgroundColor: AppTheme.bgOf(context),
       appBar: AppBar(
-        backgroundColor: AppTheme.background,
+        backgroundColor: AppTheme.bgOf(context),
         elevation: 0,
         leading: Container(
           margin: const EdgeInsets.only(left: 16),
           child: IconButton(
             icon: Container(
-              width: 40,
-              height: 40,
+              width: 38,
+              height: 38,
               decoration: BoxDecoration(
-                color: AppTheme.surface,
+                color: isDark ? const Color(0xFF202020) : const Color(0xFFF2F0E8),
                 shape: BoxShape.circle,
-                border: Border.all(color: AppTheme.border),
+                border: Border.all(
+                  color: isDark ? const Color(0xFF2E2E2E) : const Color(0xFFE5E7DC),
+                ),
               ),
-              child: const Icon(Icons.arrow_back_rounded,
-                  color: AppTheme.textPrimary, size: 20),
+              child: Icon(
+                Icons.arrow_back_rounded,
+                color: isDark ? Colors.white : AppTheme.ink,
+                size: 18,
+              ),
             ),
             onPressed: () => context.go('/'),
           ),
         ),
-        title: const Text(
-          'Processing Paper',
+        title: Text(
+          'Processing Book',
           style: TextStyle(
-            color: AppTheme.textPrimary,
-            fontSize: 18,
-            fontWeight: FontWeight.w800,
-            letterSpacing: -0.3,
+            fontFamily: AppTheme.fontDisplay,
+            color: isDark ? Colors.white : AppTheme.ink,
+            fontSize: 19,
+            fontWeight: FontWeight.w400,
+            letterSpacing: -0.2,
           ),
         ),
       ),
@@ -318,8 +331,10 @@ class _ProcessingScreenState extends ConsumerState<ProcessingScreen>
                           horizontal: 16, vertical: 12),
                       decoration: BoxDecoration(
                         color: Colors.redAccent.withValues(alpha: 0.1),
-                        border: Border.all(color: Colors.redAccent, width: 1),
-                        borderRadius: BorderRadius.circular(20),
+                        border: Border.all(
+                            color: Colors.redAccent.withValues(alpha: 0.3),
+                            width: 1),
+                        borderRadius: BorderRadius.circular(18),
                       ),
                       child: Row(
                         children: [
@@ -328,7 +343,7 @@ class _ProcessingScreenState extends ConsumerState<ProcessingScreen>
                           const SizedBox(width: 12),
                           const Expanded(
                             child: Text(
-                              "Checking local PDF processing...",
+                              "Checking backend ingestion daemon...",
                               style: TextStyle(
                                   color: Colors.redAccent,
                                   fontSize: 13,
@@ -338,7 +353,8 @@ class _ProcessingScreenState extends ConsumerState<ProcessingScreen>
                           TextButton(
                             onPressed: _poll,
                             style: TextButton.styleFrom(
-                                foregroundColor: AppTheme.figmaBlack),
+                                foregroundColor:
+                                    isDark ? Colors.white : AppTheme.ink),
                             child: const Text('Retry',
                                 style: TextStyle(fontWeight: FontWeight.w700)),
                           ),
@@ -349,18 +365,28 @@ class _ProcessingScreenState extends ConsumerState<ProcessingScreen>
                   // --- Double-Bezel Hero Card ---
                   Container(
                     width: double.infinity,
-                    padding: const EdgeInsets.all(7),
+                    padding: const EdgeInsets.all(4),
                     decoration: BoxDecoration(
-                      color: const Color(0xFFF7F6F2),
+                      color: isDark
+                          ? const Color(0xFF181818)
+                          : const Color(0xFFF7F6F2),
                       borderRadius: BorderRadius.circular(28),
-                      border: Border.all(color: const Color(0xFFE5E7DC)),
+                      border: Border.all(
+                        color: isDark
+                            ? const Color(0xFF282828)
+                            : const Color(0xFFE5E7DC),
+                      ),
                     ),
                     child: Container(
-                      padding: const EdgeInsets.all(22),
+                      padding: const EdgeInsets.all(20),
                       decoration: BoxDecoration(
-                        color: Colors.white,
-                        borderRadius: BorderRadius.circular(22),
-                        border: Border.all(color: const Color(0xFFECEEE4)),
+                        color: isDark ? const Color(0xFF202020) : Colors.white,
+                        borderRadius: BorderRadius.circular(24),
+                        border: Border.all(
+                          color: isDark
+                              ? const Color(0xFF2E2E2E)
+                              : const Color(0xFFECEEE4),
+                        ),
                       ),
                       child: Column(
                         crossAxisAlignment: CrossAxisAlignment.start,
@@ -373,29 +399,35 @@ class _ProcessingScreenState extends ConsumerState<ProcessingScreen>
                                     : isFailed
                                         ? AthenaExpression.surprised
                                         : AthenaExpression.thinking,
-                                size: 38,
+                                size: 40,
                                 isBreathing: !isDone && !isFailed,
                                 showBezel: true,
                               ),
                               const SizedBox(width: 14),
-                              const Expanded(
+                              Expanded(
                                 child: Column(
                                   crossAxisAlignment: CrossAxisAlignment.start,
                                   children: [
                                     Text(
                                       'ATHENA INGESTION ENGINE',
                                       style: TextStyle(
-                                        color: Color(0xFF005E54),
-                                        fontSize: 10.5,
+                                        fontFamily: AppTheme.fontUI,
+                                        color: isDark
+                                            ? const Color(0xFF2DD4BF)
+                                            : const Color(0xFF005E54),
+                                        fontSize: 10,
                                         fontWeight: FontWeight.w800,
-                                        letterSpacing: 1.1,
+                                        letterSpacing: 1.0,
                                       ),
                                     ),
-                                    SizedBox(height: 2),
+                                    const SizedBox(height: 2),
                                     Text(
                                       'Fidelity & Context Preservation',
                                       style: TextStyle(
-                                        color: Color(0xFF888888),
+                                        fontFamily: AppTheme.fontUI,
+                                        color: isDark
+                                            ? const Color(0xFF9E9E9E)
+                                            : AppTheme.textMuted,
                                         fontSize: 12,
                                         fontWeight: FontWeight.w500,
                                       ),
@@ -405,9 +437,9 @@ class _ProcessingScreenState extends ConsumerState<ProcessingScreen>
                               ),
                               Text(
                                 '$percent%',
-                                style: const TextStyle(
-                                  fontFamily: 'DM Serif Display',
-                                  color: Color(0xFF141714),
+                                style: TextStyle(
+                                  fontFamily: AppTheme.fontDisplay,
+                                  color: isDark ? Colors.white : AppTheme.ink,
                                   fontSize: 26,
                                   letterSpacing: -0.5,
                                 ),
@@ -419,13 +451,17 @@ class _ProcessingScreenState extends ConsumerState<ProcessingScreen>
                             borderRadius: BorderRadius.circular(10),
                             child: LinearProgressIndicator(
                               value: percent / 100.0,
-                              backgroundColor: const Color(0xFFECEEE4),
+                              minHeight: 8,
+                              backgroundColor: isDark
+                                  ? const Color(0xFF282828)
+                                  : const Color(0xFFECEEE4),
                               valueColor: AlwaysStoppedAnimation<Color>(
                                 isFailed
                                     ? Colors.redAccent
-                                    : const Color(0xFF005E54),
+                                    : isDark
+                                        ? const Color(0xFF2DD4BF)
+                                        : const Color(0xFF005E54),
                               ),
-                              minHeight: 8,
                             ),
                           ),
                           const SizedBox(height: 16),

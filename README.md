@@ -1,185 +1,304 @@
-# Athena 🦉
+# Athena
 
-> **Read deeply. Stay in context.**  
-> *What if reading a book felt like doom-scrolling?*
+Athena is a self-hosted document reader and local backend that converts digital PDFs and EPUBs into contiguous, ordered reading passages interleaved with verified, spoiler-shielded reference cards.
 
-Athena transforms dense, intimidating non-fiction books and academic papers into a frictionless, vertical, flow-state reading feed. It pairs 100% lossless source text fidelity with grounded, spoiler-shielded AI epiphanies and context cards.
+[![Build](https://github.com/praveene3127/Athena/actions/workflows/build.yml/badge.svg)](https://github.com/praveene3127/Athena/actions/workflows/build.yml)
+[![License](https://img.shields.io/badge/License-Apache_2.0-blue.svg)](LICENSE)
 
----
+<!--
+DEMO PLACEHOLDER:
+Capture a 5-second screen recording showing the vertical reading feed in the mobile client:
+1. Smooth scroll through 2 consecutive reading chunks.
+2. An inline context card with a spoiler bar: "||reveal||".
+3. Tap on the spoiler bar to reveal the empirical finding.
+Save as demo.gif or asciinema recording and link here.
+-->
 
-## 📖 The Backstory: Why Athena?
+## Why this exists
 
-We can all doom-scroll social feeds for 3 hours without breaking a sweat. The micro-chunked vertical momentum, instant feedback, and variable-reward epiphanies make vertical scrolling psychologically frictionless.
+Reading technical books and academic papers on mobile screens is frustrating. Standard PDF readers render fixed two-column desktop layouts that force constant horizontal panning, manual zooming, and squinting. When readers turn to LLM summarizers to bypass the layout friction, they encounter a worse problem: language models discard footnotes, drop critical nuance, and hallucinate historical or empirical assertions.
 
-Yet opening a 400-page book or dense academic treatise often triggers friction:
-* Static, intimidating walls of unbroken text.
-* Forgotten historical figures, obscure technical terms, or missing empirical context.
-* Heavy cognitive resistance that tempts readers to close the book and open a social media feed instead.
+Athena separates document layout from document text. The backend parses font geometries, repairs broken ligatures, and reconstructs reading order across columns. It slices the canonical text into a single vertical scroll stream without altering, paraphrasing, or removing a single word. Between paragraphs, Athena injects factual context cards retrieved from local Wikipedia caches or verified LLMs. Every claim on a context card anchors directly to an exact substring in the surrounding passage.
 
-**The Athena thesis:**  
-*What if we weaponized the addictive, low-friction mechanics of doom-scrolling for deep intellectual reading?*
+| Characteristic | Fixed PDF Viewers (Acrobat, Preview) | AI Summarizers (NotebookLM, ChatPDF) | Athena |
+|---|---|---|---|
+| Text fidelity | Full visual fidelity, fixed page layout | Paraphrased or summarized (lossy) | Verbatim source text (`"".join(chunks) == text`) |
+| Mobile reading | Requires manual zooming and panning | Chat feed without linear document progression | Continuous single-column vertical feed |
+| Context mechanism | None; reader leaves app to search | Unbounded generative chat (hallucination risk) | Grounded cards anchored to exact passage quotes |
+| Offline execution | Fully local | Cloud dependent | Fully local (local SQLite, FastEmbed ONNX, cached Wikipedia) |
+| API keys | None required | Account or paid tier required | Zero-key baseline (verbatim Wikipedia fallback) |
 
-Instead of brain-rot feeds or lazy AI summaries that destroy source nuances, Athena slices real books into a continuous, thumb-friendly vertical feed. Interleaved between reading paragraphs are spoiler-shielded context cards—revealing empirical studies, counterpoints, and philosophical paradoxes at the exact moment they matter. You find yourself scrolling chapter after chapter in deep flow state, having finished half a book without realizing it.
+### Non-goals and limitations
 
----
+Athena makes specific design trade-offs:
+- Scanned documents or image-only PDFs: Athena requires a readable digital text layer. It does not run OCR over historical scans or photographed books.
+- Summarization or document compression: Athena does not summarize chapters or generate study outlines. If you do not want to read the book, use a standard conversational LLM instead.
+- Multi-tenant cloud service: Athena is a local-first system intended to run on your workstation, home server, or local network over USB reverse tunneling and LAN. It contains no authentication, user ACLs, or cloud synchronization.
 
-## ✨ Core Features
+## Quick start
 
-* 📱 **Doom-Scroll Feed Architecture**: Infinite vertical scroll through book passages without page-flipping friction.
-* 🛡️ **Lossless Source Fidelity**: Every character from the original document is preserved verbatim in chronological order. We never summarize, paraphrase, or rewrite the author's words (`"".join(chunks) == canonical_text`).
-* 💡 **Spoiler-Shielded AI Epiphanies**: Deep context cards (Empirical Studies, Critical Debates, Philosophical Paradoxes, Historical Cases) feature interactive tap-to-reveal spoilers (`||REVEAL||`) to spark curiosity before answering.
-* 🦉 **Expressive Athena Guardian**: Athena's reactive owl companion displays adaptive expressions (thinking, deep focus, epiphanies, and sleepy when awaiting your API key).
-* ⚡ **Zero-Keyword Document Bouncer**: Structural dominance classification inspects layout, sentences, and line typography. Never rejects real books quoting fake resumes, invoices, math, or exams for stories.
-* 🔐 **Sovereign Privacy (BYOK)**: Runs on local ONNX embeddings (`bge-small-en-v1.5`) and allows you to bring your own API key (Gemini, Claude, OpenRouter, Groq, or local Ollama). Your personal books never leave your device.
-* 🔍 **High-Res Original Page Inspector**: Tap any chunk to zoom into the exact original high-DPI page to verify equations, diagrams, and formatting.
+### Prerequisites
 
----
+- Python 3.11 or newer
+- SQLite 3
+- Git
+- (Optional) Flutter SDK 3.24+ if building the mobile or web client from source
+- (Optional) Android SDK and `adb` for USB reverse port forwarding
 
-## 🚀 How to Use Athena (Simply)
+### Installation
 
-Using Athena takes less than 60 seconds:
-
-```
-┌─────────────────┐       ┌─────────────────┐       ┌─────────────────┐
-│ 1. Awaken Athena│  ───> │ 2. Upload Book  │  ───> │ 3. Doom-Scroll  │
-│  (Add API Key)  │       │   (PDF / EPUB)  │       │ (Deep Reading)  │
-└─────────────────┘       └─────────────────┘       └─────────────────┘
-```
-
-1. **Awaken Athena**:
-   - Open Athena in your browser or on your phone.
-   - When Athena is asleep, tap **"Add API Key to Awaken Athena"**.
-   - Paste your free Google Gemini API key (or OpenRouter / Groq / Claude / Ollama) and tap **Save**.
-2. **Drop in a Book**:
-   - Tap **"Upload PDF or EPUB"** (or click **"Try sample"** to test immediately).
-   - Athena extracts the book, generates cryptographic SHA-256 chunk integrity proofs, and synthesizes grounded context cards.
-3. **Scroll & Learn**:
-   - Scroll effortlessly through continuous paper chunks.
-   - Tap cyan context cards to expand empirical evidence and tap spoiler bars to test your intuition.
-
----
-
-## 📦 One-Click App Downloads & Mobile Builds
-
-Athena runs across **Android**, **iOS**, and **Web PWA**.
-
-| Platform | Direct 1-Click Download | Build Method / Toolchain | Target Sideload / Install |
-| :--- | :--- | :--- | :--- |
-| **🤖 Android** | [**⬇️ Download Android APK (v0.1.1)**](releases/athena-release.apk) *(58.4 MB)* | `flutter build apk --release` | Direct install / Package Installer |
-| **🍎 iOS** | [**⬇️ Download iOS IPA (v0.1.1)**](releases/athena-ios-release.ipa) *(1.2 MB)* | [xtool](https://github.com/xtool-org/xtool) (Linux/Win/Mac) or Xcode | [xtool install](https://github.com/xtool-org/xtool) / AltStore / TrollStore |
-| **🌐 Web PWA** | [**Launch Web App (:8080)**](http://localhost:8080) | `flutter build web --release` | Add to Home Screen (100dvh PWA) |
-
----
-
-### 🤖 Android (APK)
-
-* **1-Click Download**:
-  Download [**`releases/athena-release.apk`**](releases/athena-release.apk) directly.
-* **Installation**:
-  1. Transfer the `.apk` to your phone or download directly in your mobile browser.
-  2. Open the file in your File Manager and select **Install** (enable *Allow from this source* if prompted).
-* **Local Build**:
-  ```bash
-  cd app
-  flutter build apk --release
-  ```
-
----
-
-### 🍎 iOS (Cross-Platform with xtool & IPA Sideloading)
-
-Athena supports Xcode-free iOS development and builds via [**xtool**](https://github.com/xtool-org/xtool) — the cross-platform Xcode replacement for Linux, Windows (WSL), and macOS.
-
-#### 1. Direct 1-Click IPA Download & Sideloading
-* Download [**`releases/athena-ios-release.ipa`**](releases/athena-ios-release.ipa) directly.
-* Install immediately on your iPhone or iPad using any sideloading tool:
-  * **xtool**: `xtool install releases/athena-ios-release.ipa`
-  * **TrollStore** (permanent, no revokes, iOS 14.0–17.0)
-  * **AltStore / SideStore / Sideloadly** (macOS, Windows, or Linux)
-
-#### 2. Building for iOS with xtool (Linux, Windows WSL, macOS)
-You do not need a Mac or Xcode to build Athena for iOS. Athena includes pre-configured `xtool.yml` and `Package.swift`:
+Clone the repository and set up a Python virtual environment:
 
 ```bash
-# 1. Install or run xtool (Linux / WSL / macOS)
-curl -L -o xtool https://github.com/xtool-org/xtool/releases/download/1.23.0/xtool-x86_64.AppImage
-chmod +x xtool
-
-# 2. Configure xtool SDK & build iOS release
-xtool setup
-python tools/build_ios_xtool.py
-
-# 3. Or deploy directly to a connected iPhone over USB:
-cd app/ios
-xtool dev
+git clone https://github.com/praveene3127/Athena.git
+cd Athena
+python -m venv .venv
 ```
 
-#### 3. Automated Cloud CI Builds (.github/workflows/ios-xtool.yml)
-* Every push to `main` automatically runs `.github/workflows/ios-xtool.yml` on a Linux (`ubuntu-latest`) runner.
-* `xtool` compiles the iOS application package and uploads `athena-ios-release.ipa` to GitHub Artifacts and Releases.
-* Traditional macOS CI pipelines remain available in `.github/workflows/build.yml` and `codemagic.yaml`.
+Activate the virtual environment:
 
----
-
-### 🌐 Web / Progressive Web App (PWA)
-
-* Runs instantly in Safari, Chrome, Edge, or Firefox:
-  ```bash
-  cd app
-  flutter build web --release
-  ```
-* Supports 100dvh viewport locking, safe-area insets (iPhone dynamic island and home bar), and offline PWA service worker caching.
-
----
-
-## 🛠️ Architecture & Tech Stack
-
-```
-Athena Architecture:
-┌────────────────────────────────────────────────────────┐
-│               Flutter Front-End (App)                  │
-│  - Riverpod State Management & GoRouter Navigation     │
-│  - Scrollable Positioned Feed (paper reading chunks)   │
-│  - Reactive Owl Avatar Engine (7 expressive states)    │
-│  - BYOK Settings Sheet (Gemini, Claude, OpenRouter)    │
-│  - High-Resolution Original PDF Zoom Inspector         │
-└──────────────────────────▲─────────────────────────────┘
-                           │ HTTP / REST API (:8000)
-┌──────────────────────────▼─────────────────────────────┐
-│                 FastAPI Python Backend                 │
-│  - PyMuPDF Extraction & Deduplicated Column Ordering   │
-│  - Lossless Chunker (SHA-256 Contiguous Verification)  │
-│  - Zero-Keyword Document Bouncer (Structural Dominance)│
-│  - FastEmbed ONNX Local Semantic Vector Engine         │
-│  - Wikimedia Knowledge Engine & Bayesian Novelty Gate  │
-│  - SQLite Database (WAL Mode + 5000ms Busy Timeout)    │
-└────────────────────────────────────────────────────────┘
-```
-
-* **Frontend**: Flutter 3.24+, Dart, Riverpod, GoRouter, Dio.
-* **Backend**: Python 3.12, FastAPI, Uvicorn, PyMuPDF, SQLite (WAL mode).
-* **Local AI**: FastEmbed (`BAAI/bge-small-en-v1.5` ONNX runtime).
-* **Cloud AI Providers**: Google Gemini, Anthropic Claude, OpenRouter, Groq, NVIDIA NIM, and local Ollama.
-
----
-
-## 🧪 Verification & Release Quality
-
-Athena is verified by an automated release test suite:
 ```bash
+# Windows
+.venv\Scripts\activate
+
+# Linux / macOS
+source .venv/bin/activate
+```
+
+Install backend dependencies:
+
+```bash
+pip install -r backend/requirements.txt
+```
+
+Launch the backend and supervisor:
+
+```bash
+# Unified supervisor (starts backend on 0.0.0.0:8000, Web reader on 8080, and configures USB adb reverse):
+python run_athena.py
+
+# Alternatively, launch standalone FastAPI backend:
+python -m uvicorn app.main:app --app-dir backend --host 127.0.0.1 --port 8000
+```
+
+### Smoke test
+
+Verify the backend is healthy:
+
+```bash
+curl http://127.0.0.1:8000/api/health
+```
+
+Expected output:
+
+```json
+{
+  "status": "ok",
+  "database": "reachable",
+  "model_status": "ready",
+  "llm_configured": false
+}
+```
+
+Ingest the bundled sample document to verify the chunking and card pipeline:
+
+```bash
+curl -X POST http://127.0.0.1:8000/api/documents/sample
+```
+
+Expected output:
+
+```json
+{
+  "document_id": "8f3b2a1c4e5d6a7b"
+}
+```
+
+## Usage and examples
+
+### Ingest a document
+
+Upload a PDF or EPUB to the background processing worker:
+
+```bash
+curl -X POST http://127.0.0.1:8000/api/documents/upload \
+  -F "file=@path/to/book.pdf"
+```
+
+Expected output:
+
+```json
+{
+  "document_id": "8f3b2a1c4e5d6a7b",
+  "status": "queued",
+  "filename": "book.pdf"
+}
+```
+
+### Poll ingestion status
+
+Track processing stages across page extraction, cleaning, chunking, and concept lookup:
+
+```bash
+curl http://127.0.0.1:8000/api/documents/8f3b2a1c4e5d6a7b/status
+```
+
+Expected output:
+
+```json
+{
+  "id": "8f3b2a1c4e5d6a7b",
+  "status": "ready",
+  "stage": "done",
+  "stage_label": "Ready",
+  "current_page": 240,
+  "total_pages": 240,
+  "percent": 100
+}
+```
+
+### Read the structured feed
+
+Fetch the verified reading items. The response contains contiguous chunks interleaved with grounded context cards:
+
+```bash
+curl http://127.0.0.1:8000/api/documents/8f3b2a1c4e5d6a7b/reader
+```
+
+Expected output:
+
+```json
+{
+  "document": {
+    "id": "8f3b2a1c4e5d6a7b",
+    "title": "The Structure of Scientific Revolutions",
+    "page_count": 210,
+    "integrity": {
+      "verified": true,
+      "chunk_count": 142
+    }
+  },
+  "items": [
+    {
+      "type": "reading_chunk",
+      "id": "chunk_001",
+      "sequence": 1,
+      "text": "History, if viewed as a repository for more than anecdote...",
+      "page_reference": "Page 1"
+    },
+    {
+      "type": "context_card",
+      "id": "card_001",
+      "insert_after": "chunk_001",
+      "card_type": "empirical_study",
+      "title": "Historiography of Science",
+      "body": "Traditional accounts treat scientific progress as linear accumulation. Kuhn argued that ||anomalies accumulate until normal science enters crisis||.",
+      "exact_quote": "repository for more than anecdote"
+    }
+  ]
+}
+```
+
+### Connect an Android device over USB
+
+Connect your phone with USB debugging enabled. Forward the local port:
+
+```bash
+adb reverse tcp:8000 tcp:8000
+```
+
+Install the pre-compiled Android release build directly from the repository:
+
+```bash
+adb install releases/athena-release.apk
+```
+
+The mobile app accesses the local backend at `http://localhost:8000` through the USB bridge without exposing ports to your Wi-Fi network.
+
+## Architecture
+
+```mermaid
+flowchart TD
+    A[Digital PDF or EPUB] --> B[PyMuPDF Triage and Extraction]
+    B --> C[Encoding Repair and Gutter Detection]
+    C --> D[Canonical Text Assembly]
+    D --> E[Lossless Chunking Engine]
+    E --> F[Chunk Integrity Gate]
+    F --> G[(SQLite WAL Database)]
+    E --> H[YAKE Concept Extraction]
+    H --> I{AI Engine Configured?}
+    I -->|No: Zero-Key Baseline| J[Local Wikipedia Disk Cache]
+    I -->|Yes: Dynamic BYOK| K[Dynamic OpenAI-Compatible / Gemini BYOK Engine]
+    J --> L[Exact Quote Anchoring Gate]
+    K --> L
+    L --> G
+    G --> M[REST API: /api/documents/id/reader]
+    M --> N[Flutter Client: Android / iOS / Web]
+```
+
+### Pipeline stages
+
+1. Ingestion and triage: The PDF is checked for the `%PDF-` file signature bytes and written to disk using streaming buffers. PyMuPDF inspects font sizes, weights, and bounding boxes to detect gutters and multi-column divisions.
+2. Canonical text assembly: Extracted character spans undergo CP-1252 normalization, C1 control code repair, and vocabulary-aware de-hyphenation.
+3. Lossless chunking: The chunker slices character spans by offset indices (`canonical_text[start:end]`). Headings are bound to starting paragraphs, and long sections are split at guarded sentence boundaries.
+4. Concept identification: Key terms are extracted using YAKE and ranked against the document vocabulary.
+5. Context grounding: Concepts query the local Wikipedia cache in `data/cache/wiki/`. If an AI engine is configured, it synthesizes an explanatory context card with interactive spoiler syntax (`||hidden text||`). The backend verifies that `card.exact_quote` exists as an exact substring of the target chunk.
+6. Storage and delivery: State is stored in SQLite using Write-Ahead Logging (`PRAGMA journal_mode=WAL; PRAGMA busy_timeout=5000;`). The Flutter client consumes the feed through a single ordered list.
+
+### Dynamic BYOK intelligence engine
+
+Athena has no required or static API providers. It does not bundle proprietary cloud models or enforce vendor lock-in. The AI layer is entirely decoupled through a dynamic Bring-Your-Own-Key (BYOK) architecture:
+
+- Zero-key baseline: Athena operates completely offline out of the box. Key terms are identified via YAKE and grounded against the local disk-cached Wikipedia corpus (`data/cache/wiki/`). No external network requests, accounts, or API keys are required to process or read documents.
+- Any OpenAI-compatible endpoint: When AI enrichment is desired, Athena connects to any OpenAI-compatible base URL and API key. This supports fully self-hosted local engines (Ollama, vLLM, LM Studio, LocalAI) as well as remote cloud endpoints and Google Gemini.
+- Zero static model lists: Models are never hardcoded. When an endpoint is configured, Athena queries the provider's live model catalog API (`POST /api/settings/fetch-models`) to discover available models in real time, or accepts any custom model name.
+- Dual automatic failover: Configure a primary engine and an optional fallback backup engine. If the primary engine triggers a rate limit (HTTP 429), quota exhaustion, or timeout, requests route to the backup engine automatically.
+- Runtime database persistence: AI credentials and endpoints are configured directly in the app interface or through `/api/settings/ai-config` and saved in the local SQLite `ai_settings` table. No backend server restarts or static configuration file changes are required.
+
+### Core invariants
+
+Athena enforces two non-negotiable invariants tested on every commit:
+- Lossless Chunking: Recombining all chunk strings must reproduce the canonical text exactly:
+  ```python
+  "".join(chunk["raw_text"] for chunk in chunks) == canonical_text
+  ```
+- Exact-Quote Anchoring: Every generated context card must anchor to a verbatim substring in its target chunk:
+  ```python
+  assert card["exact_quote"] in target_chunk["raw_text"]
+  ```
+
+## Configuration reference
+
+Server host, storage paths, and ingestion limits are configured in `backend/.env`:
+
+| Variable | Type | Default | Description |
+|---|---|---|---|
+| `HOST` | string | `127.0.0.1` | Network interface for the Uvicorn server |
+| `PORT` | int | `8000` | HTTP port for the FastAPI backend |
+| `DATA_DIR` | path | `data` | Storage directory for uploads, SQLite database, and disk caches |
+| `LOG_LEVEL` | string | `INFO` | Logging verbosity (`DEBUG`, `INFO`, `WARNING`, `ERROR`) |
+| `MAX_UPLOAD_SIZE_BYTES` | int | `524288000` | Maximum file upload size in bytes (500 MB) |
+| `MAX_PAGE_COUNT` | int | `3000` | Maximum allowable pages in a single document |
+| `WIKI_CONTACT` | string | `athena-reader@example.com` | User-Agent contact email sent with Wikipedia REST requests |
+| `VIBE_CHECK_TIMEOUT_S` | float | `4.5` | Timeout in seconds for document preview inference |
+
+AI engine credentials are configured dynamically in the app UI via Settings (persisted to SQLite), or optionally initialized through `.env` fallback seeds (`LLM_API_KEY`, `LLM_BASE_URL`, `LLM_MODEL`, `GEMINI_API_KEY_PRIMARY`) for headless server environments.
+
+## Development and testing
+
+Run the full test suite and static analysis:
+
+```bash
+# Backend pytest suite (49 tests)
+pytest backend/tests -v
+
+# Flutter static analysis and widget tests
+cd app && flutter analyze lib && flutter test && cd ..
+
+# Full 6-gate production verification
 python verify_release.py
 ```
-Guarantees 100% green compliance across:
-1. Anti-slop static code audit (0 raw prints, 0 debug prints, 0 TODOs).
-2. Scientific and technical compound word preservation.
-3. API contract and context token security headers.
-4. Pytest backend test suite (46 passed).
-5. Flutter static analysis (0 issues) and widget test suite (all passed).
-6. Lossless chunking invariant (`"".join(chunks) == source_text`) and exact-quote card anchoring.
 
----
+## License
 
-## 📄 License
-
-Athena is licensed under the [Apache License, Version 2.0](LICENSE).  
-Copyright 2026 Athena Contributors.
+Athena is licensed under the Apache License, Version 2.0. See the [LICENSE](LICENSE) file for the full license text.
