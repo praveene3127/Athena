@@ -115,8 +115,24 @@ xtool/.xtool-tmp/
 *.AppImage
 *.AppImage.zsync
 
+# --- Internal AI Agent Rules & Prompts ---
+.agents/
+.mcp.json
+AGENTS.md
+CLAUDE.md
+DECISIONS.md
+DESIGN.md
+.github/copilot-instructions.md
+
+# --- Local Scripts & Raw Asset Exports ---
+ensure_backend.bat
+start_athena.bat
+tools/port_8080_forwarder.py
+athena-brand-kit-v3/
+
 # --- Official App Releases ---
 !releases/
 !releases/*.apk
 !releases/*.ipa
+
 
