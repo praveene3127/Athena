@@ -162,7 +162,7 @@ def get_health():
 
 @app.get("/api/pair-info")
 def get_pair_info():
-    """Returns pairing metadata and host IPs for wireless Android and Web client connection."""
+    """Returns pairing metadata and host IPs for wireless phone and web client pairing."""
     import socket
 
     lan_ip = "127.0.0.1"
@@ -172,12 +172,17 @@ def get_pair_info():
             lan_ip = s.getsockname()[0]
     except Exception:
         pass
+
+    tunnel_url = os.environ.get("TUNNEL_URL") or os.environ.get("CLOUDFLARE_URL")
     return {
         "status": "ok",
         "lan_ip": lan_ip,
         "api_port": 8000,
         "web_port": 8080,
         "base_url": f"http://{lan_ip}:8000",
+        "phone_wifi_url": f"http://{lan_ip}:8000",
+        "desktop_url": "http://127.0.0.1:8080",
+        "tunnel_url": tunnel_url,
     }
 
 

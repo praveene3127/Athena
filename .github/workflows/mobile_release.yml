@@ -1,10 +1,13 @@
-name: Mobile Release — Android APK & unsigned iOS IPA
+name: Mobile Release — 1-Click Android APK & unsigned iOS IPA
 
 on:
   workflow_dispatch:
   push:
     branches: [main]
     tags: ['v*']
+
+permissions:
+  contents: write
 
 jobs:
   build-android:
@@ -30,17 +33,17 @@ jobs:
         run: |
           flutter pub get
           flutter build apk --release
-          cp build/app/outputs/flutter-apk/app-release.apk Athena-Android-Release.apk
+          cp build/app/outputs/flutter-apk/app-release.apk Athena-Android.apk
 
-      - name: Upload Athena-Android-Release.apk
+      - name: Upload Athena-Android.apk
         uses: actions/upload-artifact@v4
         with:
-          name: Athena-Android-Release.apk
-          path: app/Athena-Android-Release.apk
+          name: Athena-Android.apk
+          path: app/Athena-Android.apk
           if-no-files-found: error
 
-  build-ios-unsigned-ipa:
-    name: build-ios-unsigned-ipa
+  build-ios:
+    name: build-ios
     runs-on: macos-latest
     steps:
       - uses: actions/checkout@v4
@@ -59,11 +62,50 @@ jobs:
           mkdir -p build/ios/ipa/Payload
           cp -R build/ios/iphoneos/Runner.app build/ios/ipa/Payload/Runner.app
           cd build/ios/ipa
-          zip -r Athena-iOS-Unsigned.ipa Payload
+          zip -r ../../../Athena-iOS.ipa Payload
+          cd ../../..
 
-      - name: Upload Athena-iOS-Unsigned.ipa
+      - name: Upload Athena-iOS.ipa
         uses: actions/upload-artifact@v4
         with:
-          name: Athena-iOS-Unsigned.ipa
-          path: app/build/ios/ipa/Athena-iOS-Unsigned.ipa
+          name: Athena-iOS.ipa
+          path: app/Athena-iOS.ipa
           if-no-files-found: error
+
+  publish-latest-release:
+    name: publish-latest-release
+    needs: [build-android, build-ios]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Download Android APK
+        uses: actions/download-artifact@v4
+        with:
+          name: Athena-Android.apk
+          path: release-assets
+
+      - name: Download iOS IPA
+        uses: actions/download-artifact@v4
+        with:
+          name: Athena-iOS.ipa
+          path: release-assets
+
+      - name: Publish 1-Click Release Assets
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: latest
+          name: "Athena Latest Release"
+          body: |
+            ## Athena Mobile Production Release
+            - **Android APK**: Direct download for native install & Obtainium auto-update.
+            - **iOS IPA (Unsigned)**: Direct download for Sideloadly / AltStore / SideStore on Windows/Mac without Xcode.
+          draft: false
+          prerelease: false
+          files: |
+            release-assets/Athena-Android.apk
+            release-assets/Athena-iOS.ipa
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
