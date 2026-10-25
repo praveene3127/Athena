@@ -2,7 +2,7 @@ import 'dart:convert';
 
 import 'package:crypto/crypto.dart';
 import 'package:dio/dio.dart';
-import 'secure_storage_service.dart';
+import 'package:athena/services/secure_storage_service.dart';
 
 /// Retrieves cited Wikipedia context at four-chunk reading intervals.
 /// Retrieved prose stays separate from the source text. Only candidate terms

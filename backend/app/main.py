@@ -182,7 +182,9 @@ _ROOT_DIR = os.path.abspath(
     os.path.join(os.path.dirname(__file__), "..", "..")
 )
 _RELEASES_DIR = os.path.join(_ROOT_DIR, "releases")
-_VERSION_FILE = os.path.join(_ROOT_DIR, "version.json")
+_VERSION_FILE = os.path.join(_ROOT_DIR, "scripts", "version.json")
+if not os.path.isfile(_VERSION_FILE):
+    _VERSION_FILE = os.path.join(_ROOT_DIR, "version.json")
 
 
 @app.get("/api/version")

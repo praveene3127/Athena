@@ -1,9 +1,9 @@
 import 'package:go_router/go_router.dart';
-import '../features/library/library_screen.dart';
-import '../features/processing/processing_screen.dart';
-import '../features/reader/reader_screen.dart';
-import '../features/saved/saved_screen.dart';
-import '../features/settings/connection_setup_screen.dart';
+import 'package:athena/features/library/screens/library_screen.dart';
+import 'package:athena/features/processing/screens/processing_screen.dart';
+import 'package:athena/features/reader/screens/reader_screen.dart';
+import 'package:athena/features/saved/screens/saved_screen.dart';
+import 'package:athena/features/settings/screens/connection_setup_screen.dart';
 
 /// Navigation: / Library · /processing/:id · /reader/:id?chunk= · /saved · /settings
 final appRouter = GoRouter(

@@ -1,8 +1,8 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'app.dart';
-import 'core/config.dart';
-import 'services/local_client_factory.dart';
+import 'package:athena/core/config/config.dart';
+import 'package:athena/core/api/local_client_factory.dart';
 
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();

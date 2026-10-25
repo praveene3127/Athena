@@ -1,7 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:athena/models/document.dart';
-import 'package:athena/features/reader/context_card_widget.dart';
+import 'package:athena/features/reader/widgets/context_card_widget.dart';
 
 void main() {
   group('ContextCardWidget Tests', () {

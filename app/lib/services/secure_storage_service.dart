@@ -1,7 +1,7 @@
 import 'dart:async';
 import 'package:dio/dio.dart';
 import 'package:flutter_secure_storage/flutter_secure_storage.dart';
-import '../core/config.dart';
+import 'package:athena/core/config/config.dart';
 
 /// Secure persistence for backend connection settings using OS-level secure storage
 /// (Android Keystore / iOS Keychain / Encrypted Web storage).

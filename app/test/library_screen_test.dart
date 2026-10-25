@@ -1,9 +1,9 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
-import 'package:athena/features/library/library_screen.dart';
+import 'package:athena/features/library/screens/library_screen.dart';
 import 'package:athena/models/document.dart';
-import 'package:athena/core/app_bottom_nav.dart';
+import 'package:athena/core/widgets/app_bottom_nav.dart';
 
 void main() {
   testWidgets('LibraryScreen renders successfully with documents',

@@ -1,8 +1,8 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
-import 'core/internet_access_gate.dart';
-import 'core/theme.dart';
-import 'core/router.dart';
+import 'package:athena/core/widgets/internet_access_gate.dart';
+import 'package:athena/core/theme/theme.dart';
+import 'package:athena/core/router.dart';
 
 class AthenaApp extends ConsumerWidget {
   const AthenaApp({super.key});

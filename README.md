@@ -35,11 +35,39 @@ Athena makes specific design trade-offs:
 - Summarization or document compression: Athena does not summarize chapters or generate study outlines. If you do not want to read the book, use a standard conversational LLM instead.
 - Multi-tenant cloud service: Athena is a local-first system intended to run on your workstation, home server, or local network over USB reverse tunneling and LAN. It contains no authentication, user ACLs, or cloud synchronization.
 
+## Repository structure
+
+```text
+Athena/
+├── app/                  # Flutter cross-platform client (iOS, Android, Web)
+│   ├── lib/
+│   │   ├── core/         # Routing, themes, offline mode, internet access gating
+│   │   ├── features/     # Feature-first modules (library, reader, settings)
+│   │   └── main.dart     # Application entrypoint
+│   └── test/             # Flutter unit & widget tests
+├── backend/              # FastAPI document processing engine
+│   ├── app/
+│   │   ├── main.py       # FastAPI application entry point
+│   │   ├── routers/      # API endpoints (documents, ask, settings)
+│   │   └── services/     # Extraction, chunking, and edge AI
+│   │       ├── edge/     # Modular edge AI: hygiene, bouncer, novelty
+│   │       └── edge_ai.py# Backwards-compatible service facade
+│   └── tests/            # Pytest test suite (49 tests)
+├── docs/                 # Architecture records and design guidelines
+│   ├── DECISIONS.md      # Architecture Decision Records (ADRs)
+│   └── DESIGN.md         # Design system tokens and anti-slop rules
+├── scripts/              # Automated verification and release gates
+│   └── verify_release.py # 6-gate zero-regression release verification
+├── run_athena.py         # Unified supervisor (backend + web forwarder)
+├── start_athena.bat      # Windows 1-click launcher
+└── README.md
+```
+
 ## Quick start
 
 ### Prerequisites
 
-- Python 3.11 or newer
+- Python 3.12 or newer (tested on Python 3.12.10)
 - SQLite 3
 - Git
 - (Optional) Flutter SDK 3.24+ if building the mobile or web client from source
@@ -71,14 +99,19 @@ Install backend dependencies:
 pip install -r backend/requirements.txt
 ```
 
-Launch the backend and supervisor:
+### Launching services
+
+Run Athena using the exact 1-line commands below:
 
 ```bash
-# Unified supervisor (starts backend on 0.0.0.0:8000, Web reader on 8080, and configures USB adb reverse):
-python run_athena.py
-
-# Alternatively, launch standalone FastAPI backend:
+# 1. Launch FastAPI backend (:8000)
 python -m uvicorn app.main:app --app-dir backend --host 127.0.0.1 --port 8000
+
+# 2. Launch Web Reader on port 8080 (:8080)
+python tools/port_8080_forwarder.py
+
+# Alternatively, launch the unified supervisor (backend, web reader, and USB adb reverse):
+python run_athena.py
 ```
 
 ### Smoke test
@@ -296,7 +329,7 @@ pytest backend/tests -v
 cd app && flutter analyze lib && flutter test && cd ..
 
 # Full 6-gate production verification
-python verify_release.py
+python scripts/verify_release.py
 ```
 
 ## License
