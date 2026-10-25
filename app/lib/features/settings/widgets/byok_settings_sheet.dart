@@ -1,5 +1,8 @@
+import 'package:dio/dio.dart';
+import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:flutter/material.dart';
 import 'package:shared_preferences/shared_preferences.dart';
+import 'package:athena/core/config/config.dart';
 import 'package:athena/core/theme/theme.dart';
 import 'package:athena/models/ai_provider.dart';
 import 'package:athena/core/api/api_client.dart';
@@ -24,9 +27,16 @@ class BYOKSettingsSheet extends StatefulWidget {
       context: context,
       isScrollControlled: true,
       backgroundColor: Colors.transparent,
-      builder: (ctx) => BYOKSettingsSheet(
-        apiClient: apiClient,
-        onConfigSaved: onConfigSaved,
+      builder: (ctx) => Padding(
+        padding: EdgeInsets.only(
+          bottom: MediaQuery.viewInsetsOf(ctx).bottom,
+        ),
+        child: SafeArea(
+          child: BYOKSettingsSheet(
+            apiClient: apiClient,
+            onConfigSaved: onConfigSaved,
+          ),
+        ),
       ),
     );
   }
@@ -61,6 +71,7 @@ class _BYOKSettingsSheetState extends State<BYOKSettingsSheet>
   final _fallbackKeyController = TextEditingController();
   final _fallbackModelController = TextEditingController();
   final _fallbackBaseUrlController = TextEditingController();
+  final _serverUrlController = TextEditingController();
   bool _obscureFallbackKey = true;
   List<AIModelOption> _fallbackModels = [];
   bool _fetchingFallbackModels = false;
@@ -68,11 +79,16 @@ class _BYOKSettingsSheetState extends State<BYOKSettingsSheet>
   String? _fallbackTestMessage;
   bool? _fallbackTestOk;
 
+  // Server Host State
+  bool _testingServer = false;
+  String? _serverTestMessage;
+  bool? _serverTestOk;
+
   @override
   void initState() {
     super.initState();
     _api = widget.apiClient ?? ApiClient();
-    _tabController = TabController(length: 2, vsync: this);
+    _tabController = TabController(length: 3, vsync: this);
     _loadConfig();
   }
 
@@ -85,6 +101,7 @@ class _BYOKSettingsSheetState extends State<BYOKSettingsSheet>
     _fallbackKeyController.dispose();
     _fallbackModelController.dispose();
     _fallbackBaseUrlController.dispose();
+    _serverUrlController.dispose();
     super.dispose();
   }
 
@@ -95,6 +112,7 @@ class _BYOKSettingsSheetState extends State<BYOKSettingsSheet>
 
     try {
       final prefs = await SharedPreferences.getInstance();
+      _serverUrlController.text = AppConfig.apiBaseUrl;
       final config = await _api.getAIConfig();
       if (!mounted) return;
 
@@ -352,6 +370,64 @@ class _BYOKSettingsSheetState extends State<BYOKSettingsSheet>
     }
   }
 
+  Future<void> _testServerConnection() async {
+    final rawUrl = _serverUrlController.text.trim();
+    if (rawUrl.isEmpty) {
+      setState(() {
+        _serverTestOk = false;
+        _serverTestMessage = 'Please enter a Server URL.';
+      });
+      return;
+    }
+    setState(() {
+      _testingServer = true;
+      _serverTestMessage = null;
+      _serverTestOk = null;
+    });
+
+    final sanitized = rawUrl.replaceAll(RegExp(r'/+$'), '');
+    final healthEndpoint = '$sanitized/api/health';
+    final sw = Stopwatch()..start();
+    try {
+      final testDio = Dio(
+        BaseOptions(
+          connectTimeout: const Duration(seconds: 4),
+          receiveTimeout: const Duration(seconds: 4),
+          headers: {'Accept': 'application/json'},
+        ),
+      );
+      final response = await testDio.get(healthEndpoint);
+      sw.stop();
+      if (!mounted) return;
+      if (response.statusCode == 200) {
+        await AppConfig.setBaseUrl(sanitized);
+        setState(() {
+          _testingServer = false;
+          _serverTestOk = true;
+          _serverTestMessage =
+              'Connected (${sw.elapsedMilliseconds}ms) — Engine live at $sanitized';
+        });
+        widget.onConfigSaved?.call();
+      } else {
+        setState(() {
+          _testingServer = false;
+          _serverTestOk = false;
+          _serverTestMessage =
+              'Server responded with HTTP ${response.statusCode}. Expected 200 OK.';
+        });
+      }
+    } catch (e) {
+      sw.stop();
+      if (!mounted) return;
+      setState(() {
+        _testingServer = false;
+        _serverTestOk = false;
+        _serverTestMessage =
+            'Connection failed. Ensure Athena is running and reachable on your phone\'s network.';
+      });
+    }
+  }
+
   Future<void> _persistToLocalStorageAndBackend() async {
     final prefs = await SharedPreferences.getInstance();
 
@@ -395,6 +471,8 @@ class _BYOKSettingsSheetState extends State<BYOKSettingsSheet>
             ? _fallbackKeyController.text.trim()
             : prefs.getString('athena_ai_fallback_api_key'))
         : null;
+
+    await AppConfig.setBaseUrl(_serverUrlController.text.trim());
 
     await _api.saveAIConfig(
       primaryProvider: _primaryProvider,
@@ -551,6 +629,7 @@ class _BYOKSettingsSheetState extends State<BYOKSettingsSheet>
                       children: [
                         _buildPrimaryTab(),
                         _buildFallbackTab(),
+                        _buildServerTab(),
                       ],
                     ),
                   ),
@@ -631,8 +710,9 @@ class _BYOKSettingsSheetState extends State<BYOKSettingsSheet>
           letterSpacing: 0.8,
         ),
         tabs: const [
-          Tab(text: 'PRIMARY ENGINE'),
+          Tab(text: 'PRIMARY AI'),
           Tab(text: 'FAILOVER BACKUP'),
+          Tab(text: 'SERVER HOST'),
         ],
       ),
     );
@@ -851,6 +931,267 @@ class _BYOKSettingsSheetState extends State<BYOKSettingsSheet>
               testMessage: _fallbackTestMessage,
             ),
           ],
+        ],
+      ),
+    );
+  }
+
+  Widget _buildServerTab() {
+    final isDark = Theme.of(context).brightness == Brightness.dark;
+    final currentResolved = AppConfig.apiBaseUrl;
+
+    return SingleChildScrollView(
+      padding: const EdgeInsets.all(20),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          _buildSectionLabel('BACKEND SERVER URL'),
+          const SizedBox(height: 6),
+          Text(
+            kIsWeb
+                ? 'Web defaults to this page origin ($currentResolved). Change only if backend is on a separate machine.'
+                : 'Native APK/IPA: laptop Wi-Fi IP (http://192.168.x.x:8000) or Cloudflare Tunnel URL.',
+            style: TextStyle(
+              fontFamily: AppTheme.fontUI,
+              fontSize: 12,
+              height: 1.4,
+              color: isDark ? AppTheme.darkTextMuted : AppTheme.textMuted,
+            ),
+          ),
+          const SizedBox(height: 14),
+          Container(
+            decoration: BoxDecoration(
+              color: isDark ? const Color(0xFF222222) : AppTheme.surfaceWarm,
+              borderRadius: BorderRadius.circular(12),
+              border: Border.all(
+                color: isDark ? const Color(0xFF333333) : AppTheme.border,
+              ),
+            ),
+            child: TextField(
+              controller: _serverUrlController,
+              keyboardType: TextInputType.url,
+              autocorrect: false,
+              style: TextStyle(
+                fontFamily: 'monospace',
+                fontSize: 13,
+                color: isDark ? Colors.white : AppTheme.ink,
+              ),
+              decoration: InputDecoration(
+                hintText: 'http://192.168.1.5:8000',
+                hintStyle: TextStyle(
+                  fontFamily: 'monospace',
+                  fontSize: 13,
+                  color: isDark ? AppTheme.darkTextMuted : AppTheme.textMuted,
+                ),
+                border: InputBorder.none,
+                contentPadding:
+                    const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
+                suffixIcon: IconButton(
+                  icon: const Icon(Icons.clear, size: 18),
+                  onPressed: () => _serverUrlController.clear(),
+                ),
+              ),
+            ),
+          ),
+          const SizedBox(height: 14),
+          _buildSectionLabel('QUICK PRESETS'),
+          const SizedBox(height: 8),
+          Wrap(
+            spacing: 8,
+            runSpacing: 8,
+            children: [
+              _buildPresetChip('Localhost (:8000)', 'http://127.0.0.1:8000'),
+              _buildPresetChip('Alt Port (:8080)', 'http://127.0.0.1:8080'),
+              _buildPresetChip('Android Emulator', 'http://10.0.2.2:8000'),
+              if (kIsWeb)
+                _buildPresetChip(
+                  'Web Origin',
+                  Uri.base.origin,
+                ),
+            ],
+          ),
+          const SizedBox(height: 20),
+          Row(
+            children: [
+              Expanded(
+                child: OutlinedButton.icon(
+                  onPressed: _testingServer ? null : _testServerConnection,
+                  icon: _testingServer
+                      ? SizedBox(
+                          width: 14,
+                          height: 14,
+                          child: CircularProgressIndicator(
+                            strokeWidth: 2,
+                            color: isDark ? Colors.white : AppTheme.ink,
+                          ),
+                        )
+                      : const Icon(Icons.bolt_rounded, size: 16),
+                  label: Text(_testingServer ? 'Pinging...' : 'Test Connection'),
+                  style: OutlinedButton.styleFrom(
+                    padding: const EdgeInsets.symmetric(vertical: 12),
+                    side: BorderSide(
+                      color: isDark ? const Color(0xFF444444) : AppTheme.border,
+                    ),
+                    shape: RoundedRectangleBorder(
+                      borderRadius: BorderRadius.circular(10),
+                    ),
+                  ),
+                ),
+              ),
+              const SizedBox(width: 12),
+              Expanded(
+                child: ElevatedButton.icon(
+                  onPressed: () async {
+                    final raw = _serverUrlController.text.trim();
+                    await AppConfig.setBaseUrl(raw);
+                    widget.onConfigSaved?.call();
+                    if (!mounted) return;
+                    ScaffoldMessenger.of(context).showSnackBar(
+                      SnackBar(
+                        content: Text(raw.isEmpty
+                            ? 'Server URL reset to automatic host detection.'
+                            : 'Server URL saved: $raw'),
+                        duration: const Duration(seconds: 2),
+                      ),
+                    );
+                  },
+                  icon: const Icon(Icons.check_rounded, size: 16),
+                  label: const Text('Save Host'),
+                  style: ElevatedButton.styleFrom(
+                    backgroundColor: isDark ? Colors.white : AppTheme.ink,
+                    foregroundColor: isDark ? Colors.black : Colors.white,
+                    padding: const EdgeInsets.symmetric(vertical: 12),
+                    shape: RoundedRectangleBorder(
+                      borderRadius: BorderRadius.circular(10),
+                    ),
+                  ),
+                ),
+              ),
+            ],
+          ),
+          if (_serverTestMessage != null) ...[
+            const SizedBox(height: 14),
+            Container(
+              padding: const EdgeInsets.all(12),
+              decoration: BoxDecoration(
+                color: _serverTestOk == true
+                    ? const Color(0x1A10B981)
+                    : const Color(0x1AEF4444),
+                borderRadius: BorderRadius.circular(10),
+                border: Border.all(
+                  color: _serverTestOk == true
+                      ? const Color(0xFF10B981)
+                      : const Color(0xFFEF4444),
+                ),
+              ),
+              child: Row(
+                children: [
+                  Icon(
+                    _serverTestOk == true
+                        ? Icons.check_circle_outline
+                        : Icons.error_outline,
+                    size: 18,
+                    color: _serverTestOk == true
+                        ? const Color(0xFF10B981)
+                        : const Color(0xFFEF4444),
+                  ),
+                  const SizedBox(width: 10),
+                  Expanded(
+                    child: Text(
+                      _serverTestMessage!,
+                      style: TextStyle(
+                        fontFamily: AppTheme.fontUI,
+                        fontSize: 12,
+                        color: _serverTestOk == true
+                            ? const Color(0xFF10B981)
+                            : const Color(0xFFEF4444),
+                      ),
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ],
+          const SizedBox(height: 24),
+          _buildMobileGuideCard(isDark),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildPresetChip(String label, String value) {
+    final isDark = Theme.of(context).brightness == Brightness.dark;
+    return ActionChip(
+      label: Text(
+        label,
+        style: TextStyle(
+          fontFamily: AppTheme.fontUI,
+          fontSize: 11,
+          color: isDark ? Colors.white70 : AppTheme.ink,
+        ),
+      ),
+      backgroundColor: isDark ? const Color(0xFF282828) : AppTheme.surfaceWarm,
+      shape: RoundedRectangleBorder(
+        borderRadius: BorderRadius.circular(8),
+        side: BorderSide(
+          color: isDark ? const Color(0xFF383838) : AppTheme.border,
+        ),
+      ),
+      onPressed: () {
+        setState(() {
+          _serverUrlController.text = value;
+          _serverTestMessage = null;
+          _serverTestOk = null;
+        });
+      },
+    );
+  }
+
+  Widget _buildMobileGuideCard(bool isDark) {
+    return Container(
+      padding: const EdgeInsets.all(14),
+      decoration: BoxDecoration(
+        color: isDark ? const Color(0xFF1F1F1F) : const Color(0xFFF9F9F7),
+        borderRadius: BorderRadius.circular(12),
+        border: Border.all(
+          color: isDark ? const Color(0xFF2E2E2E) : AppTheme.border,
+        ),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            children: [
+              Icon(
+                Icons.phone_iphone_rounded,
+                size: 16,
+                color: isDark ? Colors.white70 : AppTheme.ink,
+              ),
+              const SizedBox(width: 8),
+              Text(
+                'Connecting your phone to Athena',
+                style: TextStyle(
+                  fontFamily: AppTheme.fontUI,
+                  fontSize: 12,
+                  fontWeight: FontWeight.w700,
+                  color: isDark ? Colors.white : AppTheme.ink,
+                ),
+              ),
+            ],
+          ),
+          const SizedBox(height: 8),
+          Text(
+            '1. Ensure phone & Windows laptop are on the same Wi-Fi.\n'
+            '2. Run "ipconfig" in PowerShell to find your IPv4 (e.g. 192.168.1.15).\n'
+            '3. Set Server URL to http://<your-ipv4>:8000 and tap "Test Connection".\n'
+            '4. Alternatively, use Cloudflare Tunnel (https://xxx.trycloudflare.com) to read anywhere over mobile 5G.',
+            style: TextStyle(
+              fontFamily: AppTheme.fontUI,
+              fontSize: 11.5,
+              height: 1.45,
+              color: isDark ? AppTheme.darkTextMuted : AppTheme.textMuted,
+            ),
+          ),
         ],
       ),
     );

@@ -1,4 +1,5 @@
 from contextlib import asynccontextmanager
+import json
 import logging
 import os
 import re
@@ -6,6 +7,8 @@ import time
 from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, JSONResponse
+from fastapi.staticfiles import StaticFiles
+from starlette.exceptions import HTTPException as StarletteHTTPException
 
 from app.config import is_llm_configured
 from app.db import init_db
@@ -227,25 +230,39 @@ def get_app_update():
     return data
 
 
-# Fallback route for SPA client-side routing & static assets
+# Flutter Web (app/build/web) is served from the same origin as /api/*
+# so phones on LAN IP or a tunnel never hit mixed-content or CORS.
+_web_static = (
+    StaticFiles(directory=_WEB_BUILD_DIR, html=True)
+    if os.path.isdir(_WEB_BUILD_DIR)
+    else None
+)
+
+
 @app.get("/{full_path:path}")
-async def serve_static_or_spa(full_path: str):
-    # Check if requested from releases directory
+async def serve_static_or_spa(full_path: str, request: Request):
+    if full_path.startswith("api/") or full_path == "api":
+        return JSONResponse(status_code=404, content={"error": "Not found"})
+
     if full_path.startswith("releases/"):
         rel_sub = full_path.replace("releases/", "", 1).lstrip(r"\/")
         rel_file = os.path.join(_RELEASES_DIR, rel_sub)
         if os.path.isfile(rel_file):
             return FileResponse(rel_file)
 
-    # Security check: normalize and strip leading slashes
-    safe_path = os.path.normpath(full_path).lstrip(r"\/")
-    file_path = os.path.join(_WEB_BUILD_DIR, safe_path)
-    if os.path.isfile(file_path):
-        return FileResponse(file_path)
-    # If file doesn't exist, route to index.html for Flutter Web client-side router
-    index_html = os.path.join(_WEB_BUILD_DIR, "index.html")
-    if os.path.isfile(index_html):
-        return FileResponse(index_html)
+    global _web_static
+    if _web_static is None and os.path.isdir(_WEB_BUILD_DIR):
+        _web_static = StaticFiles(directory=_WEB_BUILD_DIR, html=True)
+
+    if _web_static is not None:
+        try:
+            return await _web_static.get_response(full_path, request.scope)
+        except StarletteHTTPException:
+            index_html = os.path.join(_WEB_BUILD_DIR, "index.html")
+            if os.path.isfile(index_html):
+                return FileResponse(index_html)
+            return JSONResponse(status_code=404, content={"error": "Not found"})
+
     return JSONResponse(status_code=404, content={"error": "Not found"})
 
 

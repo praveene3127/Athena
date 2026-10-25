@@ -6,10 +6,12 @@ class AppConfig {
 
   static const String _configured = String.fromEnvironment(
     'API_BASE_URL',
-    defaultValue: 'https://settled-penny-decades-reminder.trycloudflare.com',
+    defaultValue: '',
   );
 
-  /// Load runtime URL from local preferences
+  static const String nativeFallback = 'http://127.0.0.1:8000';
+
+  /// Load runtime URL from local preferences (native Server URL).
   static Future<void> init() async {
     try {
       final prefs = await SharedPreferences.getInstance();
@@ -20,10 +22,10 @@ class AppConfig {
     } catch (_) {}
   }
 
-  /// Save and update runtime URL
+  /// Save and update runtime URL.
   static Future<void> setBaseUrl(String url) async {
     final sanitized = url.trim().replaceAll(RegExp(r'/+$'), '');
-    _runtimeBaseUrl = sanitized;
+    _runtimeBaseUrl = sanitized.isEmpty ? null : sanitized;
     try {
       final prefs = await SharedPreferences.getInstance();
       if (sanitized.isEmpty) {
@@ -34,25 +36,52 @@ class AppConfig {
     } catch (_) {}
   }
 
-  /// Dynamic API Base URL:
-  /// - Returns runtime configured URL (from settings/preferences) if available.
-  /// - If explicitly set via --dart-define=API_BASE_URL=..., uses that.
-  /// - On Web, dynamically uses the current browser origin.
-  /// - Fallback to public Cloudflare tunnel.
-  static String get apiBaseUrl {
-    if (_runtimeBaseUrl != null && _runtimeBaseUrl!.isNotEmpty) {
-      return _runtimeBaseUrl!;
+  /// Pure host resolver used by [apiBaseUrl] and unit tests.
+  ///
+  /// Web: same-origin whenever the page is not a raw loopback compile default.
+  /// LAN IPs and tunnels always use [origin]. Loopback (`localhost` / `127.0.0.1`)
+  /// also uses [origin] so `:8000` and the `:8080` forwarder hit `/api/health`.
+  /// Native: saved Server URL, then `--dart-define`, then USB loopback.
+  static String resolveBaseUrl({
+    required bool isWeb,
+    required String host,
+    required String origin,
+    String? runtime,
+    String configured = '',
+  }) {
+    if (runtime != null && runtime.isNotEmpty) return runtime;
+    if (configured.isNotEmpty) return configured;
+    if (isWeb) {
+      final cleanOrigin = origin.trim();
+      if (cleanOrigin.isEmpty || cleanOrigin == 'null') {
+        return nativeFallback;
+      }
+      // Phone on LAN / tunnel (host is not loopback): never 127.0.0.1.
+      // Laptop web on localhost:8000 or :8080: still this origin (/api/health).
+      if (host != 'localhost' && host != '127.0.0.1') {
+        return cleanOrigin;
+      }
+      return cleanOrigin;
     }
-    if (_configured.isNotEmpty) return _configured;
+    return nativeFallback;
+  }
+
+  static String get apiBaseUrl {
+    String origin = '';
+    String host = '';
     if (kIsWeb) {
       try {
-        final origin = Uri.base.origin;
-        if (origin.isNotEmpty && origin != 'null') {
-          return origin;
-        }
+        origin = Uri.base.origin;
+        host = Uri.base.host;
       } catch (_) {}
     }
-    return 'https://settled-penny-decades-reminder.trycloudflare.com';
+    return resolveBaseUrl(
+      isWeb: kIsWeb,
+      host: host,
+      origin: origin,
+      runtime: _runtimeBaseUrl,
+      configured: _configured,
+    );
   }
 
   static const int statusPollMs = 1500;

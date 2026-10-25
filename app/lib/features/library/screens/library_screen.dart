@@ -723,6 +723,8 @@ class _LibraryScreenState extends ConsumerState<LibraryScreen>
     );
 
     final isDark = Theme.of(context).brightness == Brightness.dark;
+    final isMobile = MediaQuery.sizeOf(context).width < 600;
+    final hPad = isMobile ? 16.0 : 24.0;
 
     return Scaffold(
       backgroundColor: AppTheme.bgOf(context),
@@ -744,8 +746,10 @@ class _LibraryScreenState extends ConsumerState<LibraryScreen>
                 ref.invalidate(documentsProvider);
               },
               child: ListView(
-                physics: const AlwaysScrollableScrollPhysics(),
-                padding: const EdgeInsets.fromLTRB(24, 20, 24, 32),
+                physics: const BouncingScrollPhysics(
+                  parent: AlwaysScrollableScrollPhysics(),
+                ),
+                padding: EdgeInsets.fromLTRB(hPad, 20, hPad, 32),
                 children: [
                   // --- 1. Top Bar Lockup per ATHENA-BRAND-GUIDE.md ---
                   Row(

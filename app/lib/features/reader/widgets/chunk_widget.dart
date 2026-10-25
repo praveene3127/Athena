@@ -135,6 +135,8 @@ class ChunkWidget extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final isMobile = MediaQuery.sizeOf(context).width < 600;
+    final hPad = isMobile ? 16.0 : (isFeedMode ? 26.0 : 22.0);
     final theme = ReaderThemeConfig.getById(themeId);
     final pageLabel = chunk.pageReference ?? 'Page ?';
     final sectionTitle = chunk.sectionTitle;
@@ -161,7 +163,7 @@ class ChunkWidget extends StatelessWidget {
 
     // Seamless Top Row inside the card
     final headerRow = Padding(
-      padding: const EdgeInsets.fromLTRB(20, 16, 20, 0),
+      padding: EdgeInsets.fromLTRB(hPad, 16, hPad, 0),
       child: Row(
         children: [
           InkWell(
@@ -223,7 +225,7 @@ class ChunkWidget extends StatelessWidget {
 
     final titleWidget = shouldShowSectionTitle
         ? Padding(
-            padding: const EdgeInsets.fromLTRB(24, 16, 24, 4),
+            padding: EdgeInsets.fromLTRB(hPad, 16, hPad, 4),
             child: Row(
               crossAxisAlignment: CrossAxisAlignment.baseline,
               textBaseline: TextBaseline.alphabetic,
@@ -307,7 +309,7 @@ class ChunkWidget extends StatelessWidget {
 
     final bodyTextWidget = Padding(
       padding: EdgeInsets.symmetric(
-        horizontal: isFeedMode ? 26 : 22,
+        horizontal: hPad,
         vertical: isFeedMode ? 18 : 14,
       ),
       child: SelectableText.rich(
@@ -324,7 +326,7 @@ class ChunkWidget extends StatelessWidget {
     );
 
     final actionRowWidget = Padding(
-      padding: const EdgeInsets.fromLTRB(20, 0, 20, 16),
+      padding: EdgeInsets.fromLTRB(hPad, 0, hPad, 16),
       child: Align(
         alignment: Alignment.centerRight,
         child: InkWell(
@@ -370,9 +372,9 @@ class ChunkWidget extends StatelessWidget {
         constraints: const BoxConstraints(maxWidth: 680),
         child: Container(
           margin: EdgeInsets.fromLTRB(
-            16,
+            isMobile ? 12 : 16,
             8,
-            16,
+            isMobile ? 12 : 16,
             isFeedMode ? 68 : 10,
           ),
           // Outer Shell (Doppelrand)

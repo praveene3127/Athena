@@ -563,6 +563,7 @@ class _ContextCardWidgetState extends State<ContextCardWidget> {
 
   @override
   Widget build(BuildContext context) {
+    final isMobile = MediaQuery.sizeOf(context).width < 600;
     final card = widget.card;
     final isSaved = card.saved ?? false;
     final rawTitle = card.title ?? 'Context';
@@ -893,9 +894,9 @@ class _ContextCardWidgetState extends State<ContextCardWidget> {
         constraints: const BoxConstraints(maxWidth: 680),
         child: Container(
           margin: EdgeInsets.fromLTRB(
-            16,
+            isMobile ? 12 : 16,
             8,
-            16,
+            isMobile ? 12 : 16,
             widget.isFeedMode ? 68 : 10,
           ),
           // Outer Shell (Doppelrand)

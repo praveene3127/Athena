@@ -1820,6 +1820,9 @@ class _ReaderScreenState extends ConsumerState<ReaderScreen> {
     final apiClient = ref.read(apiClientProvider);
 
     final theme = ReaderThemeConfig.getById(_themeId);
+    final isMobile = MediaQuery.sizeOf(context).width < 600;
+    final proseSize = isMobile && _fontSize == 19.5 ? 18.5 : _fontSize;
+    final proseHeight = isMobile && _lineHeight == 1.72 ? 1.65 : _lineHeight;
 
     return Scaffold(
       key: _scaffoldKey,
@@ -1835,8 +1838,11 @@ class _ReaderScreenState extends ConsumerState<ReaderScreen> {
       appBar: AppBar(
         backgroundColor: theme.scaffoldBackground,
         elevation: 0,
+        titleSpacing: isMobile ? 4 : 16,
+        toolbarHeight: isMobile ? 52 : 56,
+        leadingWidth: isMobile ? 48 : 72,
         leading: Container(
-          margin: const EdgeInsets.only(left: 14),
+          margin: EdgeInsets.only(left: isMobile ? 4 : 14),
           child: IconButton(
             icon: Container(
               width: 36,
@@ -1860,7 +1866,7 @@ class _ReaderScreenState extends ConsumerState<ReaderScreen> {
             overflow: TextOverflow.ellipsis,
             style: TextStyle(
               fontFamily: AppTheme.fontDisplay,
-              fontSize: 18,
+              fontSize: isMobile ? 15 : 18,
               fontWeight: FontWeight.w400,
               color: theme.textColor,
               letterSpacing: 0.1,
@@ -1889,24 +1895,47 @@ class _ReaderScreenState extends ConsumerState<ReaderScreen> {
           ),
         ),
         actions: [
-          // 1. Table of Contents Drawer Button (ALWAYS VISIBLE)
+          Padding(
+            padding: const EdgeInsets.only(right: 6),
+            child: Center(
+              child: Container(
+                padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                decoration: BoxDecoration(
+                  color: theme.innerCardColor,
+                  borderRadius: BorderRadius.circular(14),
+                  border: Border.all(color: theme.borderColor),
+                ),
+                child: Text(
+                  'Feed',
+                  style: TextStyle(
+                    fontFamily: AppTheme.fontUI,
+                    color: theme.textColor,
+                    fontWeight: FontWeight.w700,
+                    fontSize: 11,
+                  ),
+                ),
+              ),
+            ),
+          ),
           IconButton(
+            visualDensity: VisualDensity.compact,
+            padding: const EdgeInsets.all(6),
+            constraints: const BoxConstraints(minWidth: 40, minHeight: 40),
             icon: Container(
-              width: 36,
-              height: 36,
+              width: 32,
+              height: 32,
               decoration: BoxDecoration(
                 color: theme.innerCardColor,
                 shape: BoxShape.circle,
                 border: Border.all(color: theme.borderColor),
               ),
               child: Icon(Icons.menu_book_rounded,
-                  color: theme.textColor, size: 18),
+                  color: theme.textColor, size: 16),
             ),
             tooltip: 'Table of Contents',
             onPressed: () => _scaffoldKey.currentState?.openDrawer(),
           ),
-          // 2. Saved Notes Vault Button (only show if count > 0)
-          if (_brainDeckCards.isNotEmpty)
+          if (!isMobile && _brainDeckCards.isNotEmpty)
             Tooltip(
               message: 'Saved Notes',
               child: InkWell(
@@ -1948,8 +1977,8 @@ class _ReaderScreenState extends ConsumerState<ReaderScreen> {
                 ),
               ),
             ),
-          // 3. Single Aa Appearance Button
           IconButton(
+            visualDensity: VisualDensity.compact,
             tooltip: 'Appearance & Reading Options',
             icon: Container(
               padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
@@ -1970,7 +1999,7 @@ class _ReaderScreenState extends ConsumerState<ReaderScreen> {
             ),
             onPressed: () => _showAppearanceSheet(context),
           ),
-          // 4. Quick Theme Switcher Button
+          if (!isMobile)
           Consumer(
             builder: (context, ref, _) {
               final isAppDark = Theme.of(context).brightness == Brightness.dark;
@@ -2090,8 +2119,8 @@ class _ReaderScreenState extends ConsumerState<ReaderScreen> {
                         child: PageView.builder(
                           scrollDirection: Axis.vertical,
                           controller: _pageController,
-                          physics: const PageScrollPhysics(
-                              parent: BouncingScrollPhysics()),
+                          physics: const BouncingScrollPhysics(
+                              parent: AlwaysScrollableScrollPhysics()),
                           onPageChanged: (index) {
                             setState(() => _lastVisibleIndex = index);
                             final currentItem = index < feedItems.length
@@ -2239,6 +2268,9 @@ class _ReaderScreenState extends ConsumerState<ReaderScreen> {
                               final seq = item.sequence ?? (index + 1);
                               return SizedBox.expand(
                                 child: SingleChildScrollView(
+                                  physics: const BouncingScrollPhysics(
+                                    parent: AlwaysScrollableScrollPhysics(),
+                                  ),
                                   child: Column(
                                     mainAxisSize: MainAxisSize.min,
                                     crossAxisAlignment:
@@ -2256,9 +2288,9 @@ class _ReaderScreenState extends ConsumerState<ReaderScreen> {
                                           chunks, index, seq),
                                       ChunkWidget(
                                         chunk: item,
-                                        fontSize: _fontSize,
+                                        fontSize: proseSize,
                                         fontFamily: _fontFamily,
-                                        lineHeight: _lineHeight,
+                                        lineHeight: proseHeight,
                                         themeId: _themeId,
                                         isFeedMode: true,
                                         bionicFocusEnabled:
@@ -2325,7 +2357,7 @@ class _ReaderScreenState extends ConsumerState<ReaderScreen> {
                       // Single Minimal Bottom Pill: < 1 / 857 >
                       Positioned(
                         bottom:
-                            18 + MediaQuery.of(context).padding.bottom,
+                            12 + MediaQuery.paddingOf(context).bottom,
                         left: 0,
                         right: 0,
                         child: Center(

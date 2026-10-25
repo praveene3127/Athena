@@ -334,19 +334,16 @@ class _ConnectionSetupScreenState extends State<ConnectionSetupScreen> {
                           spacing: 8,
                           runSpacing: 6,
                           children: [
-                            _buildPresetChip('Cloudflare Tunnel (Online)',
-                                'https://settled-penny-decades-reminder.trycloudflare.com'),
-                            _buildPresetChip('Home Wi-Fi (192.168.1.61)',
-                                'http://192.168.1.61:8000'),
                             _buildPresetChip(
-                                'Localhost', 'http://localhost:8000'),
+                                'Localhost (USB / this PC)',
+                                'http://127.0.0.1:8000'),
                             _buildPresetChip(
-                                'Emulator', 'http://10.0.2.2:8000'),
+                                'Android emulator', 'http://10.0.2.2:8000'),
                           ],
                         ),
                         const SizedBox(height: 8),
                         const Text(
-                          'Use Cloudflare Tunnel to connect seamlessly over cellular/any Wi-Fi, or Home Wi-Fi when on the same network as your PC.',
+                          'On the same Wi-Fi, enter http://<laptop-LAN-IP>:8000. A public tunnel URL is optional when you are not on that network.',
                           style:
                               TextStyle(color: Color(0xFF888888), fontSize: 11),
                         ),

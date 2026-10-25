@@ -2,6 +2,7 @@ import 'dart:async';
 import 'dart:convert';
 
 import 'package:dio/dio.dart';
+import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:shared_preferences/shared_preferences.dart';
 
 import 'package:athena/core/config/config.dart';
@@ -27,8 +28,23 @@ class ApiClient {
     dio.interceptors.add(
       InterceptorsWrapper(
         onRequest: (options, handler) {
-          if (AppConfig.apiBaseUrl.isNotEmpty) {
-            options.baseUrl = AppConfig.apiBaseUrl;
+          // Re-read every request so Settings → Server URL and web origin
+          // (LAN IP / tunnel / :8000) take effect without recreating Dio.
+          var base = AppConfig.apiBaseUrl;
+          if (kIsWeb) {
+            try {
+              final origin = Uri.base.origin;
+              final host = Uri.base.host.toLowerCase();
+              if (origin.isNotEmpty &&
+                  origin != 'null' &&
+                  host != 'localhost' &&
+                  host != '127.0.0.1') {
+                base = origin;
+              }
+            } catch (_) {}
+          }
+          if (base.isNotEmpty) {
+            options.baseUrl = base;
           }
           return handler.next(options);
         },
