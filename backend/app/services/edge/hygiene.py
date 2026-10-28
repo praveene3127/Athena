@@ -355,9 +355,12 @@ def dehyphenate_line_wraps(text: str) -> str:
 
     def _repl(m: re.Match) -> str:
         prefix, suffix = m.group(1), m.group(2)
+        combined = f"{prefix}{suffix}"
         if prefix.lower() in COMPOUND_PREFIXES:
+            if is_valid_single_word(combined):
+                return combined
             return f"{prefix}-{suffix}"
-        return f"{prefix}{suffix}"
+        return combined
 
     return re.sub(r"\b([A-Za-z]+)-\s+([a-z]+)\b", _repl, text)
 

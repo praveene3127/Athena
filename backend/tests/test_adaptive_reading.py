@@ -662,7 +662,7 @@ def test_document_bouncer_20_archetypes():
         "Whereas the parties desire to establish mutual covenants governed by § 102 of the code.\n"
         "In witness whereof, the parties hereto have executed this Agreement."
     )
-    res_legal = classify_document_purpose(book_pages_meta, [legal_text], "master_services_agreement.pdf")
+    res_legal = classify_document_purpose(book_pages_meta, [legal_text * 3], "master_services_agreement.pdf")
     assert res_legal["allowed"] is False
 
     # 9. Court Deposition / Dialogue (Must REJECT as short/transcript)
@@ -677,7 +677,7 @@ def test_document_bouncer_20_archetypes():
         "THE WITNESS: I am referring directly to the contemporaneous clinic charts.\n"
         "COURT REPORTER: Marked as Deposition Exhibit 7."
     )
-    res_depo = classify_document_purpose(book_pages_meta, [depo_text], "carter_deposition.pdf")
+    res_depo = classify_document_purpose(book_pages_meta, [depo_text * 3], "carter_deposition.pdf")
     assert res_depo["allowed"] is False
 
     # 10. Financial 10-K / Annual Report (Must REJECT as form_or_table)
@@ -1067,6 +1067,55 @@ def test_epub_upload_validation_and_bouncer(tmp_path, monkeypatch):
     monkeypatch.setattr("app.services.extraction.UPLOADS_DIR", uploads_dir)
     found_path = get_document_file_path(doc_id)
     assert found_path == saved_epub
+
+
+def test_app_update_and_platform_downloads():
+    from fastapi.testclient import TestClient
+    from app.main import app
+
+    client = TestClient(app)
+
+    # 1. Android platform check
+    res_android = client.get("/api/app-update?current_version=1.0.0&platform=android")
+    assert res_android.status_code == 200
+    data_android = res_android.json()
+    assert data_android["update_available"] is True
+    assert "Athena-Android.apk" in data_android["android"]["filename"]
+    assert data_android["android"]["download_url"] == "/api/download/android"
+
+    # 2. iOS platform check
+    res_ios = client.get("/api/app-update?current_version=1.0.0&platform=ios")
+    assert res_ios.status_code == 200
+    data_ios = res_ios.json()
+    assert data_ios["update_available"] is True
+    assert "Athena-iOS.ipa" in data_ios["ios"]["filename"]
+    assert data_ios["ios"]["download_url"] == "/api/download/ios"
+
+    # 3. Newer client version -> update_available == False
+    res_newer = client.get("/api/app-update?current_version=9.9.9")
+    assert res_newer.status_code == 200
+    data_newer = res_newer.json()
+    assert data_newer["update_available"] is False
+
+    # 4. GET /download page check
+    res_page = client.get("/download")
+    assert res_page.status_code == 200
+    assert "/api/download/android" in res_page.text
+    assert "/api/download/ios" in res_page.text
+    assert "Athena-Android.apk" in res_page.text
+    assert "Athena-iOS.ipa" in res_page.text
+
+    # 5. GET /api/download/android
+    res_dl_android = client.get("/api/download/android", follow_redirects=False)
+    assert res_dl_android.status_code == 200
+    assert 'filename="Athena-Android.apk"' in res_dl_android.headers.get("content-disposition", "")
+    assert len(res_dl_android.content) > 0
+
+    # 6. GET /api/download/ios
+    res_dl_ios = client.get("/api/download/ios", follow_redirects=False)
+    assert res_dl_ios.status_code == 200
+    assert 'filename="Athena-iOS.ipa"' in res_dl_ios.headers.get("content-disposition", "")
+    assert len(res_dl_ios.content) > 0
 
 
 

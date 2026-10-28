@@ -1,5 +1,6 @@
 import 'dart:async';
 
+import 'package:connectivity_plus/connectivity_plus.dart';
 import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
@@ -11,6 +12,7 @@ import 'package:url_launcher/url_launcher.dart';
 
 import 'package:athena/core/widgets/app_bottom_nav.dart';
 import 'package:athena/core/config/config.dart';
+import 'package:athena/core/config/update_service.dart';
 import 'package:athena/core/theme/theme.dart';
 import 'package:athena/core/errors.dart';
 import 'package:athena/models/document.dart';
@@ -46,7 +48,10 @@ class _LibraryScreenState extends ConsumerState<LibraryScreen>
   String _searchQuery = '';
   final TextEditingController _searchController = TextEditingController();
   Map<String, dynamic>? _updateInfo;
+  UpdateInfo? _updateModel;
   bool _hasUpdate = false;
+  bool _updateDismissed = false;
+  StreamSubscription<List<ConnectivityResult>>? _connectivitySub;
 
   @override
   void initState() {
@@ -54,6 +59,13 @@ class _LibraryScreenState extends ConsumerState<LibraryScreen>
     WidgetsBinding.instance.addObserver(this);
     _checkAIConfiguration();
     _checkForUpdates();
+    try {
+      _connectivitySub = Connectivity().onConnectivityChanged.listen((results) {
+        if (results.any((r) => r != ConnectivityResult.none)) {
+          _checkForUpdates();
+        }
+      });
+    } catch (_) {}
   }
 
   Future<void> _checkAIConfiguration() async {
@@ -117,6 +129,7 @@ class _LibraryScreenState extends ConsumerState<LibraryScreen>
 
   @override
   void dispose() {
+    _connectivitySub?.cancel();
     _pollTimer?.cancel();
     _searchController.dispose();
     WidgetsBinding.instance.removeObserver(this);
@@ -133,6 +146,14 @@ class _LibraryScreenState extends ConsumerState<LibraryScreen>
 
   Future<void> _checkForUpdates() async {
     try {
+      final info = await UpdateService.checkForUpdates();
+      if (info != null && info.updateAvailable && mounted) {
+        setState(() {
+          _updateModel = info;
+          _hasUpdate = true;
+        });
+        return;
+      }
       final client = ref.read(apiClientProvider);
       final update = await client.checkAppUpdate();
       if (update != null && mounted) {
@@ -164,12 +185,14 @@ class _LibraryScreenState extends ConsumerState<LibraryScreen>
       context: context,
       backgroundColor: Colors.transparent,
       isScrollControlled: true,
-      builder: (ctx) => SafeArea(
-        child: Container(
-          constraints: BoxConstraints(
-            maxHeight: MediaQuery.of(context).size.height * 0.85,
-          ),
-          margin: const EdgeInsets.fromLTRB(16, 0, 16, 16),
+      builder: (ctx) => Padding(
+        padding: EdgeInsets.only(bottom: MediaQuery.viewInsetsOf(ctx).bottom),
+        child: SafeArea(
+          child: Container(
+            constraints: BoxConstraints(
+              maxHeight: MediaQuery.of(context).size.height * 0.85,
+            ),
+            margin: const EdgeInsets.fromLTRB(16, 0, 16, 16),
           // Outer Shell (Double-Bezel Architecture)
           padding: const EdgeInsets.all(4),
           decoration: BoxDecoration(
@@ -436,7 +459,8 @@ class _LibraryScreenState extends ConsumerState<LibraryScreen>
           ),
         ),
       ),
-    );
+    ),
+  );
   }
 
   void _applyUpdate() {
@@ -456,20 +480,320 @@ class _LibraryScreenState extends ConsumerState<LibraryScreen>
     launchUrl(Uri.parse(fullUrl), mode: LaunchMode.externalApplication);
   }
 
+  UpdateInfo get _effectiveUpdateInfo {
+    if (_updateModel != null) return _updateModel!;
+    return UpdateInfo(
+      updateAvailable: _hasUpdate,
+      currentVersion: kAthenaAppVersion,
+      latestVersion: _updateInfo?['version']?.toString() ?? '1.1.0',
+      releaseNotes: _updateInfo?['release_notes']?.toString() ??
+          'Improved Per-Page Document Bouncer, 4-Archetype Marginalia Cards, and Mobile Touch Ergonomics.',
+      publishedAt: '2026-10-28',
+      android: const UpdatePlatformArtifact(
+        filename: 'Athena-Android.apk',
+        downloadUrl: '/api/download/android',
+        githubReleaseUrl: 'https://github.com/athena-reader/athena/releases/latest/download/Athena-Android.apk',
+      ),
+      ios: const UpdatePlatformArtifact(
+        filename: 'Athena-iOS.ipa',
+        downloadUrl: '/api/download/ios',
+        githubReleaseUrl: 'https://github.com/athena-reader/athena/releases/latest/download/Athena-iOS.ipa',
+        altstoreUrl: 'altstore://install?url=https://github.com/athena-reader/athena/releases/latest/download/Athena-iOS.ipa',
+      ),
+    );
+  }
+
+  Widget _buildEditorialUpdateBanner(bool isDark) {
+    final platform = detectDevicePlatform();
+    final info = _effectiveUpdateInfo;
+    final latestVersion = info.latestVersion;
+    final releaseNotes = info.releaseNotes.isNotEmpty
+        ? info.releaseNotes
+        : 'Improved Per-Page Document Bouncer, 4-Archetype Marginalia Cards, and Mobile Touch Ergonomics.';
+
+    final String kicker;
+    if (platform == 'android') {
+      kicker = 'UPDATE AVAILABLE · v$latestVersion FOR ANDROID';
+    } else if (platform == 'ios') {
+      kicker = 'UPDATE AVAILABLE · v$latestVersion FOR iOS';
+    } else {
+      kicker = 'UPDATE v$latestVersion AVAILABLE';
+    }
+
+    return Container(
+      width: double.infinity,
+      margin: const EdgeInsets.only(bottom: 18),
+      decoration: BoxDecoration(
+        color: isDark ? const Color(0xFF1E1E1C) : const Color(0xFFF2EFE9),
+        borderRadius: BorderRadius.circular(4),
+        border: Border(
+          left: const BorderSide(
+            color: Color(0xFFC84B31), // Terracotta accent spine
+            width: 4.0,
+          ),
+          top: BorderSide(
+            color: isDark ? const Color(0xFF2C2B29) : const Color(0xFFE2DDD5),
+            width: 1.0,
+          ),
+          right: BorderSide(
+            color: isDark ? const Color(0xFF2C2B29) : const Color(0xFFE2DDD5),
+            width: 1.0,
+          ),
+          bottom: BorderSide(
+            color: isDark ? const Color(0xFF2C2B29) : const Color(0xFFE2DDD5),
+            width: 1.0,
+          ),
+        ),
+        boxShadow: [
+          BoxShadow(
+            color: isDark ? Colors.black26 : const Color(0x0C161615),
+            blurRadius: 10,
+            offset: const Offset(0, 3),
+          ),
+        ],
+      ),
+      padding: const EdgeInsets.fromLTRB(16, 14, 14, 14),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            crossAxisAlignment: CrossAxisAlignment.center,
+            children: [
+              Expanded(
+                child: InkWell(
+                  onTap: _showUpdateDialog,
+                  child: Text(
+                    kicker,
+                    style: const TextStyle(
+                      fontFamily: 'monospace',
+                      fontSize: 10.5,
+                      fontWeight: FontWeight.w700,
+                      letterSpacing: 0.8,
+                      color: Color(0xFFC84B31),
+                    ),
+                  ),
+                ),
+              ),
+              InkWell(
+                onTap: () {
+                  setState(() {
+                    _updateDismissed = true;
+                  });
+                },
+                borderRadius: BorderRadius.circular(4),
+                child: Padding(
+                  padding: const EdgeInsets.all(4.0),
+                  child: Icon(
+                    Icons.close_rounded,
+                    size: 16,
+                    color: isDark ? const Color(0xFF888888) : const Color(0xFF666666),
+                  ),
+                ),
+              ),
+            ],
+          ),
+          const SizedBox(height: 6),
+          InkWell(
+            onTap: _showUpdateDialog,
+            child: Text(
+              releaseNotes,
+              maxLines: 2,
+              overflow: TextOverflow.ellipsis,
+              style: TextStyle(
+                fontFamily: AppTheme.fontUI,
+                fontSize: 12.5,
+                height: 1.4,
+                color: isDark ? const Color(0xFFE0DDD5) : const Color(0xFF161615),
+              ),
+            ),
+          ),
+          const SizedBox(height: 12),
+          if (platform == 'android') ...[
+            SizedBox(
+              height: 36,
+              child: ElevatedButton.icon(
+                onPressed: () {
+                  UpdateService.downloadPlatformUpdate(
+                    updateInfo: info,
+                    platform: 'android',
+                  );
+                },
+                icon: const Icon(Icons.download_rounded, size: 15),
+                label: const Text(
+                  'Download Android .APK ↓',
+                  style: TextStyle(
+                    fontSize: 12,
+                    fontWeight: FontWeight.w700,
+                    letterSpacing: 0.3,
+                  ),
+                ),
+                style: ElevatedButton.styleFrom(
+                  backgroundColor: const Color(0xFF161615),
+                  foregroundColor: Colors.white,
+                  elevation: 0,
+                  shape: RoundedRectangleBorder(
+                    borderRadius: BorderRadius.circular(4),
+                  ),
+                  padding: const EdgeInsets.symmetric(horizontal: 14),
+                ),
+              ),
+            ),
+          ] else if (platform == 'ios') ...[
+            Wrap(
+              spacing: 8,
+              runSpacing: 8,
+              crossAxisAlignment: WrapCrossAlignment.center,
+              children: [
+                SizedBox(
+                  height: 36,
+                  child: ElevatedButton.icon(
+                    onPressed: () {
+                      UpdateService.downloadPlatformUpdate(
+                        updateInfo: info,
+                        platform: 'ios',
+                      );
+                    },
+                    icon: const Icon(Icons.download_rounded, size: 15),
+                    label: const Text(
+                      'Download iOS .IPA ↓',
+                      style: TextStyle(
+                        fontSize: 12,
+                        fontWeight: FontWeight.w700,
+                        letterSpacing: 0.3,
+                      ),
+                    ),
+                    style: ElevatedButton.styleFrom(
+                      backgroundColor: const Color(0xFF161615),
+                      foregroundColor: Colors.white,
+                      elevation: 0,
+                      shape: RoundedRectangleBorder(
+                        borderRadius: BorderRadius.circular(4),
+                      ),
+                      padding: const EdgeInsets.symmetric(horizontal: 14),
+                    ),
+                  ),
+                ),
+                SizedBox(
+                  height: 36,
+                  child: OutlinedButton.icon(
+                    onPressed: () {
+                      UpdateService.downloadPlatformUpdate(
+                        updateInfo: info,
+                        platform: 'ios',
+                        useAltStore: true,
+                      );
+                    },
+                    icon: const Icon(Icons.install_mobile_rounded, size: 15),
+                    label: const Text(
+                      'Install via AltStore / SideStore',
+                      style: TextStyle(
+                        fontSize: 11.5,
+                        fontWeight: FontWeight.w600,
+                      ),
+                    ),
+                    style: OutlinedButton.styleFrom(
+                      foregroundColor: isDark ? Colors.white : const Color(0xFF161615),
+                      side: BorderSide(
+                        color: isDark ? const Color(0xFF444444) : const Color(0xFFCCCCCC),
+                      ),
+                      shape: RoundedRectangleBorder(
+                        borderRadius: BorderRadius.circular(4),
+                      ),
+                      padding: const EdgeInsets.symmetric(horizontal: 12),
+                    ),
+                  ),
+                ),
+              ],
+            ),
+          ] else ...[
+            Wrap(
+              spacing: 10,
+              runSpacing: 8,
+              children: [
+                SizedBox(
+                  height: 36,
+                  child: ElevatedButton.icon(
+                    onPressed: () {
+                      UpdateService.downloadPlatformUpdate(
+                        updateInfo: info,
+                        platform: 'android',
+                      );
+                    },
+                    icon: const Icon(Icons.android_rounded, size: 15),
+                    label: const Text(
+                      'Android .APK ↓',
+                      style: TextStyle(
+                        fontSize: 12,
+                        fontWeight: FontWeight.w700,
+                      ),
+                    ),
+                    style: ElevatedButton.styleFrom(
+                      backgroundColor: const Color(0xFF161615),
+                      foregroundColor: Colors.white,
+                      elevation: 0,
+                      shape: RoundedRectangleBorder(
+                        borderRadius: BorderRadius.circular(4),
+                      ),
+                      padding: const EdgeInsets.symmetric(horizontal: 14),
+                    ),
+                  ),
+                ),
+                SizedBox(
+                  height: 36,
+                  child: ElevatedButton.icon(
+                    onPressed: () {
+                      UpdateService.downloadPlatformUpdate(
+                        updateInfo: info,
+                        platform: 'ios',
+                      );
+                    },
+                    icon: const Icon(Icons.apple_rounded, size: 15),
+                    label: const Text(
+                      'iOS .IPA ↓',
+                      style: TextStyle(
+                        fontSize: 12,
+                        fontWeight: FontWeight.w700,
+                      ),
+                    ),
+                    style: ElevatedButton.styleFrom(
+                      backgroundColor: isDark ? const Color(0xFF333333) : const Color(0xFFE5DDD0),
+                      foregroundColor: isDark ? Colors.white : const Color(0xFF161615),
+                      elevation: 0,
+                      shape: RoundedRectangleBorder(
+                        borderRadius: BorderRadius.circular(4),
+                      ),
+                      padding: const EdgeInsets.symmetric(horizontal: 14),
+                    ),
+                  ),
+                ),
+              ],
+            ),
+          ],
+        ],
+      ),
+    );
+  }
+
   Future<void> _pickAndUpload() async {
-    final files = await FilePicker.pickFiles(
+    final result = await FilePicker.platform.pickFiles(
       type: FileType.custom,
       allowedExtensions: ['pdf', 'epub'],
+      withData: true,
     );
-    if (files.isEmpty) return;
+    if (result == null || result.files.isEmpty) return;
 
-    final file = files.first;
+    final file = result.files.first;
     Stream<List<int>>? fileStream;
-    try {
-      fileStream = file.readAsByteStream();
-    } catch (_) {
-      fileStream = null;
+    int fileSize = file.size;
+
+    if (file.bytes != null) {
+      fileStream = Stream.value(file.bytes!);
+      fileSize = file.bytes!.length;
+    } else if (file.readStream != null) {
+      fileStream = file.readStream;
+      fileSize = file.size;
     }
+
     if (fileStream == null) {
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
@@ -486,7 +810,6 @@ class _LibraryScreenState extends ConsumerState<LibraryScreen>
 
     try {
       final client = ref.read(apiClientProvider);
-      final fileSize = file.lengthSync() ?? await file.length() ?? 0;
       final docId = await client.uploadDocument(
         fileStream,
         fileSize,
@@ -888,194 +1211,10 @@ class _LibraryScreenState extends ConsumerState<LibraryScreen>
                     ],
                   ),
                   const SizedBox(height: 16),
-                  if (_hasUpdate && _updateInfo != null) ...[
-                    InkWell(
-                      onTap: _showUpdateDialog,
-                      borderRadius: BorderRadius.circular(22),
-                      child: Container(
-                        width: double.infinity,
-                        margin: const EdgeInsets.only(bottom: 18),
-                        // Outer Shell (Double-Bezel Architecture)
-                        padding: const EdgeInsets.all(3),
-                        decoration: BoxDecoration(
-                          color: isDark
-                              ? const Color(0xFF181818)
-                              : const Color(0xFFF7F6F2),
-                          borderRadius: BorderRadius.circular(22),
-                          border: Border.all(
-                            color: isDark
-                                ? const Color(0xFF282828)
-                                : const Color(0xFFE5E7DC),
-                            width: 1.0,
-                          ),
-                          boxShadow: [
-                            BoxShadow(
-                              color: isDark
-                                  ? Colors.black26
-                                  : const Color(0x06141714),
-                              blurRadius: 12,
-                              offset: const Offset(0, 3),
-                            ),
-                          ],
-                        ),
-                        child: Container(
-                          // Inner Core
-                          padding: const EdgeInsets.symmetric(
-                              horizontal: 16, vertical: 14),
-                          decoration: BoxDecoration(
-                            color:
-                                isDark ? const Color(0xFF202020) : Colors.white,
-                            borderRadius: BorderRadius.circular(19),
-                          ),
-                          child: Row(
-                            children: [
-                              Container(
-                                width: 40,
-                                height: 40,
-                                decoration: BoxDecoration(
-                                  color: isDark
-                                      ? const Color(0xFF2DD4BF)
-                                          .withValues(alpha: 0.15)
-                                      : const Color(0xFF005E54)
-                                          .withValues(alpha: 0.08),
-                                  borderRadius: BorderRadius.circular(13),
-                                  border: Border.all(
-                                    color: isDark
-                                        ? const Color(0xFF2DD4BF)
-                                            .withValues(alpha: 0.3)
-                                        : const Color(0xFF005E54)
-                                            .withValues(alpha: 0.15),
-                                  ),
-                                ),
-                                child: Icon(
-                                  Icons.arrow_circle_down_rounded,
-                                  color: isDark
-                                      ? const Color(0xFF2DD4BF)
-                                      : const Color(0xFF005E54),
-                                  size: 22,
-                                ),
-                              ),
-                              const SizedBox(width: 14),
-                              Expanded(
-                                child: Column(
-                                  crossAxisAlignment: CrossAxisAlignment.start,
-                                  children: [
-                                    Row(
-                                      children: [
-                                        Text(
-                                          _updateInfo!['title'] as String? ??
-                                              'Athena Update Ready',
-                                          style: TextStyle(
-                                            fontFamily: AppTheme.fontDisplay,
-                                            fontSize: 16,
-                                            fontWeight: FontWeight.w400,
-                                            letterSpacing: -0.1,
-                                            color: isDark
-                                                ? Colors.white
-                                                : AppTheme.ink,
-                                          ),
-                                        ),
-                                        const SizedBox(width: 8),
-                                        Container(
-                                          padding: const EdgeInsets.symmetric(
-                                              horizontal: 6, vertical: 2),
-                                          decoration: BoxDecoration(
-                                            color: isDark
-                                                ? const Color(0xFF2DD4BF)
-                                                    .withValues(alpha: 0.2)
-                                                : const Color(0xFF005E54)
-                                                    .withValues(alpha: 0.1),
-                                            borderRadius:
-                                                BorderRadius.circular(8),
-                                          ),
-                                          child: Text(
-                                            'v${_updateInfo!['version'] ?? 'latest'}',
-                                            style: TextStyle(
-                                              fontFamily: AppTheme.fontUI,
-                                              fontSize: 10,
-                                              fontWeight: FontWeight.w700,
-                                              color: isDark
-                                                  ? const Color(0xFF2DD4BF)
-                                                  : const Color(0xFF005E54),
-                                            ),
-                                          ),
-                                        ),
-                                      ],
-                                    ),
-                                    const SizedBox(height: 3),
-                                    Text(
-                                      _updateInfo!['release_notes']
-                                              as String? ??
-                                          'Tap to view release details and install.',
-                                      maxLines: 1,
-                                      overflow: TextOverflow.ellipsis,
-                                      style: TextStyle(
-                                        fontFamily: AppTheme.fontUI,
-                                        fontSize: 12,
-                                        color: isDark
-                                            ? const Color(0xFF9E9E9E)
-                                            : AppTheme.textMuted,
-                                      ),
-                                    ),
-                                  ],
-                                ),
-                              ),
-                              const SizedBox(width: 8),
-                              // Button-in-Button CTA
-                              Container(
-                                padding:
-                                    const EdgeInsets.fromLTRB(12, 6, 6, 6),
-                                decoration: BoxDecoration(
-                                  color: isDark
-                                      ? Colors.white
-                                      : const Color(0xFF141714),
-                                  borderRadius: BorderRadius.circular(20),
-                                ),
-                                child: Row(
-                                  mainAxisSize: MainAxisSize.min,
-                                  children: [
-                                    Text(
-                                      'Update',
-                                      style: TextStyle(
-                                        fontFamily: AppTheme.fontUI,
-                                        color: isDark
-                                            ? const Color(0xFF141714)
-                                            : Colors.white,
-                                        fontWeight: FontWeight.w600,
-                                        fontSize: 11.5,
-                                      ),
-                                    ),
-                                    const SizedBox(width: 4),
-                                    Container(
-                                      width: 18,
-                                      height: 18,
-                                      decoration: BoxDecoration(
-                                        color: isDark
-                                            ? const Color(0xFF141714)
-                                                .withValues(alpha: 0.12)
-                                            : Colors.white
-                                                .withValues(alpha: 0.2),
-                                        shape: BoxShape.circle,
-                                      ),
-                                      child: Center(
-                                        child: Icon(
-                                          Icons.arrow_forward_rounded,
-                                          size: 11,
-                                          color: isDark
-                                              ? const Color(0xFF141714)
-                                              : Colors.white,
-                                        ),
-                                      ),
-                                    ),
-                                  ],
-                                ),
-                              ),
-                            ],
-                          ),
-                        ),
-                      ),
-                    ),
+                  if (_hasUpdate && !_updateDismissed) ...[
+                    _buildEditorialUpdateBanner(isDark),
                   ],
+
                   if (!_aiConfigured) ...[
                     Container(
                       width: double.infinity,

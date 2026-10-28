@@ -955,9 +955,11 @@ class _ReaderScreenState extends ConsumerState<ReaderScreen> {
       shape: const RoundedRectangleBorder(
         borderRadius: BorderRadius.vertical(top: Radius.circular(24)),
       ),
-      builder: (ctx) => StatefulBuilder(
-        builder: (ctx, setSheetState) {
-          return SafeArea(
+      builder: (ctx) => Padding(
+        padding: EdgeInsets.only(bottom: MediaQuery.viewInsetsOf(ctx).bottom),
+        child: StatefulBuilder(
+          builder: (ctx, setSheetState) {
+            return SafeArea(
             child: Container(
               height: MediaQuery.of(ctx).size.height * 0.85,
               padding: const EdgeInsets.fromLTRB(20, 14, 20, 20),
@@ -1050,7 +1052,7 @@ class _ReaderScreenState extends ConsumerState<ReaderScreen> {
                               ScaffoldMessenger.of(context).showSnackBar(
                                 const SnackBar(
                                   content: Text(
-                                      'Notes copied as Markdown to clipboard'),
+                                      'Copied full Markdown vault to clipboard'),
                                   backgroundColor: AppTheme.figmaBlack,
                                 ),
                               );
@@ -1165,7 +1167,8 @@ class _ReaderScreenState extends ConsumerState<ReaderScreen> {
           );
         },
       ),
-    );
+    ),
+  );
   }
 
   Widget _buildPreviouslyOnBanner(List<ReaderItem> chunks) {
@@ -2286,30 +2289,34 @@ class _ReaderScreenState extends ConsumerState<ReaderScreen> {
                                         _buildPreviouslyOnBanner(chunks),
                                       _buildZeigarnikIfEligible(
                                           chunks, index, seq),
-                                      ChunkWidget(
-                                        chunk: item,
-                                        fontSize: proseSize,
-                                        fontFamily: _fontFamily,
-                                        lineHeight: proseHeight,
-                                        themeId: _themeId,
-                                        isFeedMode: true,
-                                        bionicFocusEnabled:
-                                            _bionicFocusEnabled,
-                                        layoutWarning: data.layoutWarning,
-                                        onViewOriginalPage: () {
-                                          final pageNum =
-                                              _parsePageNumber(
-                                                  item.pageReference);
-                                          OriginalPageSheet.show(
-                                            context,
-                                            documentId: widget.documentId,
-                                            pageNumber: pageNum,
-                                            pageReference:
-                                                item.pageReference,
-                                            apiClient: apiClient,
-                                          );
-                                        },
-                                        onAsk: () => _openAskSheet(item),
+                                      RepaintBoundary(
+                                        child: ChunkWidget(
+                                          chunk: item,
+                                          fontSize: proseSize,
+                                          fontFamily: _fontFamily,
+                                          lineHeight: proseHeight,
+                                          themeId: _themeId,
+                                          isFeedMode: true,
+                                          bionicFocusEnabled:
+                                              _bionicFocusEnabled,
+                                          layoutWarning: data.layoutWarning,
+                                          onViewOriginalPage: () {
+                                            final pageNum =
+                                                _parsePageNumber(
+                                                    item.pageReference);
+                                            OriginalPageSheet.show(
+                                              context,
+                                              documentId: widget.documentId,
+                                              pageNumber: pageNum,
+                                              pageReference:
+                                                  item.pageReference,
+                                              apiClient: apiClient,
+                                            );
+                                          },
+                                          onAsk: () => _openAskSheet(item),
+                                          onSimplify: () =>
+                                              _fetchAndUnlockVibeCheck(seq),
+                                        ),
                                       ),
                                       AnimatedSize(
                                         duration: const Duration(
@@ -2322,30 +2329,32 @@ class _ReaderScreenState extends ConsumerState<ReaderScreen> {
                                 ),
                               );
                             } else if (item.isContextCard) {
-                              return ContextCardWidget(
-                                card: item,
-                                isFeedMode: true,
-                                isBrainDeckSaved:
-                                    _isCardInBrainDeck(item.id),
-                                onToggleBrainDeck: () => _toggleBrainDeck(
-                                  item,
-                                  data.title,
-                                  item.sequence ?? 1,
+                              return RepaintBoundary(
+                                child: ContextCardWidget(
+                                  card: item,
+                                  isFeedMode: true,
+                                  isBrainDeckSaved:
+                                      _isCardInBrainDeck(item.id),
+                                  onToggleBrainDeck: () => _toggleBrainDeck(
+                                    item,
+                                    data.title,
+                                    item.sequence ?? 1,
+                                  ),
+                                  onToggleSave: () async {
+                                    final currentlySaved =
+                                        item.saved ?? false;
+                                    if (currentlySaved) {
+                                      await apiClient.unsaveCard(item.id);
+                                    } else {
+                                      await apiClient.saveCard(item.id);
+                                    }
+                                    ref.invalidate(readerDataProvider(
+                                        widget.documentId));
+                                  },
+                                  onDismiss: () => _dismissCard(item),
+                                  onAskAthena: () =>
+                                      _openAskSheetForCard(item, feedItems),
                                 ),
-                                onToggleSave: () async {
-                                  final currentlySaved =
-                                      item.saved ?? false;
-                                  if (currentlySaved) {
-                                    await apiClient.unsaveCard(item.id);
-                                  } else {
-                                    await apiClient.saveCard(item.id);
-                                  }
-                                  ref.invalidate(readerDataProvider(
-                                      widget.documentId));
-                                },
-                                onDismiss: () => _dismissCard(item),
-                                onAskAthena: () =>
-                                    _openAskSheetForCard(item, feedItems),
                               );
                             }
 
@@ -2573,14 +2582,16 @@ class _ReaderScreenState extends ConsumerState<ReaderScreen> {
       backgroundColor: Colors.transparent,
       isScrollControlled: true,
       builder: (ctx) {
-        return StatefulBuilder(
-          builder: (context, setSheetState) {
-            final currentTheme = ReaderThemeConfig.getById(_themeId);
-            final readerData =
-                ref.read(readerDataProvider(widget.documentId)).value;
-            final docTitle = readerData?.title ?? 'Document';
+        return Padding(
+          padding: EdgeInsets.only(bottom: MediaQuery.viewInsetsOf(ctx).bottom),
+          child: StatefulBuilder(
+            builder: (context, setSheetState) {
+              final currentTheme = ReaderThemeConfig.getById(_themeId);
+              final readerData =
+                  ref.read(readerDataProvider(widget.documentId)).value;
+              final docTitle = readerData?.title ?? 'Document';
 
-            return Container(
+              return Container(
               constraints: BoxConstraints(
                 maxHeight: MediaQuery.of(context).size.height * 0.88,
               ),
@@ -3064,7 +3075,8 @@ class _ReaderScreenState extends ConsumerState<ReaderScreen> {
                 ),
               ),
             );
-          },
+            },
+          ),
         );
       },
     );

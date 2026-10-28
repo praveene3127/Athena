@@ -193,16 +193,44 @@ def _is_code_or_math_line(line: str) -> bool:
     return False
 
 
+def _is_transcript_or_dialogue(p_text: str) -> bool:
+    lines = [l.strip() for l in p_text.splitlines() if l.strip()]
+    if not lines:
+        return False
+    dialogue_starters = ("q.", "q:", "a.", "a:", "the witness:", "the court:", "court reporter:", "by mr.", "by ms.", "by mrs.")
+    d_lines = sum(1 for l in lines if any(l.lower().startswith(ds) for ds in dialogue_starters))
+    return (d_lines / max(1, len(lines))) >= 0.25
+
+
+def _is_legal_contract(p_text: str) -> bool:
+    lines = [l.strip() for l in p_text.splitlines() if l.strip()]
+    if not lines:
+        return False
+    legal_indicators = (
+        "hereinafter", "in witness whereof", "notwithstanding anything to the contrary",
+        "shall indemnify", "governed by §", "covenants governed by", "license agreement",
+        "commercial software license", "party of the first part", "terms and conditions"
+    )
+    p_lower = p_text.lower()
+    matches = sum(1 for ind in legal_indicators if ind in p_lower)
+    section_lines = sum(1 for l in lines if bool(re.match(r'^(?:Section|Article|Clause)\s+\d+', l, re.IGNORECASE)))
+    return matches >= 2 or (section_lines / max(1, len(lines)) >= 0.25 and matches >= 1)
+
+
 def _is_prose_page(page_text: str) -> bool:
     """
     Evaluates individual page structure:
     1. >= 100 alphabetic words
     2. >= 45% words inside grammatical sentences (>= 7 words ending in ., ?, !, ", or ”)
     3. < 50% lines are code syntax or isolated math
+    4. Not dominated by tables, code, math formulas, legal clauses, or deposition dialogue
     """
+    if _is_table_dominated(page_text) or _is_code_dominated(page_text) or _is_math_dominated(page_text) or _is_transcript_or_dialogue(page_text) or _is_legal_contract(page_text):
+        return False
+
     words = re.findall(r"[^\W\d_]+", page_text)
     total_words = len(words)
-    if total_words < 100:
+    if total_words < 90:
         return False
 
     sentence_pattern = re.compile(r'([^\W_][^.!?]*?[.!?]["\'”]?)(\s+|$)', re.DOTALL)
@@ -215,7 +243,7 @@ def _is_prose_page(page_text: str) -> bool:
             words_in_sentences += len(s_words)
 
     grammatical_ratio = words_in_sentences / max(1, total_words)
-    if grammatical_ratio < 0.45:
+    if grammatical_ratio < 0.40:
         return False
 
     lines = [l.strip() for l in page_text.splitlines() if l.strip()]
@@ -233,13 +261,13 @@ def _is_prose_page(page_text: str) -> bool:
 def _is_math_dominated(p_text: str) -> bool:
     math_symbols = set("∫∑∂≤≥√∞≠±≈Δπ")
     m_sym_count = sum(1 for ch in p_text if ch in math_symbols)
-    m_formula_count = len(re.findall(r'\b(?:dy/dx|dx/dt|lim_\{|T\(s\)|G\(s\)|Y\(s\)|s\^\d|f\(x\))\b', p_text))
+    m_formula_count = len(re.findall(r'\b(?:dy/dx|dx/dt|lim_\{|T\(s\)|G\(s\)|Y\(s\)|R\(s\)|s\^\d|f\(x\)|Eq\.\s*\(\d+\.\d+\)|Theorem\s+\d|Lemma\s+\d)\b', p_text))
     lines = [l.strip() for l in p_text.splitlines() if l.strip()]
     eq_lines = sum(
         1 for l in lines
         if ("=" in l and not any(l.startswith(pfx) for pfx in ("self.", "def ", "var ", "let ", "const ", "return ")) and any(op in l for op in ("+", "-", "*", "/", "^", "∫", "∑")) and not re.search(r'[.!?]$', l))
     )
-    return (m_sym_count + m_formula_count >= 2) or (eq_lines / max(1, len(lines)) >= 0.30)
+    return (m_sym_count + m_formula_count >= 2) or (eq_lines / max(1, len(lines)) >= 0.20)
 
 
 def _is_code_dominated(p_text: str) -> bool:
@@ -264,6 +292,17 @@ def _is_code_dominated(p_text: str) -> bool:
         ):
             code_lines += 1
     return (code_lines / max(1, len(lines))) >= 0.35
+
+
+def _is_table_dominated(p_text: str) -> bool:
+    lines = [l.strip() for l in p_text.splitlines() if l.strip()]
+    if not lines:
+        return False
+    table_lines = sum(
+        1 for l in lines
+        if "|" in l or "\t" in l or bool(re.search(r'\s{3,}', l)) or bool(re.search(r'[\$₹€£%]', l)) or len(re.findall(r'\b\d+[\.,]\d+\b', l)) >= 2 or any(kw in l.lower() for kw in ("subtotal", "total due", "amount due", "balance sheet", "line item", "qty", "unit price", "invoice #"))
+    )
+    return (table_lines / max(1, len(lines))) >= 0.45
 
 
 def classify_document_purpose(
@@ -298,6 +337,20 @@ def classify_document_purpose(
             "reason": "This PDF is encrypted or password-protected and cannot be extracted.",
             "confidence": 1.0,
         }
+
+    # Extract pages_meta from doc or pdf_path if missing
+    if not pages_meta and doc is not None:
+        try:
+            pages_meta = [{"width": p.rect.width, "height": p.rect.height} for p in doc]
+        except Exception:
+            pass
+    elif not pages_meta and pdf_path is not None:
+        try:
+            import fitz
+            with fitz.open(pdf_path) as _d:
+                pages_meta = [{"width": p.rect.width, "height": p.rect.height} for p in _d]
+        except Exception:
+            pass
 
     # Extract PyMuPDF telemetry if doc or pdf_path available and telemetry missing
     if telemetry is None and doc is not None:
@@ -379,6 +432,20 @@ def classify_document_purpose(
     raw_words = re.findall(r"[^\W\d_]+", full_text)
     total_words = len(raw_words)
 
+    # Rule: Landscape Presentation Slide Deck Check
+    landscape_ratio = 0.0
+    if pages_meta:
+        landscape_count = sum(1 for p in pages_meta if p.get("width", 0) > p.get("height", 1) * 1.20)
+        landscape_ratio = landscape_count / max(1, len(pages_meta))
+    if landscape_ratio >= 0.70 and (len(pages_meta) >= 2 or total_words >= 50):
+        return {
+            "allowed": False,
+            "doc_category": "slide_deck",
+            "display_label": "Presentation Slide Deck",
+            "reason": f"Document is {round(landscape_ratio * 100)}% landscape slide layout lacking narrative prose.",
+            "confidence": 0.96,
+        }
+
     # Calculate Code & Math Dominance across sampled core pages
     code_dominated_pages = sum(1 for p in sampled_pages if _is_code_dominated(p))
     code_ratio = code_dominated_pages / max(1, len(sampled_pages))
@@ -386,32 +453,17 @@ def classify_document_purpose(
     math_dominated_pages = sum(1 for p in sampled_pages if _is_math_dominated(p))
     math_ratio = math_dominated_pages / max(1, len(sampled_pages))
 
-    # Evaluate Prose Dominance (Strictly percentage dominance; raw >= 8 loophole removed)
+    table_dominated_pages = sum(1 for p in sampled_pages if _is_table_dominated(p))
+    table_ratio = table_dominated_pages / max(1, len(sampled_pages))
+
+    # Evaluate Prose Dominance
     prose_pages_count = sum(1 for p in sampled_pages if _is_prose_page(p))
     prose_ratio = prose_pages_count / max(1, len(sampled_pages))
 
-    # Hard rejection for STEM textbooks or coding manuals if core pages are dominated by math/code
-    # (even if document has intro/preface prose)
-    if (telemetry and telemetry.get("mono_font_ratio", 0) >= 0.20) or code_ratio >= 0.35:
-        return {
-            "allowed": False,
-            "doc_category": "coding_manual",
-            "display_label": "Programming Code Manual / Syntax Dump",
-            "reason": "Document is heavily dominated by programming code and syntax dumps.",
-            "confidence": 0.95,
-        }
-
-    if (telemetry and telemetry.get("math_font_ratio", 0) >= 0.08) or math_ratio >= 0.35:
-        return {
-            "allowed": False,
-            "doc_category": "stem_textbook",
-            "display_label": "STEM Formula Textbook / Exercise Bank",
-            "reason": "Document is heavily dominated by mathematical equations and formula exercises.",
-            "confidence": 0.95,
-        }
-
-    # Book & Research Paper Admission (Strictly percentage dominance >= 40%)
-    if prose_ratio >= 0.40 and total_words >= 250:
+    # Default-Allow Book Immunity:
+    # If >= 35% of sampled core pages (15%–85%) are valid prose pages (>= 90 words with >= 40% words in complete sentences),
+    # ALWAYS return allowed = True (unless >= 45% of core pages are explicitly dominated by heavy symbolic math equations or raw code).
+    if prose_ratio >= 0.35 and total_words >= 250 and code_ratio < 0.45 and math_ratio < 0.45:
         is_research_paper = (
             bool(re.search(r"\b(?:abstract|methodology|experimental results|references|bibliography|peer-reviewed|doi:)\b", full_text.lower()))
             and ("abstract" in full_text.lower() or "references" in full_text.lower() or "methodology" in full_text.lower())
@@ -431,6 +483,49 @@ def classify_document_purpose(
             "display_label": "Book or Long-Form Narrative",
             "reason": f"Continuous narrative prose detected ({round(prose_ratio * 100)}% prose pages).",
             "confidence": 0.95,
+        }
+
+    # Hard rejection for STEM textbooks or coding manuals if core pages are dominated by math/code
+    if (telemetry and telemetry.get("mono_font_ratio", 0) >= 0.20) or code_ratio >= 0.35:
+        return {
+            "allowed": False,
+            "doc_category": "coding_manual",
+            "display_label": "Programming Code Manual / Syntax Dump",
+            "reason": "Document is heavily dominated by programming code and syntax dumps.",
+            "confidence": 0.95,
+        }
+
+    if (telemetry and telemetry.get("math_font_ratio", 0) >= 0.08) or math_ratio >= 0.35:
+        return {
+            "allowed": False,
+            "doc_category": "stem_textbook",
+            "display_label": "STEM Formula Textbook / Exercise Bank",
+            "reason": "Document is heavily dominated by mathematical equations and formula exercises.",
+            "confidence": 0.95,
+        }
+
+    if table_ratio >= 0.45 and prose_ratio < 0.35:
+        return {
+            "allowed": False,
+            "doc_category": "form_or_table",
+            "display_label": "Form, Table, or Fragment Document",
+            "reason": f"Document is {round(table_ratio * 100)}% tabular structured data lacking narrative prose.",
+            "confidence": 0.96,
+        }
+
+    transcript_dominated_pages = sum(1 for p in sampled_pages if _is_transcript_or_dialogue(p))
+    transcript_ratio = transcript_dominated_pages / max(1, len(sampled_pages))
+
+    legal_dominated_pages = sum(1 for p in sampled_pages if _is_legal_contract(p))
+    legal_ratio = legal_dominated_pages / max(1, len(sampled_pages))
+
+    if (transcript_ratio >= 0.35 or legal_ratio >= 0.35) and prose_ratio < 0.35:
+        return {
+            "allowed": False,
+            "doc_category": "form_or_table",
+            "display_label": "Legal Document or Transcript",
+            "reason": "Document is dominated by legal contractual clauses or dialogue deposition transcripts.",
+            "confidence": 0.96,
         }
 
     # For non-prose documents (< 40% prose), evaluate rejection rules:

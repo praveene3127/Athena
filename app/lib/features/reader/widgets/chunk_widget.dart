@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:athena/core/theme/theme.dart';
 import 'package:athena/core/theme/reader_theme.dart';
 import 'package:athena/models/document.dart';
@@ -12,6 +13,7 @@ class ChunkWidget extends StatelessWidget {
   final double fontSize;
   final VoidCallback onViewOriginalPage;
   final VoidCallback onAsk;
+  final VoidCallback? onSimplify;
   final bool isFeedMode;
   final bool bionicFocusEnabled;
   final String? layoutWarning;
@@ -25,6 +27,7 @@ class ChunkWidget extends StatelessWidget {
     required this.fontSize,
     required this.onViewOriginalPage,
     required this.onAsk,
+    this.onSimplify,
     this.isFeedMode = true,
     this.bionicFocusEnabled = false,
     this.layoutWarning,
@@ -168,10 +171,14 @@ class ChunkWidget extends StatelessWidget {
         children: [
           InkWell(
             borderRadius: BorderRadius.circular(20),
-            onTap: onViewOriginalPage,
+            onTap: () {
+              HapticFeedback.selectionClick();
+              onViewOriginalPage();
+            },
             child: Container(
+              constraints: const BoxConstraints(minHeight: 36, minWidth: 44),
               padding:
-                  const EdgeInsets.symmetric(horizontal: 10, vertical: 4.5),
+                  const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
               decoration: BoxDecoration(
                 color: theme.pillBackground,
                 borderRadius: BorderRadius.circular(20),
@@ -327,42 +334,92 @@ class ChunkWidget extends StatelessWidget {
 
     final actionRowWidget = Padding(
       padding: EdgeInsets.fromLTRB(hPad, 0, hPad, 16),
-      child: Align(
-        alignment: Alignment.centerRight,
-        child: InkWell(
-          borderRadius: BorderRadius.circular(20),
-          onTap: onAsk,
-          child: Container(
-            padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
-            decoration: BoxDecoration(
-              color: theme.pillBackground,
+      child: Row(
+        mainAxisAlignment: MainAxisAlignment.end,
+        children: [
+          if (onSimplify != null) ...[
+            InkWell(
               borderRadius: BorderRadius.circular(20),
-              border: Border.all(
-                color: theme.borderColor,
-                width: 1,
-              ),
-            ),
-            child: Row(
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                AthenaSymbol(
-                  size: 13,
-                  color: theme.accentColor,
-                ),
-                const SizedBox(width: 6),
-                Text(
-                  'Ask Athena',
-                  style: TextStyle(
-                    fontFamily: AppTheme.fontUI,
-                    fontSize: 11.5,
-                    fontWeight: FontWeight.w600,
-                    color: theme.textColor,
+              onTap: () {
+                HapticFeedback.selectionClick();
+                onSimplify!();
+              },
+              child: Container(
+                constraints: const BoxConstraints(minHeight: 36),
+                padding:
+                    const EdgeInsets.symmetric(horizontal: 12, vertical: 7),
+                decoration: BoxDecoration(
+                  color: theme.pillBackground,
+                  borderRadius: BorderRadius.circular(20),
+                  border: Border.all(
+                    color: theme.borderColor,
+                    width: 1,
                   ),
                 ),
-              ],
+                child: Row(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    Icon(
+                      Icons.short_text_rounded,
+                      size: 15,
+                      color: theme.accentColor,
+                    ),
+                    const SizedBox(width: 5),
+                    Text(
+                      'Simplify',
+                      style: TextStyle(
+                        fontFamily: AppTheme.fontUI,
+                        fontSize: 11.5,
+                        fontWeight: FontWeight.w600,
+                        color: theme.textColor,
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            ),
+            const SizedBox(width: 8),
+          ],
+          InkWell(
+            borderRadius: BorderRadius.circular(20),
+            onTap: () {
+              HapticFeedback.selectionClick();
+              onAsk();
+            },
+            child: Container(
+              constraints: const BoxConstraints(minHeight: 36),
+              padding:
+                  const EdgeInsets.symmetric(horizontal: 12, vertical: 7),
+              decoration: BoxDecoration(
+                color: theme.pillBackground,
+                borderRadius: BorderRadius.circular(20),
+                border: Border.all(
+                  color: theme.borderColor,
+                  width: 1,
+                ),
+              ),
+              child: Row(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  AthenaSymbol(
+                    size: 13,
+                    color: theme.accentColor,
+                  ),
+                  const SizedBox(width: 6),
+                  Text(
+                    'Ask Athena',
+                    style: TextStyle(
+                      fontFamily: AppTheme.fontUI,
+                      fontSize: 11.5,
+                      fontWeight: FontWeight.w600,
+                      color: theme.textColor,
+                    ),
+                  ),
+                ],
+              ),
             ),
           ),
-        ),
+        ],
       ),
     );
 

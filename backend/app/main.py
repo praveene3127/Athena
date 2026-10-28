@@ -6,14 +6,14 @@ import re
 import time
 from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import FileResponse, JSONResponse
+from fastapi.responses import FileResponse, JSONResponse, HTMLResponse
 from fastapi.staticfiles import StaticFiles
 from starlette.exceptions import HTTPException as StarletteHTTPException
 
 from app.config import is_llm_configured
 from app.db import init_db
 from app.errors import AppException, app_exception_handler, generic_exception_handler
-from app.routers import ask, cards, documents, settings
+from app.routers import ask, cards, documents, settings, updates
 from app.services.jobs import cleanup_interrupted_jobs
 from app.services.pipeline import ReadAheadPipeline
 
@@ -94,6 +94,7 @@ app.include_router(documents.router)
 app.include_router(cards.router)
 app.include_router(ask.router)
 app.include_router(settings.router)
+app.include_router(updates.router)
 
 
 
@@ -195,18 +196,231 @@ if not os.path.isfile(_VERSION_FILE):
     _VERSION_FILE = os.path.join(_ROOT_DIR, "version.json")
 
 
+@app.get("/download", response_class=HTMLResponse)
+def get_download_page():
+    """Serves the responsive 1-click mobile installer and package download hub."""
+    html_content = """<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+  <title>Athena &mdash; Mobile App Downloads</title>
+  <style>
+    :root {
+      --bg: #FBF9F5;
+      --card-bg: #FFFFFF;
+      --border: #E5E2DA;
+      --ink: #161615;
+      --muted: #6B6860;
+      --accent: #C84B31;
+      --accent-subtle: #F4EBE8;
+    }
+    @media (prefers-color-scheme: dark) {
+      :root {
+        --bg: #141413;
+        --card-bg: #1C1B19;
+        --border: #2E2D2A;
+        --ink: #F2EFE9;
+        --muted: #9E9B93;
+        --accent: #D95D43;
+        --accent-subtle: #2B1D1A;
+      }
+    }
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body {
+      background: var(--bg);
+      color: var(--ink);
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+      padding: 36px 18px 48px;
+      line-height: 1.5;
+      -webkit-font-smoothing: antialiased;
+    }
+    .container {
+      max-width: 560px;
+      margin: 0 auto;
+    }
+    .header {
+      margin-bottom: 28px;
+    }
+    .kicker {
+      font-family: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, monospace;
+      font-size: 11px;
+      font-weight: 700;
+      letter-spacing: 1.2px;
+      text-transform: uppercase;
+      color: var(--accent);
+      margin-bottom: 8px;
+    }
+    h1 {
+      font-size: 26px;
+      font-weight: 600;
+      letter-spacing: -0.4px;
+      margin-bottom: 6px;
+    }
+    .subtitle {
+      font-size: 14px;
+      color: var(--muted);
+    }
+    .card {
+      background: var(--card-bg);
+      border: 1px solid var(--border);
+      border-radius: 6px;
+      padding: 20px;
+      margin-bottom: 16px;
+      transition: border-color 0.15s ease;
+    }
+    .card.highlight {
+      border-color: var(--accent);
+      box-shadow: 0 0 0 1px var(--accent);
+    }
+    .badge {
+      display: inline-block;
+      font-family: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, monospace;
+      font-size: 10px;
+      font-weight: 700;
+      text-transform: uppercase;
+      letter-spacing: 0.6px;
+      background: var(--accent-subtle);
+      color: var(--accent);
+      padding: 2px 7px;
+      border-radius: 3px;
+      margin-bottom: 10px;
+    }
+    .card-title {
+      font-size: 16px;
+      font-weight: 600;
+      margin-bottom: 4px;
+    }
+    .card-desc {
+      font-size: 13px;
+      color: var(--muted);
+      margin-bottom: 14px;
+    }
+    .btn {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      width: 100%;
+      padding: 12px 18px;
+      font-size: 13.5px;
+      font-weight: 600;
+      text-decoration: none;
+      border-radius: 4px;
+      cursor: pointer;
+      transition: opacity 0.15s ease;
+    }
+    .btn:hover { opacity: 0.92; }
+    .btn-primary {
+      background: var(--ink);
+      color: var(--bg);
+    }
+    .btn-secondary {
+      background: transparent;
+      color: var(--ink);
+      border: 1px solid var(--border);
+    }
+    .instructions {
+      margin-top: 32px;
+      border-top: 1px solid var(--border);
+      padding-top: 24px;
+    }
+    .instructions h2 {
+      font-size: 11px;
+      font-weight: 700;
+      letter-spacing: 1px;
+      text-transform: uppercase;
+      color: var(--muted);
+      margin-bottom: 16px;
+    }
+    .instruction-item {
+      margin-bottom: 16px;
+      font-size: 13px;
+      color: var(--muted);
+    }
+    .instruction-item strong {
+      color: var(--ink);
+      display: block;
+      margin-bottom: 3px;
+    }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <div class="header">
+      <div class="kicker">Athena Mobile Release</div>
+      <h1>Download Athena</h1>
+      <p class="subtitle">Direct, 1-click native packages and local client streaming.</p>
+    </div>
+
+    <div class="card" id="android-card">
+      <div id="android-badge" style="display:none;" class="badge">Current Device</div>
+      <div class="card-title">Athena for Android</div>
+      <p class="card-desc">Compiled standalone APK with local network discovery and in-app updates.</p>
+      <a class="btn btn-primary" href="/api/download/android">Download Athena-Android.apk</a>
+    </div>
+
+    <div class="card" id="ios-card">
+      <div id="ios-badge" style="display:none;" class="badge">Current Device</div>
+      <div class="card-title">Athena for iOS (iPhone &amp; iPad)</div>
+      <p class="card-desc">Universal iOS package for Sideloadly, AltStore, or SideStore installation.</p>
+      <a class="btn btn-primary" href="/api/download/ios">Download Athena-iOS.ipa</a>
+    </div>
+
+    <div class="card">
+      <div class="card-title">Athena Web Reader</div>
+      <p class="card-desc">Read directly in any modern browser without installing native binaries.</p>
+      <a class="btn btn-secondary" href="/">Open Web Reader</a>
+    </div>
+
+    <div class="instructions">
+      <h2>Installation Reference</h2>
+      <div class="instruction-item">
+        <strong>Android</strong>
+        Download Athena-Android.apk and tap to install. Supports automatic tracking and updates via Obtainium.
+      </div>
+      <div class="instruction-item">
+        <strong>iOS Native Sideloading (No Mac or Xcode Required)</strong>
+        Download Athena-iOS.ipa to your PC and install using free Sideloadly or AltStore via USB with a standard Apple ID.
+      </div>
+      <div class="instruction-item">
+        <strong>iOS Instant Home Screen App</strong>
+        Open this server address in mobile Safari, tap Share, and select &ldquo;Add to Home Screen&rdquo; for a persistent, standalone fullscreen reading mode.
+      </div>
+    </div>
+  </div>
+
+  <script>
+    (function() {
+      var ua = navigator.userAgent || navigator.vendor || window.opera;
+      if (/android/i.test(ua)) {
+        var c = document.getElementById('android-card');
+        var b = document.getElementById('android-badge');
+        if (c) c.classList.add('highlight');
+        if (b) b.style.display = 'inline-block';
+      } else if (/iPad|iPhone|iPod/.test(ua) && !window.MSStream) {
+        var c = document.getElementById('ios-card');
+        var b = document.getElementById('ios-badge');
+        if (c) c.classList.add('highlight');
+        if (b) b.style.display = 'inline-block';
+      }
+    })();
+  </script>
+</body>
+</html>"""
+    return HTMLResponse(content=html_content, status_code=200)
+
+
 @app.get("/api/version")
-@app.get("/api/app-update")
-def get_app_update():
-    """Returns the current deployed version, update release notes, and download links."""
+def get_app_version():
+    """Returns the current deployed version and release metadata."""
     data = {
         "version": "0.1.1",
         "build_number": 2,
         "title": "Athena v0.1.1 Update",
         "release_notes": "Zero-keyword structural document bouncer, BYOK awakening screen, and one-click Android APK & iOS IPA downloads.",
         "published_at": "2026-10-24T17:50:00Z",
-        "download_url_apk": "/releases/athena-release.apk",
-        "download_url_ipa": "/releases/athena-ios-release.ipa",
+        "download_url_apk": "/api/download/android",
+        "download_url_ipa": "/api/download/ios",
         "download_url_web": "/",
     }
     if os.path.isfile(_VERSION_FILE):
@@ -217,21 +431,6 @@ def get_app_update():
                     data.update(loaded)
         except Exception:
             pass
-
-    # Check APK file status
-    apk_path = os.path.join(_RELEASES_DIR, "athena-release.apk")
-    if os.path.isfile(apk_path):
-        data["has_apk"] = True
-        data["apk_size_bytes"] = os.path.getsize(apk_path)
-        data["apk_size_mb"] = round(os.path.getsize(apk_path) / (1024 * 1024), 1)
-
-    # Check IPA file status
-    ipa_path = os.path.join(_RELEASES_DIR, "athena-ios-release.ipa")
-    if os.path.isfile(ipa_path):
-        data["has_ipa"] = True
-        data["ipa_size_bytes"] = os.path.getsize(ipa_path)
-        data["ipa_size_mb"] = round(os.path.getsize(ipa_path) / (1024 * 1024), 1)
-
     return data
 
 

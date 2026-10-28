@@ -152,11 +152,14 @@ class _ContextCardWidgetState extends State<ContextCardWidget> {
 
     showModalBottomSheet(
       context: context,
+      isScrollControlled: true,
       backgroundColor: Colors.white,
       shape: const RoundedRectangleBorder(
         borderRadius: BorderRadius.vertical(top: Radius.circular(28)),
       ),
-      builder: (ctx) => SafeArea(
+      builder: (ctx) => Padding(
+        padding: EdgeInsets.only(bottom: MediaQuery.viewInsetsOf(ctx).bottom),
+        child: SafeArea(
         child: Padding(
           padding: const EdgeInsets.fromLTRB(24, 16, 24, 28),
           child: Column(
@@ -280,7 +283,8 @@ class _ContextCardWidgetState extends State<ContextCardWidget> {
           ),
         ),
       ),
-    );
+    ),
+  );
   }
 
   Widget _buildBodyContent(BuildContext context, String body) {

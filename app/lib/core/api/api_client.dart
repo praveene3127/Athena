@@ -66,10 +66,19 @@ class ApiClient {
     }
   }
 
-  Future<Map<String, dynamic>?> checkAppUpdate() async {
+  Future<Map<String, dynamic>?> checkAppUpdate({
+    String? currentVersion,
+    String? platform,
+  }) async {
     if (AppConfig.apiBaseUrl.isEmpty) return null;
     try {
-      final response = await dio.get('/api/app-update');
+      final response = await dio.get(
+        '/api/app-update',
+        queryParameters: {
+          if (currentVersion != null) 'current_version': currentVersion,
+          if (platform != null) 'platform': platform,
+        },
+      );
       return response.data as Map<String, dynamic>;
     } catch (_) {
       return null;

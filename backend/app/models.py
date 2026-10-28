@@ -1,6 +1,6 @@
 from datetime import datetime, timezone
-from typing import Optional
-from sqlmodel import Field, SQLModel
+from typing import Optional, List
+from sqlmodel import Field, SQLModel, Relationship
 import uuid
 
 
@@ -32,6 +32,12 @@ class Document(SQLModel, table=True):
 
     created_at: datetime = Field(default_factory=utc_now)
     updated_at: datetime = Field(default_factory=utc_now)
+
+    # Relationships for cascade and dependency ordering with SQLite foreign keys
+    chunks: List["ReadingChunk"] = Relationship(sa_relationship_kwargs={"cascade": "all, delete-orphan"})
+    concepts: List["Concept"] = Relationship(sa_relationship_kwargs={"cascade": "all, delete-orphan"})
+    cards: List["ContextCard"] = Relationship(sa_relationship_kwargs={"cascade": "all, delete-orphan"})
+    chapters: List["DocumentChapter"] = Relationship(sa_relationship_kwargs={"cascade": "all, delete-orphan"})
 
 
 class ReadingChunk(SQLModel, table=True):

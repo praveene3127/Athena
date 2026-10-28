@@ -215,5 +215,11 @@ def package_ipa():
     size_mb = os.path.getsize(OUTPUT_IPA) / (1024 * 1024)
     print(f"[SUCCESS] Packaged iOS release IPA: {OUTPUT_IPA} ({size_mb:.2f} MB)")
 
+    backend_ipa = os.path.join(ROOT_DIR, "backend", "data", "releases", "Athena-iOS.ipa")
+    os.makedirs(os.path.dirname(backend_ipa), exist_ok=True)
+    import shutil
+    shutil.copyfile(OUTPUT_IPA, backend_ipa)
+    print(f"[SYNCED] Backend release package: {backend_ipa}")
+
 if __name__ == "__main__":
     package_ipa()

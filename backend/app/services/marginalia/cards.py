@@ -409,7 +409,12 @@ def generate_context_cards(
             if body:
                 gen_mode = "llm"
 
-        if not body or len(card_citations) < 2:
+        if not body and extract:
+            body = extract_verbatim_body(extract)
+            gen_mode = "extractive"
+
+        min_cites = 2 if use_gemini_search else 1
+        if not body or len(card_citations) < min_cites:
             concept.status = "insufficient_verified_citations"
             continue
 
@@ -428,14 +433,24 @@ def generate_context_cards(
             concept.status = "skipped_duplicate_title"
             continue
 
-        # Archetype formatting: rotation is a preference, never fabricate studies
+        # Clean generic opening phrases that dilute novelty
+        body = re.sub(
+            r"^(?:In this passage[,\s]+|This passage discusses[,\s]+|This excerpt explains[,\s]+|According to this passage[,\s]+)",
+            "",
+            body,
+            flags=re.I,
+        ).strip()
+        if body and body[0].islower():
+            body = body[0].upper() + body[1:]
+
+        # Archetype formatting: format into required active archetype
         if active_slot == 0 and "||REVEAL||" not in body:
             sentences = re.split(r"(?<=[.!?])\s+", body)
-            if len(sentences) > 1 and any(w in body.lower() for w in ("study", "experiment", "research", "evidence", "found", "tested")):
+            if len(sentences) > 1:
                 body = f"{sentences[0]}\n||REVEAL||\n{' '.join(sentences[1:])}"
         elif active_slot == 1:
             has_debate = "counterpoint:" in body.lower() and "evidence:" in body.lower()
-            if not has_debate and any(w in body.lower() for w in ("debate", "dispute", "argue", "contend", "critic", "counter")):
+            if not has_debate:
                 sentences = re.split(r"(?<=[.!?])\s+", body)
                 if len(sentences) >= 2:
                     body = f"Counterpoint: {sentences[0]}\nEvidence: {' '.join(sentences[1:])}"
@@ -450,13 +465,39 @@ def generate_context_cards(
         # Stage C: Local ONNX "Information Gain & Specificity Gate" (edge_ai.py)
         novelty = evaluate_card_novelty(chunk.raw_text, card_title, body)
         if not novelty["passed"]:
-            logger.info(
-                "Card for concept '%s' refused by Anti-Echo / Novelty Gate: %s",
-                concept.name,
-                novelty["reason"],
-            )
-            concept.status = "refused_generic_echo"
-            continue
+            fallback_used = False
+            if extract and gen_mode != "extractive":
+                fallback_body = extract_verbatim_body(extract)
+                if fallback_body:
+                    fallback_body = re.sub(
+                        r"^(?:In this passage[,\s]+|This passage discusses[,\s]+|This excerpt explains[,\s]+)",
+                        "",
+                        fallback_body,
+                        flags=re.I,
+                    ).strip()
+                    if active_slot == 0 and "||REVEAL||" not in fallback_body:
+                        fb_sents = re.split(r"(?<=[.!?])\s+", fallback_body)
+                        if len(fb_sents) > 1:
+                            fallback_body = f"{fb_sents[0]}\n||REVEAL||\n{' '.join(fb_sents[1:])}"
+                    elif active_slot == 1:
+                        fb_sents = re.split(r"(?<=[.!?])\s+", fallback_body)
+                        if len(fb_sents) >= 2:
+                            fallback_body = f"Counterpoint: {fb_sents[0]}\nEvidence: {' '.join(fb_sents[1:])}"
+
+                    fb_novelty = evaluate_card_novelty(chunk.raw_text, card_title, fallback_body)
+                    if fb_novelty["passed"]:
+                        body = fallback_body
+                        gen_mode = "extractive_fallback"
+                        fallback_used = True
+
+            if not fallback_used:
+                logger.info(
+                    "Card for concept '%s' refused by Anti-Echo / Novelty Gate: %s",
+                    concept.name,
+                    novelty["reason"],
+                )
+                concept.status = "refused_generic_echo"
+                continue
 
         why_here = f'The concept "{concept.name}" is introduced in the passage above.'
 

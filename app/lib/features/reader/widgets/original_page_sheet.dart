@@ -29,11 +29,14 @@ class OriginalPageSheet extends StatelessWidget {
       context: context,
       isScrollControlled: true,
       backgroundColor: Colors.transparent,
-      builder: (context) => OriginalPageSheet(
+      builder: (context) => Padding(
+        padding: EdgeInsets.only(bottom: MediaQuery.viewInsetsOf(context).bottom),
+        child: OriginalPageSheet(
         documentId: documentId,
         pageNumber: pageNumber,
         pageReference: pageReference,
         apiClient: apiClient,
+        ),
       ),
     );
   }

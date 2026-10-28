@@ -3,6 +3,7 @@ import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:flutter/material.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:athena/core/config/config.dart';
+import 'package:athena/core/config/update_service.dart';
 import 'package:athena/core/theme/theme.dart';
 import 'package:athena/models/ai_provider.dart';
 import 'package:athena/core/api/api_client.dart';
@@ -83,6 +84,63 @@ class _BYOKSettingsSheetState extends State<BYOKSettingsSheet>
   bool _testingServer = false;
   String? _serverTestMessage;
   bool? _serverTestOk;
+
+  // App Updates State
+  bool _checkingUpdates = false;
+  UpdateInfo? _settingsUpdateInfo;
+  String? _updateStatusMessage;
+
+  UpdateInfo get _fallbackSettingsUpdateInfo => UpdateInfo(
+        updateAvailable: true,
+        currentVersion: kAthenaAppVersion,
+        latestVersion: '1.1.0',
+        releaseNotes: 'Mobile touches and platform OTA packages.',
+        publishedAt: '2026-10-28',
+        android: const UpdatePlatformArtifact(
+          filename: 'Athena-Android.apk',
+          downloadUrl: '/api/download/android',
+          githubReleaseUrl:
+              'https://github.com/athena-reader/athena/releases/latest/download/Athena-Android.apk',
+        ),
+        ios: const UpdatePlatformArtifact(
+          filename: 'Athena-iOS.ipa',
+          downloadUrl: '/api/download/ios',
+          githubReleaseUrl:
+              'https://github.com/athena-reader/athena/releases/latest/download/Athena-iOS.ipa',
+          altstoreUrl:
+              'altstore://install?url=https://github.com/athena-reader/athena/releases/latest/download/Athena-iOS.ipa',
+        ),
+      );
+
+  Future<void> _checkSettingsUpdates() async {
+    setState(() {
+      _checkingUpdates = true;
+      _updateStatusMessage = null;
+    });
+    try {
+      final info = await UpdateService.checkForUpdates();
+      if (!mounted) return;
+      setState(() {
+        _checkingUpdates = false;
+        _settingsUpdateInfo = info;
+        if (info == null) {
+          _updateStatusMessage =
+              'Could not reach update server. Check your connection.';
+        } else if (info.updateAvailable) {
+          _updateStatusMessage =
+              'Update v${info.latestVersion} available! You are on v$kAthenaAppVersion.';
+        } else {
+          _updateStatusMessage = 'Athena is up to date (v$kAthenaAppVersion).';
+        }
+      });
+    } catch (_) {
+      if (!mounted) return;
+      setState(() {
+        _checkingUpdates = false;
+        _updateStatusMessage = 'Unable to check for updates right now.';
+      });
+    }
+  }
 
   @override
   void initState() {
@@ -1113,6 +1171,8 @@ class _BYOKSettingsSheetState extends State<BYOKSettingsSheet>
             ),
           ],
           const SizedBox(height: 24),
+          _buildAppVersionAndDownloadsCard(isDark),
+          const SizedBox(height: 16),
           _buildMobileGuideCard(isDark),
         ],
       ),
@@ -1144,6 +1204,269 @@ class _BYOKSettingsSheetState extends State<BYOKSettingsSheet>
           _serverTestOk = null;
         });
       },
+    );
+  }
+
+  Widget _buildAppVersionAndDownloadsCard(bool isDark) {
+    final currentPlatform = detectDevicePlatform();
+    final effectiveInfo = _settingsUpdateInfo ?? _fallbackSettingsUpdateInfo;
+
+    return Container(
+      padding: const EdgeInsets.all(16),
+      decoration: BoxDecoration(
+        color: isDark ? const Color(0xFF1F1F1F) : const Color(0xFFF2EFE9),
+        borderRadius: BorderRadius.circular(12),
+        border: Border.all(
+          color: isDark ? const Color(0xFF2E2E2E) : const Color(0xFFE2DDD5),
+        ),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            children: [
+              const Icon(
+                Icons.system_update_rounded,
+                size: 16,
+                color: Color(0xFFC84B31),
+              ),
+              const SizedBox(width: 8),
+              Expanded(
+                child: Text(
+                  'APP VERSION & MOBILE DOWNLOADS',
+                  style: TextStyle(
+                    fontFamily: AppTheme.fontUI,
+                    fontSize: 11,
+                    fontWeight: FontWeight.w700,
+                    letterSpacing: 0.8,
+                    color: isDark ? Colors.white : AppTheme.ink,
+                  ),
+                ),
+              ),
+              Container(
+                padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+                decoration: BoxDecoration(
+                  color: isDark ? const Color(0xFF2C2B29) : const Color(0xFFE5DDD0),
+                  borderRadius: BorderRadius.circular(4),
+                ),
+                child: const Text(
+                  'v$kAthenaAppVersion',
+                  style: TextStyle(
+                    fontFamily: 'monospace',
+                    fontSize: 10,
+                    fontWeight: FontWeight.w700,
+                    color: Color(0xFFC84B31),
+                  ),
+                ),
+              ),
+            ],
+          ),
+          const SizedBox(height: 12),
+          Text(
+            'Keep your native mobile builds synced with your local library. Click below to download the platform package directly.',
+            style: TextStyle(
+              fontFamily: AppTheme.fontUI,
+              fontSize: 11.5,
+              height: 1.45,
+              color: isDark ? AppTheme.darkTextMuted : AppTheme.textMuted,
+            ),
+          ),
+          const SizedBox(height: 12),
+          SizedBox(
+            width: double.infinity,
+            child: OutlinedButton.icon(
+              onPressed: _checkingUpdates ? null : _checkSettingsUpdates,
+              icon: _checkingUpdates
+                  ? SizedBox(
+                      width: 14,
+                      height: 14,
+                      child: CircularProgressIndicator(
+                        strokeWidth: 2,
+                        color: isDark ? Colors.white : AppTheme.ink,
+                      ),
+                    )
+                  : const Icon(Icons.sync_rounded, size: 15),
+              label: Text(_checkingUpdates ? 'Checking Server...' : 'Check for Updates'),
+              style: OutlinedButton.styleFrom(
+                foregroundColor: isDark ? Colors.white : AppTheme.ink,
+                side: BorderSide(
+                  color: isDark ? const Color(0xFF444444) : const Color(0xFFCCCCCC),
+                ),
+                shape: RoundedRectangleBorder(
+                  borderRadius: BorderRadius.circular(8),
+                ),
+                padding: const EdgeInsets.symmetric(vertical: 10),
+              ),
+            ),
+          ),
+          if (_updateStatusMessage != null) ...[
+            const SizedBox(height: 10),
+            Container(
+              width: double.infinity,
+              padding: const EdgeInsets.all(10),
+              decoration: BoxDecoration(
+                color: _settingsUpdateInfo?.updateAvailable == true
+                    ? const Color(0x15C84B31)
+                    : (isDark ? const Color(0xFF282828) : const Color(0xFFEAE7E0)),
+                borderRadius: BorderRadius.circular(8),
+                border: Border.all(
+                  color: _settingsUpdateInfo?.updateAvailable == true
+                      ? const Color(0xFFC84B31)
+                      : (isDark ? const Color(0xFF383838) : const Color(0xFFDDD8CE)),
+                ),
+              ),
+              child: Text(
+                _updateStatusMessage!,
+                style: TextStyle(
+                  fontFamily: AppTheme.fontUI,
+                  fontSize: 11.5,
+                  fontWeight: FontWeight.w600,
+                  color: _settingsUpdateInfo?.updateAvailable == true
+                      ? const Color(0xFFC84B31)
+                      : (isDark ? Colors.white70 : AppTheme.ink),
+                ),
+              ),
+            ),
+          ],
+          const SizedBox(height: 14),
+          // 1-Click Platform Binary Buttons
+          Row(
+            children: [
+              Expanded(
+                child: currentPlatform == 'android'
+                    ? ElevatedButton.icon(
+                        onPressed: () {
+                          UpdateService.downloadPlatformUpdate(
+                            updateInfo: effectiveInfo,
+                            platform: 'android',
+                          );
+                        },
+                        icon: const Icon(Icons.android_rounded, size: 15),
+                        label: const Text(
+                          'Android (.APK) ★',
+                          style: TextStyle(
+                            fontSize: 11.5,
+                            fontWeight: FontWeight.w700,
+                          ),
+                        ),
+                        style: ElevatedButton.styleFrom(
+                          backgroundColor: const Color(0xFF161615),
+                          foregroundColor: Colors.white,
+                          elevation: 0,
+                          shape: RoundedRectangleBorder(
+                            borderRadius: BorderRadius.circular(8),
+                          ),
+                          padding: const EdgeInsets.symmetric(vertical: 12),
+                        ),
+                      )
+                    : OutlinedButton.icon(
+                        onPressed: () {
+                          UpdateService.downloadPlatformUpdate(
+                            updateInfo: effectiveInfo,
+                            platform: 'android',
+                          );
+                        },
+                        icon: const Icon(Icons.android_rounded, size: 15),
+                        label: const Text(
+                          'Android (.APK)',
+                          style: TextStyle(fontSize: 11.5),
+                        ),
+                        style: OutlinedButton.styleFrom(
+                          foregroundColor: isDark ? Colors.white : AppTheme.ink,
+                          side: BorderSide(
+                            color: isDark ? const Color(0xFF444444) : const Color(0xFFCCCCCC),
+                          ),
+                          shape: RoundedRectangleBorder(
+                            borderRadius: BorderRadius.circular(8),
+                          ),
+                          padding: const EdgeInsets.symmetric(vertical: 12),
+                        ),
+                      ),
+              ),
+              const SizedBox(width: 8),
+              Expanded(
+                child: currentPlatform == 'ios'
+                    ? ElevatedButton.icon(
+                        onPressed: () {
+                          UpdateService.downloadPlatformUpdate(
+                            updateInfo: effectiveInfo,
+                            platform: 'ios',
+                          );
+                        },
+                        icon: const Icon(Icons.apple_rounded, size: 15),
+                        label: const Text(
+                          'iOS (.IPA) ★',
+                          style: TextStyle(
+                            fontSize: 11.5,
+                            fontWeight: FontWeight.w700,
+                          ),
+                        ),
+                        style: ElevatedButton.styleFrom(
+                          backgroundColor: const Color(0xFF161615),
+                          foregroundColor: Colors.white,
+                          elevation: 0,
+                          shape: RoundedRectangleBorder(
+                            borderRadius: BorderRadius.circular(8),
+                          ),
+                          padding: const EdgeInsets.symmetric(vertical: 12),
+                        ),
+                      )
+                    : OutlinedButton.icon(
+                        onPressed: () {
+                          UpdateService.downloadPlatformUpdate(
+                            updateInfo: effectiveInfo,
+                            platform: 'ios',
+                          );
+                        },
+                        icon: const Icon(Icons.apple_rounded, size: 15),
+                        label: const Text(
+                          'iOS (.IPA)',
+                          style: TextStyle(fontSize: 11.5),
+                        ),
+                        style: OutlinedButton.styleFrom(
+                          foregroundColor: isDark ? Colors.white : AppTheme.ink,
+                          side: BorderSide(
+                            color: isDark ? const Color(0xFF444444) : const Color(0xFFCCCCCC),
+                          ),
+                          shape: RoundedRectangleBorder(
+                            borderRadius: BorderRadius.circular(8),
+                          ),
+                          padding: const EdgeInsets.symmetric(vertical: 12),
+                        ),
+                      ),
+              ),
+            ],
+          ),
+          if (currentPlatform == 'ios') ...[
+            const SizedBox(height: 8),
+            SizedBox(
+              width: double.infinity,
+              child: OutlinedButton.icon(
+                onPressed: () {
+                  UpdateService.downloadPlatformUpdate(
+                    updateInfo: effectiveInfo,
+                    platform: 'ios',
+                    useAltStore: true,
+                  );
+                },
+                icon: const Icon(Icons.install_mobile_rounded, size: 15),
+                label: const Text(
+                  'Open in AltStore / SideStore (1-Tap Install)',
+                  style: TextStyle(fontSize: 11, fontWeight: FontWeight.w600),
+                ),
+                style: OutlinedButton.styleFrom(
+                  foregroundColor: const Color(0xFFC84B31),
+                  side: const BorderSide(color: Color(0xFFC84B31)),
+                  shape: RoundedRectangleBorder(
+                    borderRadius: BorderRadius.circular(8),
+                  ),
+                  padding: const EdgeInsets.symmetric(vertical: 10),
+                ),
+              ),
+            ),
+          ],
+        ],
+      ),
     );
   }
 
