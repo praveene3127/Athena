@@ -1,10 +1,10 @@
 {
-  "version": "0.1.2",
-  "build_number": 3,
-  "title": "Athena v0.1.2 Release",
-  "release_notes": "Official Athena brand logo & adaptive launcher icons, signature double-bezel offline network screen, dynamic backend tunnel discovery, and refined update banners.",
-  "published_at": "2026-10-24T20:45:00Z",
-  "download_url_apk": "/releases/athena-release.apk",
-  "download_url_ipa": "/releases/athena-ios-release.ipa",
+  "version": "1.1.0",
+  "build_number": 2,
+  "title": "Athena v1.1.0 Release",
+  "release_notes": "Improved Per-Page Document Bouncer, 4-Archetype Marginalia Cards, and Mobile Touch Ergonomics.",
+  "published_at": "2026-10-28T00:00:00Z",
+  "download_url_apk": "/api/download/android",
+  "download_url_ipa": "/api/download/ios",
   "download_url_web": "/"
 }

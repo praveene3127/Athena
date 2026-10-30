@@ -32,15 +32,15 @@ void main() {
         'filename': 'Athena-Android.apk',
         'download_url': '/api/download/android',
         'github_release_url':
-            'https://github.com/athena-reader/athena/releases/latest/download/Athena-Android.apk',
+            'https://github.com/praveene3127/Athena/releases/latest/download/Athena-Android.apk',
       },
       'ios': {
         'filename': 'Athena-iOS.ipa',
         'download_url': '/api/download/ios',
         'github_release_url':
-            'https://github.com/athena-reader/athena/releases/latest/download/Athena-iOS.ipa',
+            'https://github.com/praveene3127/Athena/releases/latest/download/Athena-iOS.ipa',
         'altstore_url':
-            'altstore://install?url=https://github.com/athena-reader/athena/releases/latest/download/Athena-iOS.ipa',
+            'altstore://install?url=https://github.com/praveene3127/Athena/releases/latest/download/Athena-iOS.ipa',
       },
     };
 

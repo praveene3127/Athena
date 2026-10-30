@@ -3,7 +3,7 @@ import 'package:flutter/foundation.dart';
 import 'package:url_launcher/url_launcher.dart';
 import 'config.dart';
 
-const String kAthenaAppVersion = String.fromEnvironment('ATHENA_VERSION', defaultValue: '1.0.0');
+const String kAthenaAppVersion = String.fromEnvironment('ATHENA_VERSION', defaultValue: '1.1.0');
 
 String detectDevicePlatform([TargetPlatform? overridePlatform]) {
   final platform = overridePlatform ?? defaultTargetPlatform;
@@ -60,7 +60,7 @@ class UpdateInfo {
   factory UpdateInfo.fromJson(Map<String, dynamic> json) {
     return UpdateInfo(
       updateAvailable: json['update_available'] == true,
-      currentVersion: json['current_version']?.toString() ?? '1.0.0',
+      currentVersion: json['current_version']?.toString() ?? '1.1.0',
       latestVersion: json['latest_version']?.toString() ?? '1.1.0',
       releaseNotes: json['release_notes']?.toString() ?? '',
       publishedAt: json['published_at']?.toString() ?? '',

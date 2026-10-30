@@ -89,6 +89,6 @@ class AppConfig {
   static const int statusPollMs = 1500;
   static const int cardMaxWords = 80;
   static const int askMaxQuestionChars = 2000;
-  static const String appVersion = '0.1.1';
+  static const String appVersion = '1.1.0';
   static const int appBuildNumber = 2;
 }

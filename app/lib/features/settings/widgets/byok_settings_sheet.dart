@@ -100,15 +100,15 @@ class _BYOKSettingsSheetState extends State<BYOKSettingsSheet>
           filename: 'Athena-Android.apk',
           downloadUrl: '/api/download/android',
           githubReleaseUrl:
-              'https://github.com/athena-reader/athena/releases/latest/download/Athena-Android.apk',
+              'https://github.com/praveene3127/Athena/releases/latest/download/Athena-Android.apk',
         ),
         ios: const UpdatePlatformArtifact(
           filename: 'Athena-iOS.ipa',
           downloadUrl: '/api/download/ios',
           githubReleaseUrl:
-              'https://github.com/athena-reader/athena/releases/latest/download/Athena-iOS.ipa',
+              'https://github.com/praveene3127/Athena/releases/latest/download/Athena-iOS.ipa',
           altstoreUrl:
-              'altstore://install?url=https://github.com/athena-reader/athena/releases/latest/download/Athena-iOS.ipa',
+              'altstore://install?url=https://github.com/praveene3127/Athena/releases/latest/download/Athena-iOS.ipa',
         ),
       );
 

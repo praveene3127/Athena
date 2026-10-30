@@ -18,8 +18,8 @@ import 'package:athena/features/reader/widgets/context_card_widget.dart';
 import 'package:athena/features/reader/widgets/original_page_sheet.dart';
 import 'package:athena/features/saved/screens/saved_screen.dart';
 import 'package:athena/features/ask/widgets/ask_sheet.dart';
-import 'package:athena/features/settings/widgets/byok_settings_sheet.dart';
-import 'package:athena/core/widgets/athena_avatar.dart';
+
+
 import 'package:athena/core/widgets/athena_logo.dart';
 
 /// Provider for loading ReaderData for a given documentId.
@@ -49,7 +49,7 @@ class _ReaderScreenState extends ConsumerState<ReaderScreen> {
   PageController? _pageController;
 
   double _fontSize = 19.5;
-  String _fontFamily = 'Georgia';
+  String _fontFamily = 'Newsreader';
   double _lineHeight = 1.72;
   String _themeId = 'paper';
   bool _showContextCards = true;
@@ -110,146 +110,7 @@ class _ReaderScreenState extends ConsumerState<ReaderScreen> {
       final localKey = prefs.getString('athena_ai_primary_api_key');
 
       final config = await client.getAIConfig();
-      final bool isConfigured = config.isConfigured ||
-          (config.primaryApiKeyMasked != null &&
-              config.primaryApiKeyMasked!.isNotEmpty) ||
-          (localKey != null && localKey.isNotEmpty);
-
-      if (!isConfigured && mounted) {
-        final isDark = Theme.of(context).brightness == Brightness.dark;
-        showDialog(
-          context: context,
-          barrierDismissible: true,
-          builder: (ctx) => Dialog(
-            backgroundColor: Colors.transparent,
-            insetPadding: const EdgeInsets.symmetric(horizontal: 20, vertical: 24),
-            child: Container(
-              padding: const EdgeInsets.all(4),
-              decoration: BoxDecoration(
-                color: isDark ? const Color(0xFF181818) : const Color(0xFFF7F6F2),
-                borderRadius: BorderRadius.circular(28),
-                border: Border.all(
-                  color: isDark ? const Color(0xFF282828) : const Color(0xFFE5E7DC),
-                  width: 1.0,
-                ),
-                boxShadow: [
-                  BoxShadow(
-                    color: isDark ? Colors.black54 : const Color(0x18141714),
-                    blurRadius: 28,
-                    offset: const Offset(0, 8),
-                  ),
-                ],
-              ),
-              child: Container(
-                padding: const EdgeInsets.all(22),
-                decoration: BoxDecoration(
-                  color: isDark ? const Color(0xFF202020) : Colors.white,
-                  borderRadius: BorderRadius.circular(24),
-                  border: Border.all(
-                    color: isDark ? const Color(0xFF2E2E2E) : const Color(0xFFECEEE4),
-                    width: 1.0,
-                  ),
-                ),
-                child: Column(
-                  mainAxisSize: MainAxisSize.min,
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Row(
-                      children: [
-                        const AthenaAvatar(
-                          expression: AthenaExpression.sleepy,
-                          size: 38,
-                          showBezel: true,
-                        ),
-                        const SizedBox(width: 12),
-                        Expanded(
-                          child: Text(
-                            'API Key Required',
-                            style: TextStyle(
-                              fontFamily: AppTheme.fontDisplay,
-                              color: isDark ? Colors.white : AppTheme.ink,
-                              fontSize: 20,
-                              fontWeight: FontWeight.w400,
-                            ),
-                          ),
-                        ),
-                      ],
-                    ),
-                    const SizedBox(height: 14),
-                    Text(
-                      'Athena requires an AI API key (Gemini, OpenRouter, Groq, Anthropic, or local Ollama) to synthesize grounded context, explain concepts, and answer passage questions.',
-                      style: TextStyle(
-                        fontFamily: AppTheme.fontUI,
-                        color: isDark ? AppTheme.darkTextMuted : AppTheme.textMuted,
-                        fontSize: 13.5,
-                        height: 1.5,
-                      ),
-                    ),
-                    const SizedBox(height: 22),
-                    Row(
-                      children: [
-                        Expanded(
-                          child: OutlinedButton(
-                            onPressed: () => Navigator.of(ctx).pop(),
-                            style: OutlinedButton.styleFrom(
-                              foregroundColor: isDark ? Colors.white : AppTheme.ink,
-                              side: BorderSide(
-                                color: isDark ? const Color(0xFF333333) : const Color(0xFFE0E0E0),
-                              ),
-                              shape: RoundedRectangleBorder(
-                                borderRadius: BorderRadius.circular(14),
-                              ),
-                              padding: const EdgeInsets.symmetric(vertical: 13),
-                            ),
-                            child: const Text(
-                              'Continue Offline',
-                              style: TextStyle(
-                                fontFamily: AppTheme.fontUI,
-                                fontWeight: FontWeight.w600,
-                              ),
-                            ),
-                          ),
-                        ),
-                        const SizedBox(width: 12),
-                        Expanded(
-                          child: ElevatedButton(
-                            onPressed: () {
-                              Navigator.of(ctx).pop();
-                              BYOKSettingsSheet.show(
-                                context,
-                                apiClient: client,
-                                onConfigSaved: () {
-                                  _checkAIKeyConfigured();
-                                },
-                              );
-                            },
-                            style: ElevatedButton.styleFrom(
-                              backgroundColor: isDark ? Colors.white : AppTheme.ink,
-                              foregroundColor: isDark ? AppTheme.ink : Colors.white,
-                              elevation: 0,
-                              shape: RoundedRectangleBorder(
-                                borderRadius: BorderRadius.circular(14),
-                              ),
-                              padding: const EdgeInsets.symmetric(vertical: 13),
-                            ),
-                            child: const Text(
-                              'Configure API Key',
-                              style: TextStyle(
-                                fontFamily: AppTheme.fontUI,
-                                fontWeight: FontWeight.w700,
-                              ),
-                            ),
-                          ),
-                        ),
-                      ],
-                    ),
-                  ],
-                ),
-              ),
-            ),
-          ),
-        );
-      } else if (!config.isConfigured && localKey != null && localKey.isNotEmpty) {
+      if (!config.isConfigured && localKey != null && localKey.isNotEmpty) {
         final localProvider = prefs.getString('athena_ai_primary_provider') ?? 'gemini';
         client.saveAIConfig(
           primaryProvider: localProvider,

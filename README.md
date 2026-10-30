@@ -260,7 +260,9 @@ Athena/
 │   │   ├── features/                    # Feature-driven module architecture
 │   │   │   ├── ask/                     # Ask Athena contextual bottom sheet
 │   │   │   ├── library/                 # Bookshelf, upload progress, and document list
+│   │   │   ├── processing/              # Multi-stage extraction & ingestion pipeline viewer
 │   │   │   ├── reader/                  # Feed/Flow reader, ChunkWidget & ContextCardWidget
+│   │   │   ├── saved/                   # Saved marginalia, insights, and starred quotes
 │   │   │   └── settings/                # BYOKSettingsSheet (Primary, Failover, Server Host)
 │   │   └── main.dart                    # Client entrypoint & routing
 │   ├── web/index.html                   # Fullscreen iOS PWA meta tags & splash styling
@@ -268,7 +270,7 @@ Athena/
 │
 ├── backend/                             # Python 3.12+ FastAPI & ONNX Engine
 │   ├── app/
-│   │   ├── api/routes/                  # REST endpoints (documents, cards, ask, settings)
+│   │   ├── routers/                     # REST endpoints (documents, cards, ask, settings, updates)
 │   │   ├── services/
 │   │   │   ├── edge/                    # Document Bouncer, Shannon Hygiene & Novelty Gate
 │   │   │   ├── ingestion/               # Lossless chunker & PDF block parsing
@@ -301,14 +303,18 @@ Athena/
 | `/api/health` | `GET` | None | `{"status": "ok", "database": "reachable", ...}` | Health check verifying SQLite, ONNX embedder, and AI keys |
 | `/api/pair-info` | `GET` | None | `{"lan_ip": "192.168.1.15", "api_port": 8000, ...}` | Pairing metadata and local Wi-Fi / Tunnel URLs |
 | `/api/documents` | `GET` | None | `[{"id": "doc_...", "title": "...", "chunks": 120}]` | List all processed books with read progress and metadata |
-| `/api/documents` | `POST` | Multipart PDF/EPUB | `{"id": "doc_...", "status": "processing"}` | Upload book for structural triage and ingestion |
+| `/api/documents/upload` | `POST` | Multipart PDF/EPUB | `{"id": "doc_...", "status": "processing"}` | Upload book for structural triage and ingestion |
 | `/api/documents/{id}/reader` | `GET` | None | `{"document": {...}, "chunks": [...], "cards": [...]}` | Fetch lossless chunks and grounded marginalia cards |
 | `/api/documents/{id}/progress` | `POST` | `{"chunk_index": 42}` | `{"status": "ok"}` | Sync active reading position and bookmark across devices |
 | `/api/documents/{id}/force-ingest` | `POST` | None | `{"status": "queued"}` | Ingestion override bypassing document bouncer triage |
 | `/api/documents/{id}/vibe-check` | `POST` | `{"chunk_index": 5}` | `{"simplified": "..."}` | Real-time passage simplification breakdown |
+| `/api/ask` | `POST` | `{"document_id": "...", "chunk_id": "...", "question": "..."}` | `{"answer": "...", "status": "ok"}` | Grounded Q&A against current passage via configured AI key |
 | `/api/ask/local` | `POST` | `{"question": "...", "passage_text": "..."}` | `{"answer": "...", "status": "ok"}` | Grounded Q&A against current passage (requires context token) |
-| `/api/settings/ai` | `GET` | None | `{"primary_provider": "openrouter", ...}` | Inspect current BYOK provider configurations |
-| `/api/settings/ai` | `POST` | `{"primary_provider": "...", "primary_api_key": "..."}` | `{"status": "saved"}` | Persist updated primary and failover AI credentials |
+| `/api/settings/ai-config` | `GET` | None | `{"primary_provider": "gemini", ...}` | Inspect current BYOK provider configurations |
+| `/api/settings/ai-config` | `POST` | `{"primary_provider": "...", "primary_api_key": "..."}` | `{"status": "saved"}` | Persist updated primary and failover AI credentials |
+| `/api/app-update` | `GET` | `?current_version=1.1.0&platform=android` | `{"update_available": false, ...}` | Check latest client release and platform download metadata |
+| `/api/download/android` | `GET` | None | Streams APK | Download latest Athena-Android.apk binary |
+| `/api/download/ios` | `GET` | None | Streams IPA | Download latest unsigned Athena-iOS.ipa binary |
 
 ### Wireless Mobile Pairing Guide
 1. Launch the backend engine on your laptop:

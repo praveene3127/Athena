@@ -2,11 +2,10 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:athena/core/theme/theme.dart';
 
-/// Floating Obsidian Navigation Dock inspired by Juno 365:
-/// - Floating obsidian pill detached from screen bottom
-/// - Pure black & white palette per ATHENA-BRAND-GUIDE.md
-/// - High-contrast editorial typography in Geist
-/// - Sleek micro-interactions with haptic feedback
+/// Full-width Stripe Press / Tufte editorial bottom bar:
+/// - Crisp, full-width bottom shelf (#FBF9F5 in light mode, #141413 in dark mode)
+/// - 1px solid top hairline border (#E2DDD5 / #282828)
+/// - Sharp 4px-radius editorial action tabs and buttons (zero puffy bubbles)
 class AthenaBottomNav extends StatelessWidget {
   final int selectedIndex;
   final ValueChanged<int> onDestinationSelected;
@@ -21,79 +20,58 @@ class AthenaBottomNav extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return SafeArea(
-      top: false,
-      child: Padding(
-        padding: const EdgeInsets.fromLTRB(20, 0, 20, 16),
-        child: Align(
-          alignment: Alignment.bottomCenter,
-          heightFactor: 1.0,
-          child: ConstrainedBox(
-            constraints: const BoxConstraints(maxWidth: 440),
-            child: Container(
-              // Outer Shell (Double-Bezel)
-              padding: const EdgeInsets.all(4),
-              decoration: BoxDecoration(
-                color: const Color(0xFF141714),
-                borderRadius: BorderRadius.circular(32),
-                border: Border.all(
-                  color: Colors.white.withValues(alpha: 0.14),
-                  width: 1.0,
-                ),
-                boxShadow: const [
-                  BoxShadow(
-                    color: Color(0x38000000),
-                    blurRadius: 24,
-                    offset: Offset(0, 8),
-                  ),
-                ],
-              ),
-              child: Container(
-                // Inner Core
-                height: 54,
-                padding: const EdgeInsets.symmetric(horizontal: 6),
-                decoration: BoxDecoration(
-                  color: const Color(0xFF1B1E1B),
-                  borderRadius: BorderRadius.circular(28),
-                ),
-                child: Row(
-                  mainAxisAlignment: MainAxisAlignment.spaceEvenly,
-                  children: [
-                    // Tab 0: Library
-                    _EditorialNavTab(
-                      label: 'Library',
-                      icon: selectedIndex == 0
-                          ? Icons.auto_stories_rounded
-                          : Icons.auto_stories_outlined,
-                      isSelected: selectedIndex == 0,
-                      onTap: () {
-                        HapticFeedback.selectionClick();
-                        onDestinationSelected(0);
-                      },
-                    ),
+    final isDark = Theme.of(context).brightness == Brightness.dark;
 
-                    // Center Action: Button-in-Button CTA
-                    if (onAddPressed != null)
-                      _CenterActionButton(
-                        onPressed: onAddPressed!,
-                      ),
-
-                    // Tab 1: Saved / Vault
-                    _EditorialNavTab(
-                      label: 'Saved',
-                      icon: selectedIndex == 1
-                          ? Icons.bookmark_rounded
-                          : Icons.bookmark_outline_rounded,
-                      isSelected: selectedIndex == 1,
-                      onTap: () {
-                        HapticFeedback.selectionClick();
-                        onDestinationSelected(1);
-                      },
-                    ),
-                  ],
-                ),
+    return Container(
+      decoration: BoxDecoration(
+        color: isDark ? const Color(0xFF141413) : const Color(0xFFFBF9F5),
+        border: Border(
+          top: BorderSide(
+            color: isDark ? const Color(0xFF282828) : const Color(0xFFE2DDD5),
+            width: 1.0,
+          ),
+        ),
+      ),
+      child: SafeArea(
+        top: false,
+        child: Container(
+          height: 58,
+          padding: const EdgeInsets.symmetric(horizontal: 16),
+          child: Row(
+            mainAxisAlignment: MainAxisAlignment.spaceEvenly,
+            children: [
+              // Tab 0: Library
+              _EditorialNavTab(
+                label: 'LIBRARY',
+                icon: selectedIndex == 0
+                    ? Icons.auto_stories_rounded
+                    : Icons.auto_stories_outlined,
+                isSelected: selectedIndex == 0,
+                onTap: () {
+                  HapticFeedback.selectionClick();
+                  onDestinationSelected(0);
+                },
               ),
-            ),
+
+              // Center Action: Crisp 4px Editorial Button
+              if (onAddPressed != null)
+                _CenterActionButton(
+                  onPressed: onAddPressed!,
+                ),
+
+              // Tab 1: Saved / Vault
+              _EditorialNavTab(
+                label: 'SAVED',
+                icon: selectedIndex == 1
+                    ? Icons.bookmark_rounded
+                    : Icons.bookmark_outline_rounded,
+                isSelected: selectedIndex == 1,
+                onTap: () {
+                  HapticFeedback.selectionClick();
+                  onDestinationSelected(1);
+                },
+              ),
+            ],
           ),
         ),
       ),
@@ -116,42 +94,48 @@ class _EditorialNavTab extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final isDark = Theme.of(context).brightness == Brightness.dark;
+
     return InkWell(
       onTap: onTap,
-      borderRadius: BorderRadius.circular(22),
+      borderRadius: BorderRadius.circular(4),
       child: AnimatedContainer(
-        duration: const Duration(milliseconds: 220),
+        duration: const Duration(milliseconds: 160),
         curve: Curves.easeOutCubic,
-        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+        padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 8),
         decoration: BoxDecoration(
           color: isSelected
-              ? Colors.white.withValues(alpha: 0.14)
+              ? (isDark ? const Color(0xFF222221) : const Color(0xFFEBE7DF))
               : Colors.transparent,
-          borderRadius: BorderRadius.circular(22),
-          border: isSelected
-              ? Border.all(
-                  color: Colors.white.withValues(alpha: 0.18),
-                  width: 1,
-                )
-              : Border.all(color: Colors.transparent, width: 1),
+          borderRadius: BorderRadius.circular(4),
+          border: Border.all(
+            color: isSelected
+                ? (isDark ? const Color(0xFF333331) : const Color(0xFFD6D0C5))
+                : Colors.transparent,
+            width: 1,
+          ),
         ),
         child: Row(
           mainAxisSize: MainAxisSize.min,
           children: [
             Icon(
               icon,
-              size: 17,
-              color: isSelected ? Colors.white : const Color(0xFF9E9E9E),
+              size: 16,
+              color: isSelected
+                  ? (isDark ? Colors.white : AppTheme.ink)
+                  : (isDark ? const Color(0xFF888884) : const Color(0xFF767672)),
             ),
-            const SizedBox(width: 7),
+            const SizedBox(width: 8),
             Text(
               label,
               style: TextStyle(
                 fontFamily: AppTheme.fontUI,
-                color: isSelected ? Colors.white : const Color(0xFF9E9E9E),
-                fontSize: 13,
-                fontWeight: isSelected ? FontWeight.w600 : FontWeight.w500,
-                letterSpacing: 0.2,
+                color: isSelected
+                    ? (isDark ? Colors.white : AppTheme.ink)
+                    : (isDark ? const Color(0xFF888884) : const Color(0xFF767672)),
+                fontSize: 11,
+                fontWeight: isSelected ? FontWeight.w700 : FontWeight.w600,
+                letterSpacing: 0.8,
               ),
             ),
           ],
@@ -175,6 +159,8 @@ class _CenterActionButtonState extends State<_CenterActionButton> {
 
   @override
   Widget build(BuildContext context) {
+    final isDark = Theme.of(context).brightness == Brightness.dark;
+
     return GestureDetector(
       onTapDown: (_) => setState(() => _isPressed = true),
       onTapUp: (_) {
@@ -184,50 +170,36 @@ class _CenterActionButtonState extends State<_CenterActionButton> {
       },
       onTapCancel: () => setState(() => _isPressed = false),
       child: AnimatedScale(
-        scale: _isPressed ? 0.95 : 1.0,
-        duration: const Duration(milliseconds: 120),
+        scale: _isPressed ? 0.97 : 1.0,
+        duration: const Duration(milliseconds: 100),
         curve: Curves.easeOutCubic,
         child: Container(
-          padding: const EdgeInsets.fromLTRB(14, 6, 8, 6),
+          padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 8),
           decoration: BoxDecoration(
-            color: Colors.white,
-            borderRadius: BorderRadius.circular(22),
-            boxShadow: const [
-              BoxShadow(
-                color: Color(0x22000000),
-                blurRadius: 8,
-                offset: Offset(0, 2),
-              ),
-            ],
+            color: isDark ? Colors.white : const Color(0xFF161615),
+            borderRadius: BorderRadius.circular(4),
+            border: Border.all(
+              color: isDark ? const Color(0xFFE2DDD5) : const Color(0xFF161615),
+              width: 1,
+            ),
           ),
           child: Row(
             mainAxisSize: MainAxisSize.min,
             children: [
-              const Text(
-                'Add Book',
+              Icon(
+                Icons.add_rounded,
+                size: 15,
+                color: isDark ? const Color(0xFF161615) : const Color(0xFFFBF9F5),
+              ),
+              const SizedBox(width: 6),
+              Text(
+                'ADD BOOK',
                 style: TextStyle(
                   fontFamily: AppTheme.fontUI,
-                  color: Color(0xFF141714),
-                  fontSize: 12.5,
+                  color: isDark ? const Color(0xFF161615) : const Color(0xFFFBF9F5),
+                  fontSize: 11,
                   fontWeight: FontWeight.w700,
-                  letterSpacing: -0.1,
-                ),
-              ),
-              const SizedBox(width: 8),
-              // Nested button-in-button circular icon
-              Container(
-                width: 26,
-                height: 26,
-                decoration: const BoxDecoration(
-                  color: Color(0xFF141714),
-                  shape: BoxShape.circle,
-                ),
-                child: const Center(
-                  child: Icon(
-                    Icons.add_rounded,
-                    size: 16,
-                    color: Colors.white,
-                  ),
+                  letterSpacing: 0.8,
                 ),
               ),
             ],

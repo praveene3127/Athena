@@ -6,7 +6,7 @@ from fastapi.responses import FileResponse, RedirectResponse
 
 router = APIRouter(tags=["updates"])
 
-GITHUB_REPO_DEFAULT = "athena-reader/athena"
+GITHUB_REPO_DEFAULT = "praveene3127/Athena"
 
 
 def parse_semver(v: str) -> tuple:
@@ -18,7 +18,7 @@ def parse_semver(v: str) -> tuple:
 
 @router.get("/api/app-update")
 def get_app_update(
-    current_version: str = Query("1.0.0", description="Current client app version"),
+    current_version: str = Query("1.1.0", description="Current client app version"),
     platform: str = Query("unknown", description="Client device platform (android, ios, desktop)"),
 ):
     """Checks for latest Athena client release across Android (.apk) and iOS (.ipa)."""

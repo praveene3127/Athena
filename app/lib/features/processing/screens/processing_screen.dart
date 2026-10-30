@@ -334,7 +334,7 @@ class _ProcessingScreenState extends ConsumerState<ProcessingScreen>
                         border: Border.all(
                             color: Colors.redAccent.withValues(alpha: 0.3),
                             width: 1),
-                        borderRadius: BorderRadius.circular(18),
+                        borderRadius: BorderRadius.circular(6),
                       ),
                       child: Row(
                         children: [
@@ -370,7 +370,7 @@ class _ProcessingScreenState extends ConsumerState<ProcessingScreen>
                       color: isDark
                           ? const Color(0xFF181818)
                           : const Color(0xFFF7F6F2),
-                      borderRadius: BorderRadius.circular(28),
+                      borderRadius: BorderRadius.circular(6),
                       border: Border.all(
                         color: isDark
                             ? const Color(0xFF282828)
@@ -381,7 +381,7 @@ class _ProcessingScreenState extends ConsumerState<ProcessingScreen>
                       padding: const EdgeInsets.all(20),
                       decoration: BoxDecoration(
                         color: isDark ? const Color(0xFF202020) : Colors.white,
-                        borderRadius: BorderRadius.circular(24),
+                        borderRadius: BorderRadius.circular(6),
                         border: Border.all(
                           color: isDark
                               ? const Color(0xFF2E2E2E)
@@ -448,7 +448,7 @@ class _ProcessingScreenState extends ConsumerState<ProcessingScreen>
                           ),
                           const SizedBox(height: 18),
                           ClipRRect(
-                            borderRadius: BorderRadius.circular(10),
+                            borderRadius: BorderRadius.circular(4),
                             child: LinearProgressIndicator(
                               value: percent / 100.0,
                               minHeight: 8,
@@ -471,9 +471,9 @@ class _ProcessingScreenState extends ConsumerState<ProcessingScreen>
                                 : isFailed
                                     ? 'Could not finish processing this paper.'
                                     : _stageDetails[stageIdx].title,
-                            style: const TextStyle(
+                            style: TextStyle(
                               fontFamily: 'DM Serif Display',
-                              color: Color(0xFF141714),
+                              color: AppTheme.textPrimaryOf(context),
                               fontSize: 21,
                               letterSpacing: -0.3,
                             ),
@@ -486,8 +486,8 @@ class _ProcessingScreenState extends ConsumerState<ProcessingScreen>
                                     ? (_status?.errorMessage ??
                                         'An error occurred during extraction.')
                                     : 'Preserving verbatim source text without hallucinated summaries.',
-                            style: const TextStyle(
-                              color: Color(0xFF666666),
+                            style: TextStyle(
+                              color: AppTheme.textMutedOf(context),
                               fontSize: 12.5,
                               height: 1.4,
                             ),
@@ -516,24 +516,26 @@ class _ProcessingScreenState extends ConsumerState<ProcessingScreen>
                               horizontal: 16, vertical: 14),
                           decoration: BoxDecoration(
                             color: isActive
-                                ? AppTheme.surface
+                                ? (isDark ? AppTheme.darkSurfaceWarm : AppTheme.surface)
                                 : (isComplete
-                                    ? AppTheme.surface
-                                    : AppTheme.surface.withValues(alpha: 0.65)),
-                            borderRadius: BorderRadius.circular(22),
+                                    ? AppTheme.surfaceOf(context)
+                                    : AppTheme.surfaceOf(context).withValues(alpha: 0.65)),
+                            borderRadius: BorderRadius.circular(6),
                             border: Border.all(
                               color: isActive
-                                  ? AppTheme.figmaBlack
+                                  ? (isDark ? Colors.white70 : AppTheme.figmaBlack)
                                   : (isComplete
-                                      ? AppTheme.lime.withValues(alpha: 0.5)
-                                      : AppTheme.border),
+                                      ? (isDark
+                                          ? const Color(0xFF2DD4BF).withValues(alpha: 0.4)
+                                          : const Color(0xFF005E54).withValues(alpha: 0.4))
+                                      : AppTheme.borderOf(context)),
                               width: isActive ? 1.5 : 1,
                             ),
                             boxShadow: isActive
                                 ? [
                                     BoxShadow(
                                       color:
-                                          Colors.black.withValues(alpha: 0.06),
+                                          Colors.black.withValues(alpha: isDark ? 0.2 : 0.06),
                                       blurRadius: 12,
                                       offset: const Offset(0, 4),
                                     ),
@@ -542,18 +544,18 @@ class _ProcessingScreenState extends ConsumerState<ProcessingScreen>
                           ),
                           child: Row(
                             children: [
-                              // Status icon badge: Lime tick for complete, spinner for active, circle for pending
+                              // Status icon badge: Emerald tick for complete, spinner for active, circle for pending
                               if (isComplete)
                                 Container(
                                   width: 32,
                                   height: 32,
                                   decoration: const BoxDecoration(
-                                    color: AppTheme.lime,
+                                    color: Color(0xFF2D6A4F),
                                     shape: BoxShape.circle,
                                   ),
                                   child: const Icon(
                                     Icons.check_rounded,
-                                    color: AppTheme.figmaBlack,
+                                    color: Colors.white,
                                     size: 20,
                                   ),
                                 )
@@ -562,14 +564,17 @@ class _ProcessingScreenState extends ConsumerState<ProcessingScreen>
                                   width: 32,
                                   height: 32,
                                   padding: const EdgeInsets.all(6),
-                                  decoration: const BoxDecoration(
-                                    color: AppTheme.figmaBlack,
+                                  decoration: BoxDecoration(
+                                    color: isDark ? const Color(0xFF222220) : const Color(0xFFFAF7F2),
                                     shape: BoxShape.circle,
+                                    border: Border.all(
+                                      color: const Color(0xFFC84B31).withValues(alpha: 0.5),
+                                      width: 1.5,
+                                    ),
                                   ),
                                   child: const CircularProgressIndicator(
                                     strokeWidth: 2.5,
-                                    valueColor: AlwaysStoppedAnimation<Color>(
-                                        AppTheme.lime),
+                                    valueColor: AlwaysStoppedAnimation<Color>(Color(0xFFC84B31)),
                                   ),
                                 )
                               else if (isFailedHere)
@@ -593,7 +598,7 @@ class _ProcessingScreenState extends ConsumerState<ProcessingScreen>
                                   decoration: BoxDecoration(
                                     shape: BoxShape.circle,
                                     border: Border.all(
-                                      color: AppTheme.textMuted
+                                      color: AppTheme.textMutedOf(context)
                                           .withValues(alpha: 0.4),
                                       width: 1.5,
                                     ),
@@ -601,7 +606,7 @@ class _ProcessingScreenState extends ConsumerState<ProcessingScreen>
                                   child: Icon(
                                     stage.icon,
                                     size: 16,
-                                    color: AppTheme.textMuted
+                                    color: AppTheme.textMutedOf(context)
                                         .withValues(alpha: 0.4),
                                   ),
                                 ),
@@ -616,8 +621,8 @@ class _ProcessingScreenState extends ConsumerState<ProcessingScreen>
                                       stage.title,
                                       style: TextStyle(
                                         color: isComplete || isActive
-                                            ? AppTheme.textPrimary
-                                            : AppTheme.textMuted,
+                                            ? AppTheme.textPrimaryOf(context)
+                                            : AppTheme.textMutedOf(context),
                                         fontSize: 14,
                                         fontWeight: isActive
                                             ? FontWeight.w800
@@ -631,9 +636,9 @@ class _ProcessingScreenState extends ConsumerState<ProcessingScreen>
                                       stage.description,
                                       style: TextStyle(
                                         color: isActive
-                                            ? AppTheme.textPrimary
+                                            ? AppTheme.textPrimaryOf(context)
                                                 .withValues(alpha: 0.8)
-                                            : AppTheme.textMuted,
+                                            : AppTheme.textMutedOf(context),
                                         fontSize: 11,
                                         height: 1.3,
                                       ),
@@ -648,14 +653,13 @@ class _ProcessingScreenState extends ConsumerState<ProcessingScreen>
                                   padding: const EdgeInsets.symmetric(
                                       horizontal: 8, vertical: 4),
                                   decoration: BoxDecoration(
-                                    color:
-                                        AppTheme.lime.withValues(alpha: 0.25),
-                                    borderRadius: BorderRadius.circular(10),
+                                    color: const Color(0xFF2D6A4F).withValues(alpha: 0.12),
+                                    borderRadius: BorderRadius.circular(4),
                                   ),
                                   child: const Text(
                                     'Done',
                                     style: TextStyle(
-                                      color: AppTheme.figmaBlack,
+                                      color: Color(0xFF2D6A4F),
                                       fontSize: 10,
                                       fontWeight: FontWeight.w800,
                                     ),
@@ -666,13 +670,13 @@ class _ProcessingScreenState extends ConsumerState<ProcessingScreen>
                                   padding: const EdgeInsets.symmetric(
                                       horizontal: 8, vertical: 4),
                                   decoration: BoxDecoration(
-                                    color: AppTheme.figmaBlack,
-                                    borderRadius: BorderRadius.circular(10),
+                                    color: const Color(0xFFC84B31),
+                                    borderRadius: BorderRadius.circular(4),
                                   ),
                                   child: const Text(
                                     'Working',
                                     style: TextStyle(
-                                      color: AppTheme.lime,
+                                      color: Colors.white,
                                       fontSize: 10,
                                       fontWeight: FontWeight.w800,
                                     ),
@@ -685,7 +689,7 @@ class _ProcessingScreenState extends ConsumerState<ProcessingScreen>
                                   decoration: BoxDecoration(
                                     color: Colors.redAccent
                                         .withValues(alpha: 0.14),
-                                    borderRadius: BorderRadius.circular(10),
+                                    borderRadius: BorderRadius.circular(4),
                                   ),
                                   child: const Text(
                                     'Failed',
@@ -708,14 +712,14 @@ class _ProcessingScreenState extends ConsumerState<ProcessingScreen>
                   if (isDone)
                     InkWell(
                       onTap: () => context.go('/reader/${widget.documentId}'),
-                      borderRadius: BorderRadius.circular(28),
+                      borderRadius: BorderRadius.circular(6),
                       child: Container(
                         width: double.infinity,
                         height: 54,
                         padding: const EdgeInsets.symmetric(horizontal: 20),
                         decoration: BoxDecoration(
                           color: const Color(0xFF005E54),
-                          borderRadius: BorderRadius.circular(28),
+                          borderRadius: BorderRadius.circular(6),
                           boxShadow: [
                             BoxShadow(
                               color: const Color(0xFF005E54)
@@ -758,14 +762,14 @@ class _ProcessingScreenState extends ConsumerState<ProcessingScreen>
                   else if (isFailed)
                     InkWell(
                       onTap: _isRetrying ? null : _retry,
-                      borderRadius: BorderRadius.circular(28),
+                      borderRadius: BorderRadius.circular(6),
                       child: Container(
                         width: double.infinity,
                         height: 54,
                         padding: const EdgeInsets.symmetric(horizontal: 20),
                         decoration: BoxDecoration(
                           color: const Color(0xFF141714),
-                          borderRadius: BorderRadius.circular(28),
+                          borderRadius: BorderRadius.circular(6),
                           boxShadow: [
                             BoxShadow(
                               color: Colors.black.withValues(alpha: 0.15),
@@ -820,28 +824,39 @@ class _ProcessingScreenState extends ConsumerState<ProcessingScreen>
                       width: double.infinity,
                       padding: const EdgeInsets.all(7),
                       decoration: BoxDecoration(
-                        color: const Color(0xFFF7F6F2),
-                        borderRadius: BorderRadius.circular(22),
-                        border: Border.all(color: const Color(0xFFE5E7DC)),
+                        color: isDark
+                            ? const Color(0xFF181818)
+                            : const Color(0xFFF7F6F2),
+                        borderRadius: BorderRadius.circular(6),
+                        border: Border.all(
+                            color: isDark
+                                ? const Color(0xFF282828)
+                                : const Color(0xFFE5E7DC)),
                       ),
                       child: Container(
                         padding: const EdgeInsets.symmetric(
                             vertical: 12, horizontal: 14),
                         decoration: BoxDecoration(
-                          color: Colors.white,
-                          borderRadius: BorderRadius.circular(16),
-                          border: Border.all(color: const Color(0xFFECEEE4)),
+                          color: isDark ? const Color(0xFF202020) : Colors.white,
+                          borderRadius: BorderRadius.circular(6),
+                          border: Border.all(
+                              color: isDark
+                                  ? const Color(0xFF2E2E2E)
+                                  : const Color(0xFFECEEE4)),
                         ),
-                        child: const Row(
+                        child: Row(
                           children: [
                             Icon(Icons.shield_outlined,
-                                color: Color(0xFF005E54), size: 18),
-                            SizedBox(width: 10),
+                                color: isDark
+                                    ? const Color(0xFF2DD4BF)
+                                    : const Color(0xFF005E54),
+                                size: 18),
+                            const SizedBox(width: 10),
                             Expanded(
                               child: Text(
                                 'Local Device Processing · Zero third-party telemetry. Background tasks automatically resume from last saved offset.',
                                 style: TextStyle(
-                                  color: Color(0xFF666666),
+                                  color: AppTheme.textMutedOf(context),
                                   fontSize: 11.5,
                                   fontWeight: FontWeight.w500,
                                   height: 1.35,
@@ -862,6 +877,7 @@ class _ProcessingScreenState extends ConsumerState<ProcessingScreen>
   }
 
   Widget _buildUnsupportedState(DocumentStatus status) {
+    final isDark = Theme.of(context).brightness == Brightness.dark;
     String displayLabel = 'Out of Scope Document';
     String reason =
         'Athena is built for continuous long-form reading (books, essays, and research papers). Slide decks, invoices, resumes, and forms do not have the narrative flow needed for deep reading.';
@@ -881,12 +897,14 @@ class _ProcessingScreenState extends ConsumerState<ProcessingScreen>
           margin: const EdgeInsets.symmetric(horizontal: 16, vertical: 24),
           padding: const EdgeInsets.all(28),
           decoration: BoxDecoration(
-            color: const Color(0xFFFCFBF7),
-            borderRadius: BorderRadius.circular(24),
-            border: Border.all(color: AppTheme.figmaBlack, width: 1.5),
+            color: isDark ? AppTheme.darkSurface : const Color(0xFFFCFBF7),
+            borderRadius: BorderRadius.circular(6),
+            border: Border.all(
+                color: isDark ? AppTheme.darkBorder : AppTheme.figmaBlack,
+                width: 1.5),
             boxShadow: [
               BoxShadow(
-                color: Colors.black.withValues(alpha: 0.06),
+                color: Colors.black.withValues(alpha: isDark ? 0.3 : 0.06),
                 blurRadius: 18,
                 offset: const Offset(0, 6),
               ),
@@ -901,13 +919,13 @@ class _ProcessingScreenState extends ConsumerState<ProcessingScreen>
                 padding:
                     const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
                 decoration: BoxDecoration(
-                  color: AppTheme.figmaBlack,
-                  borderRadius: BorderRadius.circular(8),
+                  color: isDark ? Colors.white : AppTheme.figmaBlack,
+                  borderRadius: BorderRadius.circular(4),
                 ),
-                child: const Text(
+                child: Text(
                   'NOT A LONG-FORM READING DOCUMENT',
                   style: TextStyle(
-                    color: Color(0xFFFCFBF7),
+                    color: isDark ? AppTheme.figmaBlack : const Color(0xFFFCFBF7),
                     fontSize: 10.5,
                     fontWeight: FontWeight.w800,
                     letterSpacing: 0.8,
@@ -918,8 +936,8 @@ class _ProcessingScreenState extends ConsumerState<ProcessingScreen>
               // Headline
               Text(
                 'Detected: $displayLabel',
-                style: const TextStyle(
-                  color: AppTheme.textPrimary,
+                style: TextStyle(
+                  color: AppTheme.textPrimaryOf(context),
                   fontSize: 22,
                   fontWeight: FontWeight.w800,
                   letterSpacing: -0.4,
@@ -930,8 +948,8 @@ class _ProcessingScreenState extends ConsumerState<ProcessingScreen>
               // Body
               Text(
                 reason,
-                style: const TextStyle(
-                  color: AppTheme.textMuted,
+                style: TextStyle(
+                  color: AppTheme.textMutedOf(context),
                   fontSize: 14.5,
                   height: 1.5,
                   fontWeight: FontWeight.w500,
@@ -945,10 +963,10 @@ class _ProcessingScreenState extends ConsumerState<ProcessingScreen>
                 child: ElevatedButton.icon(
                   onPressed: _removeDocument,
                   style: ElevatedButton.styleFrom(
-                    backgroundColor: AppTheme.figmaBlack,
-                    foregroundColor: Colors.white,
+                    backgroundColor: isDark ? Colors.white : AppTheme.figmaBlack,
+                    foregroundColor: isDark ? AppTheme.figmaBlack : Colors.white,
                     shape: RoundedRectangleBorder(
-                      borderRadius: BorderRadius.circular(16),
+                      borderRadius: BorderRadius.circular(6),
                     ),
                     elevation: 0,
                   ),
@@ -966,14 +984,15 @@ class _ProcessingScreenState extends ConsumerState<ProcessingScreen>
                 child: TextButton.icon(
                   onPressed: _isRetrying ? null : _forceIngest,
                   style: TextButton.styleFrom(
-                    foregroundColor: AppTheme.textPrimary,
+                    foregroundColor: AppTheme.textPrimaryOf(context),
                   ),
                   icon: _isRetrying
-                      ? const SizedBox(
+                      ? SizedBox(
                           width: 14,
                           height: 14,
                           child: CircularProgressIndicator(
-                              strokeWidth: 2, color: AppTheme.figmaBlack),
+                              strokeWidth: 2,
+                              color: AppTheme.textPrimaryOf(context)),
                         )
                       : const Icon(Icons.lock_open_rounded, size: 16),
                   label: Text(

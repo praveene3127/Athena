@@ -44,24 +44,24 @@ final themeModeProvider =
     NotifierProvider<ThemeModeNotifier, ThemeMode>(ThemeModeNotifier.new);
 
 class AppTheme {
-  // Athena Brand Guide v3 (black & white):
+  // Stripe Press / Tufte Editorial Architecture:
   // Light Palette Tokens
-  static const Color background = Color(0xFFFCFBF7);
-  static const Color surface = Color(0xFFFFFFFF);
-  static const Color surfaceWarm = Color(0xFFFAFAFA);
-  static const Color surfaceMuted = Color(0xFFF7F7F7);
-  static const Color border = Color(0xFFE5E7DC);
-  static const Color hairline = Color(0xFFF4F4F4);
-  static const Color ink = Color(0xFF141714);
-  static const Color figmaBlack = Color(0xFF000000);
-  static const Color figmaGreen = Color(0xFF005E54);
-  static const Color lime = Color(0xFF000000);
-  static const Color textPrimary = Color(0xFF141714);
-  static const Color textBody = Color(0xFF222222);
-  static const Color textMuted = Color(0xFF6B7280);
-  static const Color paper = Color(0xFFFFFFFF);
-  static const Color paperText = Color(0xFF111111);
-  static const Color cyan = Color(0xFF000000);
+  static const Color background = Color(0xFFFBF9F5);
+  static const Color surface = Color(0xFFF2EFE9);
+  static const Color surfaceWarm = Color(0xFFFAF7F2);
+  static const Color surfaceMuted = Color(0xFFEBE7DF);
+  static const Color border = Color(0xFFE2DDD5);
+  static const Color hairline = Color(0xFFECE7DE);
+  static const Color ink = Color(0xFF161615);
+  static const Color figmaBlack = Color(0xFF161615);
+  static const Color figmaGreen = Color(0xFF2D6A4F);
+  static const Color lime = Color(0xFF2D6A4F);
+  static const Color textPrimary = Color(0xFF161615);
+  static const Color textBody = Color(0xFF282827);
+  static const Color textMuted = Color(0xFF6E6E6B);
+  static const Color paper = Color(0xFFFBF9F5);
+  static const Color paperText = Color(0xFF161615);
+  static const Color cyan = Color(0xFF2D6A4F);
 
   // Dark Palette Tokens
   static const Color darkBackground = Color(0xFF101010);

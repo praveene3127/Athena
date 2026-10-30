@@ -32,7 +32,7 @@ class _InternetAccessGateState extends State<InternetAccessGate>
   );
 
   bool _checking = false;
-  bool _online = false;
+  bool _online = true;
 
   @override
   void initState() {
