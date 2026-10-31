@@ -279,7 +279,7 @@ Athena/
 │   │   │   └── edge_ai.py               # ONNX runtime embedder & cosine similarity
 │   │   ├── db.py                        # SQLModel SQLite database engine
 │   │   └── main.py                      # FastAPI application & static Flutter SPA mount
-│   ├── tests/                           # 49 automated pytest suites
+│   ├── tests/                           # 52 automated pytest suites
 │   └── requirements.txt                 # Backend dependencies
 │
 ├── scripts/                             # Operator tooling & verification
@@ -305,7 +305,10 @@ Athena/
 | `/api/pair-info` | `GET` | None | `{"lan_ip": "192.168.1.15", "api_port": 8000, ...}` | Pairing metadata and local Wi-Fi / Tunnel URLs |
 | `/api/documents` | `GET` | None | `[{"id": "doc_...", "title": "...", "chunks": 120}]` | List all processed books with read progress and metadata |
 | `/api/documents/upload` | `POST` | Multipart PDF/EPUB | `{"id": "doc_...", "status": "processing"}` | Upload book for structural triage and ingestion |
+| `/api/documents/upload-url` | `POST` | `{"url": "https://..."}` | `{"id": "doc_...", "status": "processing"}` | Import public web book/paper directly from URL |
+| `/api/documents/sample` | `POST` | None | `{"id": "doc_sample_...", "status": "ready"}` | 1-Tap instant starter masterpiece generation |
 | `/api/documents/{id}/reader` | `GET` | None | `{"document": {...}, "chunks": [...], "cards": [...]}` | Fetch lossless chunks and grounded marginalia cards |
+| `/api/documents/{id}/search` | `GET` | `?q=...&top_k=8` | `{"document_id": "...", "results": [...]}` | In-book hybrid search (BM25 + Dense + RRF) |
 | `/api/documents/{id}/progress` | `POST` | `{"chunk_index": 42}` | `{"status": "ok"}` | Sync active reading position and bookmark across devices |
 | `/api/documents/{id}/force-ingest` | `POST` | None | `{"status": "queued"}` | Ingestion override bypassing document bouncer triage |
 | `/api/documents/{id}/vibe-check` | `POST` | `{"chunk_index": 5}` | `{"simplified": "..."}` | Real-time passage simplification breakdown |
@@ -341,7 +344,7 @@ Athena enforces an automated verification suite that audits code hygiene, techni
 # 1. Run the Full 6-Gate Release Verifier
 python scripts/verify_release.py
 
-# 2. Run Backend Pytest Suite (49 unit tests)
+# 2. Run Backend Pytest Suite (52 unit tests)
 pytest backend/tests -q
 
 # 3. Run Flutter Analyzer & Tests

@@ -174,15 +174,21 @@ class _BYOKSettingsSheetState extends State<BYOKSettingsSheet>
       final config = await _api.getAIConfig();
       if (!mounted) return;
 
-      final savedLocalPrimaryProvider = prefs.getString('athena_ai_primary_provider');
+      final savedLocalPrimaryProvider =
+          prefs.getString('athena_ai_primary_provider');
       final savedLocalPrimaryKey = prefs.getString('athena_ai_primary_api_key');
       final savedLocalPrimaryModel = prefs.getString('athena_ai_primary_model');
-      final savedLocalPrimaryBaseUrl = prefs.getString('athena_ai_primary_base_url');
+      final savedLocalPrimaryBaseUrl =
+          prefs.getString('athena_ai_primary_base_url');
 
-      final savedLocalFallbackProvider = prefs.getString('athena_ai_fallback_provider');
-      final savedLocalFallbackKey = prefs.getString('athena_ai_fallback_api_key');
-      final savedLocalFallbackModel = prefs.getString('athena_ai_fallback_model');
-      final savedLocalFallbackBaseUrl = prefs.getString('athena_ai_fallback_base_url');
+      final savedLocalFallbackProvider =
+          prefs.getString('athena_ai_fallback_provider');
+      final savedLocalFallbackKey =
+          prefs.getString('athena_ai_fallback_api_key');
+      final savedLocalFallbackModel =
+          prefs.getString('athena_ai_fallback_model');
+      final savedLocalFallbackBaseUrl =
+          prefs.getString('athena_ai_fallback_base_url');
 
       setState(() {
         _primaryProvider = config.primaryProvider.isNotEmpty
@@ -193,7 +199,8 @@ class _BYOKSettingsSheetState extends State<BYOKSettingsSheet>
             ? config.primaryModel
             : (savedLocalPrimaryModel ?? '');
 
-        _primaryBaseUrlController.text = config.primaryBaseUrl ?? (savedLocalPrimaryBaseUrl ?? '');
+        _primaryBaseUrlController.text =
+            config.primaryBaseUrl ?? (savedLocalPrimaryBaseUrl ?? '');
 
         if (savedLocalPrimaryKey != null && savedLocalPrimaryKey.isNotEmpty) {
           _primaryKeyController.text = savedLocalPrimaryKey;
@@ -201,12 +208,18 @@ class _BYOKSettingsSheetState extends State<BYOKSettingsSheet>
           _primaryKeyController.text = config.primaryApiKeyMasked!;
         }
 
-        if (config.fallbackProvider != null || (savedLocalFallbackProvider != null && savedLocalFallbackProvider.isNotEmpty)) {
+        if (config.fallbackProvider != null ||
+            (savedLocalFallbackProvider != null &&
+                savedLocalFallbackProvider.isNotEmpty)) {
           _enableFallback = true;
-          _fallbackProvider = config.fallbackProvider ?? (savedLocalFallbackProvider ?? 'groq');
-          _fallbackModelController.text = config.fallbackModel ?? (savedLocalFallbackModel ?? '');
-          _fallbackBaseUrlController.text = config.fallbackBaseUrl ?? (savedLocalFallbackBaseUrl ?? '');
-          if (savedLocalFallbackKey != null && savedLocalFallbackKey.isNotEmpty) {
+          _fallbackProvider =
+              config.fallbackProvider ?? (savedLocalFallbackProvider ?? 'groq');
+          _fallbackModelController.text =
+              config.fallbackModel ?? (savedLocalFallbackModel ?? '');
+          _fallbackBaseUrlController.text =
+              config.fallbackBaseUrl ?? (savedLocalFallbackBaseUrl ?? '');
+          if (savedLocalFallbackKey != null &&
+              savedLocalFallbackKey.isNotEmpty) {
             _fallbackKeyController.text = savedLocalFallbackKey;
           } else if (config.fallbackApiKeyMasked != null) {
             _fallbackKeyController.text = config.fallbackApiKeyMasked!;
@@ -216,7 +229,9 @@ class _BYOKSettingsSheetState extends State<BYOKSettingsSheet>
       });
 
       // If backend was empty but local preferences has verified credentials, auto-sync to backend immediately
-      if (!config.isConfigured && savedLocalPrimaryKey != null && savedLocalPrimaryKey.isNotEmpty) {
+      if (!config.isConfigured &&
+          savedLocalPrimaryKey != null &&
+          savedLocalPrimaryKey.isNotEmpty) {
         _persistToLocalStorageAndBackend();
       }
     } catch (_) {
@@ -383,7 +398,8 @@ class _BYOKSettingsSheetState extends State<BYOKSettingsSheet>
             _testingFallback = false;
             _fallbackTestOk = true;
             _fallbackModels = liveModels;
-            if (_fallbackModelController.text.isEmpty && liveModels.isNotEmpty) {
+            if (_fallbackModelController.text.isEmpty &&
+                liveModels.isNotEmpty) {
               _fallbackModelController.text = liveModels.first.id;
             }
             _fallbackTestMessage = liveModels.isNotEmpty
@@ -582,7 +598,8 @@ class _BYOKSettingsSheetState extends State<BYOKSettingsSheet>
       } else {
         ScaffoldMessenger.of(context).showSnackBar(
           const SnackBar(
-            content: Text('AI Intelligence Engines updated and saved successfully.'),
+            content:
+                Text('AI Intelligence Engines updated and saved successfully.'),
             duration: Duration(seconds: 3),
           ),
         );
@@ -620,7 +637,8 @@ class _BYOKSettingsSheetState extends State<BYOKSettingsSheet>
           currentModel: controller.text,
           provider: provider,
           hasKey: key.isNotEmpty,
-          onRefresh: key.isNotEmpty ? () => _fetchModels(isPrimary: isPrimary) : null,
+          onRefresh:
+              key.isNotEmpty ? () => _fetchModels(isPrimary: isPrimary) : null,
           onModelSelected: (selectedId) {
             setState(() {
               controller.text = selectedId;
@@ -758,7 +776,8 @@ class _BYOKSettingsSheetState extends State<BYOKSettingsSheet>
       child: TabBar(
         controller: _tabController,
         labelColor: isDark ? Colors.white : AppTheme.ink,
-        unselectedLabelColor: isDark ? AppTheme.darkTextMuted : AppTheme.textMuted,
+        unselectedLabelColor:
+            isDark ? AppTheme.darkTextMuted : AppTheme.textMuted,
         indicatorColor: isDark ? Colors.white : AppTheme.ink,
         indicatorWeight: 2,
         labelStyle: const TextStyle(
@@ -1084,7 +1103,8 @@ class _BYOKSettingsSheetState extends State<BYOKSettingsSheet>
                           ),
                         )
                       : const Icon(Icons.bolt_rounded, size: 16),
-                  label: Text(_testingServer ? 'Pinging...' : 'Test Connection'),
+                  label:
+                      Text(_testingServer ? 'Pinging...' : 'Test Connection'),
                   style: OutlinedButton.styleFrom(
                     padding: const EdgeInsets.symmetric(vertical: 12),
                     side: BorderSide(
@@ -1246,7 +1266,9 @@ class _BYOKSettingsSheetState extends State<BYOKSettingsSheet>
               Container(
                 padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
                 decoration: BoxDecoration(
-                  color: isDark ? const Color(0xFF2C2B29) : const Color(0xFFE5DDD0),
+                  color: isDark
+                      ? const Color(0xFF2C2B29)
+                      : const Color(0xFFE5DDD0),
                   borderRadius: BorderRadius.circular(4),
                 ),
                 child: const Text(
@@ -1286,11 +1308,15 @@ class _BYOKSettingsSheetState extends State<BYOKSettingsSheet>
                       ),
                     )
                   : const Icon(Icons.sync_rounded, size: 15),
-              label: Text(_checkingUpdates ? 'Checking Server...' : 'Check for Updates'),
+              label: Text(_checkingUpdates
+                  ? 'Checking Server...'
+                  : 'Check for Updates'),
               style: OutlinedButton.styleFrom(
                 foregroundColor: isDark ? Colors.white : AppTheme.ink,
                 side: BorderSide(
-                  color: isDark ? const Color(0xFF444444) : const Color(0xFFCCCCCC),
+                  color: isDark
+                      ? const Color(0xFF444444)
+                      : const Color(0xFFCCCCCC),
                 ),
                 shape: RoundedRectangleBorder(
                   borderRadius: BorderRadius.circular(8),
@@ -1307,12 +1333,16 @@ class _BYOKSettingsSheetState extends State<BYOKSettingsSheet>
               decoration: BoxDecoration(
                 color: _settingsUpdateInfo?.updateAvailable == true
                     ? const Color(0x15C84B31)
-                    : (isDark ? const Color(0xFF282828) : const Color(0xFFEAE7E0)),
+                    : (isDark
+                        ? const Color(0xFF282828)
+                        : const Color(0xFFEAE7E0)),
                 borderRadius: BorderRadius.circular(8),
                 border: Border.all(
                   color: _settingsUpdateInfo?.updateAvailable == true
                       ? const Color(0xFFC84B31)
-                      : (isDark ? const Color(0xFF383838) : const Color(0xFFDDD8CE)),
+                      : (isDark
+                          ? const Color(0xFF383838)
+                          : const Color(0xFFDDD8CE)),
                 ),
               ),
               child: Text(
@@ -1374,7 +1404,9 @@ class _BYOKSettingsSheetState extends State<BYOKSettingsSheet>
                         style: OutlinedButton.styleFrom(
                           foregroundColor: isDark ? Colors.white : AppTheme.ink,
                           side: BorderSide(
-                            color: isDark ? const Color(0xFF444444) : const Color(0xFFCCCCCC),
+                            color: isDark
+                                ? const Color(0xFF444444)
+                                : const Color(0xFFCCCCCC),
                           ),
                           shape: RoundedRectangleBorder(
                             borderRadius: BorderRadius.circular(8),
@@ -1426,7 +1458,9 @@ class _BYOKSettingsSheetState extends State<BYOKSettingsSheet>
                         style: OutlinedButton.styleFrom(
                           foregroundColor: isDark ? Colors.white : AppTheme.ink,
                           side: BorderSide(
-                            color: isDark ? const Color(0xFF444444) : const Color(0xFFCCCCCC),
+                            color: isDark
+                                ? const Color(0xFF444444)
+                                : const Color(0xFFCCCCCC),
                           ),
                           shape: RoundedRectangleBorder(
                             borderRadius: BorderRadius.circular(8),
@@ -2028,7 +2062,9 @@ class _ModelSelectionModalState extends State<_ModelSelectionModal> {
                 Row(
                   mainAxisSize: MainAxisSize.min,
                   children: [
-                    if (widget.onRefresh != null && !_customMode && _models.isNotEmpty)
+                    if (widget.onRefresh != null &&
+                        !_customMode &&
+                        _models.isNotEmpty)
                       IconButton(
                         icon: _isRefreshing
                             ? const SizedBox(

@@ -15,7 +15,8 @@ class AppConfig {
   static Future<void> init() async {
     try {
       final prefs = await SharedPreferences.getInstance();
-      final saved = prefs.getString('custom_server_url') ?? prefs.getString('athena_backend_url');
+      final saved = prefs.getString('custom_server_url') ??
+          prefs.getString('athena_backend_url');
       if (saved != null && saved.trim().isNotEmpty) {
         _runtimeBaseUrl = saved.trim().replaceAll(RegExp(r'/+$'), '');
       }

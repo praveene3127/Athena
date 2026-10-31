@@ -244,10 +244,14 @@ class _ProcessingScreenState extends ConsumerState<ProcessingScreen>
                 width: 38,
                 height: 38,
                 decoration: BoxDecoration(
-                  color: isDark ? const Color(0xFF202020) : const Color(0xFFF2F0E8),
+                  color: isDark
+                      ? const Color(0xFF202020)
+                      : const Color(0xFFF2F0E8),
                   shape: BoxShape.circle,
                   border: Border.all(
-                    color: isDark ? const Color(0xFF2E2E2E) : const Color(0xFFE5E7DC),
+                    color: isDark
+                        ? const Color(0xFF2E2E2E)
+                        : const Color(0xFFE5E7DC),
                   ),
                 ),
                 child: Icon(
@@ -288,10 +292,13 @@ class _ProcessingScreenState extends ConsumerState<ProcessingScreen>
               width: 38,
               height: 38,
               decoration: BoxDecoration(
-                color: isDark ? const Color(0xFF202020) : const Color(0xFFF2F0E8),
+                color:
+                    isDark ? const Color(0xFF202020) : const Color(0xFFF2F0E8),
                 shape: BoxShape.circle,
                 border: Border.all(
-                  color: isDark ? const Color(0xFF2E2E2E) : const Color(0xFFE5E7DC),
+                  color: isDark
+                      ? const Color(0xFF2E2E2E)
+                      : const Color(0xFFE5E7DC),
                 ),
               ),
               child: Icon(
@@ -516,26 +523,33 @@ class _ProcessingScreenState extends ConsumerState<ProcessingScreen>
                               horizontal: 16, vertical: 14),
                           decoration: BoxDecoration(
                             color: isActive
-                                ? (isDark ? AppTheme.darkSurfaceWarm : AppTheme.surface)
+                                ? (isDark
+                                    ? AppTheme.darkSurfaceWarm
+                                    : AppTheme.surface)
                                 : (isComplete
                                     ? AppTheme.surfaceOf(context)
-                                    : AppTheme.surfaceOf(context).withValues(alpha: 0.65)),
+                                    : AppTheme.surfaceOf(context)
+                                        .withValues(alpha: 0.65)),
                             borderRadius: BorderRadius.circular(6),
                             border: Border.all(
                               color: isActive
-                                  ? (isDark ? Colors.white70 : AppTheme.figmaBlack)
+                                  ? (isDark
+                                      ? Colors.white70
+                                      : AppTheme.figmaBlack)
                                   : (isComplete
                                       ? (isDark
-                                          ? const Color(0xFF2DD4BF).withValues(alpha: 0.4)
-                                          : const Color(0xFF005E54).withValues(alpha: 0.4))
+                                          ? const Color(0xFF2DD4BF)
+                                              .withValues(alpha: 0.4)
+                                          : const Color(0xFF005E54)
+                                              .withValues(alpha: 0.4))
                                       : AppTheme.borderOf(context)),
                               width: isActive ? 1.5 : 1,
                             ),
                             boxShadow: isActive
                                 ? [
                                     BoxShadow(
-                                      color:
-                                          Colors.black.withValues(alpha: isDark ? 0.2 : 0.06),
+                                      color: Colors.black.withValues(
+                                          alpha: isDark ? 0.2 : 0.06),
                                       blurRadius: 12,
                                       offset: const Offset(0, 4),
                                     ),
@@ -565,16 +579,20 @@ class _ProcessingScreenState extends ConsumerState<ProcessingScreen>
                                   height: 32,
                                   padding: const EdgeInsets.all(6),
                                   decoration: BoxDecoration(
-                                    color: isDark ? const Color(0xFF222220) : const Color(0xFFFAF7F2),
+                                    color: isDark
+                                        ? const Color(0xFF222220)
+                                        : const Color(0xFFFAF7F2),
                                     shape: BoxShape.circle,
                                     border: Border.all(
-                                      color: const Color(0xFFC84B31).withValues(alpha: 0.5),
+                                      color: const Color(0xFFC84B31)
+                                          .withValues(alpha: 0.5),
                                       width: 1.5,
                                     ),
                                   ),
                                   child: const CircularProgressIndicator(
                                     strokeWidth: 2.5,
-                                    valueColor: AlwaysStoppedAnimation<Color>(Color(0xFFC84B31)),
+                                    valueColor: AlwaysStoppedAnimation<Color>(
+                                        Color(0xFFC84B31)),
                                   ),
                                 )
                               else if (isFailedHere)
@@ -653,7 +671,8 @@ class _ProcessingScreenState extends ConsumerState<ProcessingScreen>
                                   padding: const EdgeInsets.symmetric(
                                       horizontal: 8, vertical: 4),
                                   decoration: BoxDecoration(
-                                    color: const Color(0xFF2D6A4F).withValues(alpha: 0.12),
+                                    color: const Color(0xFF2D6A4F)
+                                        .withValues(alpha: 0.12),
                                     borderRadius: BorderRadius.circular(4),
                                   ),
                                   child: const Text(
@@ -837,7 +856,8 @@ class _ProcessingScreenState extends ConsumerState<ProcessingScreen>
                         padding: const EdgeInsets.symmetric(
                             vertical: 12, horizontal: 14),
                         decoration: BoxDecoration(
-                          color: isDark ? const Color(0xFF202020) : Colors.white,
+                          color:
+                              isDark ? const Color(0xFF202020) : Colors.white,
                           borderRadius: BorderRadius.circular(6),
                           border: Border.all(
                               color: isDark
@@ -925,7 +945,8 @@ class _ProcessingScreenState extends ConsumerState<ProcessingScreen>
                 child: Text(
                   'NOT A LONG-FORM READING DOCUMENT',
                   style: TextStyle(
-                    color: isDark ? AppTheme.figmaBlack : const Color(0xFFFCFBF7),
+                    color:
+                        isDark ? AppTheme.figmaBlack : const Color(0xFFFCFBF7),
                     fontSize: 10.5,
                     fontWeight: FontWeight.w800,
                     letterSpacing: 0.8,
@@ -963,8 +984,10 @@ class _ProcessingScreenState extends ConsumerState<ProcessingScreen>
                 child: ElevatedButton.icon(
                   onPressed: _removeDocument,
                   style: ElevatedButton.styleFrom(
-                    backgroundColor: isDark ? Colors.white : AppTheme.figmaBlack,
-                    foregroundColor: isDark ? AppTheme.figmaBlack : Colors.white,
+                    backgroundColor:
+                        isDark ? Colors.white : AppTheme.figmaBlack,
+                    foregroundColor:
+                        isDark ? AppTheme.figmaBlack : Colors.white,
                     shape: RoundedRectangleBorder(
                       borderRadius: BorderRadius.circular(6),
                     ),

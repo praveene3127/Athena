@@ -14,6 +14,7 @@ class ChunkWidget extends StatelessWidget {
   final VoidCallback onViewOriginalPage;
   final VoidCallback onAsk;
   final VoidCallback? onSimplify;
+  final VoidCallback? onSaveQuote;
   final bool isFeedMode;
   final bool bionicFocusEnabled;
   final String? layoutWarning;
@@ -28,6 +29,7 @@ class ChunkWidget extends StatelessWidget {
     required this.onViewOriginalPage,
     required this.onAsk,
     this.onSimplify,
+    this.onSaveQuote,
     this.isFeedMode = true,
     this.bionicFocusEnabled = false,
     this.layoutWarning,
@@ -177,8 +179,7 @@ class ChunkWidget extends StatelessWidget {
             },
             child: Container(
               constraints: const BoxConstraints(minHeight: 36, minWidth: 44),
-              padding:
-                  const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+              padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
               decoration: BoxDecoration(
                 color: theme.pillBackground,
                 borderRadius: BorderRadius.circular(20),
@@ -329,6 +330,38 @@ class ChunkWidget extends StatelessWidget {
           ),
           children: textSpans,
         ),
+        contextMenuBuilder: (context, editableTextState) {
+          final List<ContextMenuButtonItem> buttonItems =
+              editableTextState.contextMenuButtonItems;
+          final selectedText = editableTextState.textEditingValue.selection
+              .textInside(editableTextState.textEditingValue.text);
+          if (selectedText.trim().isNotEmpty) {
+            buttonItems.insert(
+              0,
+              ContextMenuButtonItem(
+                label: 'Save Quote',
+                onPressed: () {
+                  editableTextState.hideToolbar();
+                  if (onSaveQuote != null) onSaveQuote!();
+                },
+              ),
+            );
+            buttonItems.insert(
+              1,
+              ContextMenuButtonItem(
+                label: 'Ask Athena',
+                onPressed: () {
+                  editableTextState.hideToolbar();
+                  onAsk();
+                },
+              ),
+            );
+          }
+          return AdaptiveTextSelectionToolbar.buttonItems(
+            anchors: editableTextState.contextMenuAnchors,
+            buttonItems: buttonItems,
+          );
+        },
       ),
     );
 
@@ -388,8 +421,7 @@ class ChunkWidget extends StatelessWidget {
             },
             child: Container(
               constraints: const BoxConstraints(minHeight: 36),
-              padding:
-                  const EdgeInsets.symmetric(horizontal: 12, vertical: 7),
+              padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 7),
               decoration: BoxDecoration(
                 color: theme.pillBackground,
                 borderRadius: BorderRadius.circular(20),
@@ -419,6 +451,49 @@ class ChunkWidget extends StatelessWidget {
               ),
             ),
           ),
+          if (onSaveQuote != null) ...[
+            const SizedBox(width: 8),
+            InkWell(
+              borderRadius: BorderRadius.circular(20),
+              onTap: () {
+                HapticFeedback.selectionClick();
+                onSaveQuote!();
+              },
+              child: Container(
+                constraints: const BoxConstraints(minHeight: 36),
+                padding:
+                    const EdgeInsets.symmetric(horizontal: 12, vertical: 7),
+                decoration: BoxDecoration(
+                  color: theme.pillBackground,
+                  borderRadius: BorderRadius.circular(20),
+                  border: Border.all(
+                    color: theme.borderColor,
+                    width: 1,
+                  ),
+                ),
+                child: Row(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    Icon(
+                      Icons.bookmark_add_outlined,
+                      size: 14,
+                      color: theme.accentColor,
+                    ),
+                    const SizedBox(width: 5),
+                    Text(
+                      'Save Quote',
+                      style: TextStyle(
+                        fontFamily: AppTheme.fontUI,
+                        fontSize: 11.5,
+                        fontWeight: FontWeight.w600,
+                        color: theme.textColor,
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            ),
+          ],
         ],
       ),
     );
@@ -475,4 +550,3 @@ class ChunkWidget extends StatelessWidget {
     );
   }
 }
-

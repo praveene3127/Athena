@@ -30,12 +30,13 @@ class OriginalPageSheet extends StatelessWidget {
       isScrollControlled: true,
       backgroundColor: Colors.transparent,
       builder: (context) => Padding(
-        padding: EdgeInsets.only(bottom: MediaQuery.viewInsetsOf(context).bottom),
+        padding:
+            EdgeInsets.only(bottom: MediaQuery.viewInsetsOf(context).bottom),
         child: OriginalPageSheet(
-        documentId: documentId,
-        pageNumber: pageNumber,
-        pageReference: pageReference,
-        apiClient: apiClient,
+          documentId: documentId,
+          pageNumber: pageNumber,
+          pageReference: pageReference,
+          apiClient: apiClient,
         ),
       ),
     );
@@ -64,7 +65,9 @@ class OriginalPageSheet extends StatelessWidget {
                 height: 4,
                 margin: const EdgeInsets.only(top: 10, bottom: 6),
                 decoration: BoxDecoration(
-                  color: isDark ? const Color(0xFF333333) : const Color(0xFFE0E0E0),
+                  color: isDark
+                      ? const Color(0xFF333333)
+                      : const Color(0xFFE0E0E0),
                   borderRadius: BorderRadius.circular(2),
                 ),
               ),
@@ -74,7 +77,8 @@ class OriginalPageSheet extends StatelessWidget {
               padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
               decoration: BoxDecoration(
                 border: Border(
-                  bottom: BorderSide(color: AppTheme.borderOf(context), width: 1),
+                  bottom:
+                      BorderSide(color: AppTheme.borderOf(context), width: 1),
                 ),
               ),
               child: Row(
@@ -99,7 +103,8 @@ class OriginalPageSheet extends StatelessWidget {
                   IconButton(
                     icon: Icon(
                       Icons.close_rounded,
-                      color: isDark ? AppTheme.darkTextMuted : AppTheme.textMuted,
+                      color:
+                          isDark ? AppTheme.darkTextMuted : AppTheme.textMuted,
                       size: 20,
                     ),
                     tooltip: 'Close original page',
@@ -150,7 +155,9 @@ class OriginalPageSheet extends StatelessWidget {
                               'Rendering high-res page...',
                               style: TextStyle(
                                 fontFamily: AppTheme.fontUI,
-                                color: isDark ? AppTheme.darkTextMuted : AppTheme.textMuted,
+                                color: isDark
+                                    ? AppTheme.darkTextMuted
+                                    : AppTheme.textMuted,
                                 fontSize: 13,
                               ),
                             ),
@@ -181,7 +188,9 @@ class OriginalPageSheet extends StatelessWidget {
                                 error.toString(),
                                 style: TextStyle(
                                   fontFamily: AppTheme.fontUI,
-                                  color: isDark ? AppTheme.darkTextMuted : AppTheme.textMuted,
+                                  color: isDark
+                                      ? AppTheme.darkTextMuted
+                                      : AppTheme.textMuted,
                                   fontSize: 12,
                                 ),
                                 textAlign: TextAlign.center,

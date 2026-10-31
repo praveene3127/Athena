@@ -97,8 +97,7 @@ class AppTheme {
   static Color hairlineOf(BuildContext context) =>
       isDark(context) ? darkHairline : hairline;
 
-  static Color inkOf(BuildContext context) =>
-      isDark(context) ? darkInk : ink;
+  static Color inkOf(BuildContext context) => isDark(context) ? darkInk : ink;
 
   static Color textPrimaryOf(BuildContext context) =>
       isDark(context) ? darkTextPrimary : textPrimary;

@@ -410,7 +410,8 @@ class ApiClient {
     if (AppConfig.apiBaseUrl.isEmpty) {
       throw const AppError(
         code: 'NETWORK_REQUIRED',
-        message: 'Importing via URL requires a connection to the Athena server.',
+        message:
+            'Importing via URL requires a connection to the Athena server.',
       );
     }
     try {
@@ -422,6 +423,55 @@ class ApiClient {
     } on DioException catch (e) {
       throw _handleDioError(e);
     }
+  }
+
+  Future<List<Map<String, dynamic>>> searchDocument(
+    String docId,
+    String query, {
+    int topK = 8,
+  }) async {
+    final trimmed = query.trim();
+    if (trimmed.isEmpty) return [];
+
+    if (AppConfig.apiBaseUrl.isNotEmpty) {
+      try {
+        final response = await dio.get(
+          '/api/documents/$docId/search',
+          queryParameters: {'q': trimmed, 'top_k': topK},
+        );
+        if (response.data is Map &&
+            (response.data as Map).containsKey('results')) {
+          return List<Map<String, dynamic>>.from(
+              response.data['results'] as List);
+        } else if (response.data is List) {
+          return List<Map<String, dynamic>>.from(response.data as List);
+        }
+      } catch (_) {}
+    }
+
+    // Local substring search fallback over cached chunks if offline
+    final cached = await _loadCachedReader(docId);
+    final results = <Map<String, dynamic>>[];
+    if (cached != null && cached['chunks'] is List) {
+      final qLower = trimmed.toLowerCase();
+      final chunks = cached['chunks'] as List;
+      for (int i = 0; i < chunks.length; i++) {
+        final c = chunks[i];
+        if (c is! Map) continue;
+        final text = (c['text'] ?? c['raw_text'] ?? '').toString();
+        if (text.toLowerCase().contains(qLower)) {
+          results.add({
+            'chunk_id': c['id']?.toString() ?? '',
+            'sequence': c['sequence'] ?? i,
+            'section_title': c['section_title'] ?? '',
+            'raw_text': text,
+            'rrf_score': 1.0,
+          });
+          if (results.length >= topK) break;
+        }
+      }
+    }
+    return results;
   }
 
   Future<void> _cacheDocumentsLocally(List<Map<String, dynamic>> list) async {
@@ -443,8 +493,10 @@ class ApiClient {
             'page_count': (doc['page_count'] as num?)?.toInt() ?? 0,
             'processed_page': (doc['page_count'] as num?)?.toInt() ?? 0,
             'file_path': 'cached://$docId',
-            'created_at': doc['created_at']?.toString() ?? DateTime.now().toIso8601String(),
-            'updated_at': doc['updated_at']?.toString() ?? DateTime.now().toIso8601String(),
+            'created_at': doc['created_at']?.toString() ??
+                DateTime.now().toIso8601String(),
+            'updated_at': doc['updated_at']?.toString() ??
+                DateTime.now().toIso8601String(),
           });
         }
       }
@@ -467,7 +519,8 @@ class ApiClient {
     return [];
   }
 
-  Future<void> _cacheReaderLocally(String docId, Map<String, dynamic> data) async {
+  Future<void> _cacheReaderLocally(
+      String docId, Map<String, dynamic> data) async {
     try {
       final prefs = await SharedPreferences.getInstance();
       await prefs.setString('reader_cache_$docId', jsonEncode(data));
@@ -483,7 +536,8 @@ class ApiClient {
               'document_id': docId,
               'sequence': seq,
               'section_title': map['section_title']?.toString(),
-              'raw_text': map['raw_text']?.toString() ?? map['text']?.toString() ?? '',
+              'raw_text':
+                  map['raw_text']?.toString() ?? map['text']?.toString() ?? '',
               'source_pages_json': jsonEncode(map['source_pages'] ?? [1]),
               'start_offset': (map['start_offset'] as num?)?.toInt() ?? 0,
               'end_offset': (map['end_offset'] as num?)?.toInt() ?? 0,
@@ -507,15 +561,18 @@ class ApiClient {
               'title': map['title']?.toString() ?? '',
               'body': map['body']?.toString() ?? '',
               'why_here': map['why_here']?.toString() ?? '',
-              'citations_json': map['citations_json']?.toString() ?? jsonEncode(map['citations'] ?? []),
+              'citations_json': map['citations_json']?.toString() ??
+                  jsonEncode(map['citations'] ?? []),
               'exact_quote': map['exact_quote']?.toString(),
               'support_status': 'fully_supported',
               'canonical_sha256': map['canonical_sha256']?.toString() ?? '',
               'generation_mode': 'grounded',
               'verified': 1,
               'saved': (map['saved'] == true || map['saved'] == 1) ? 1 : 0,
-              'dismissed': (map['dismissed'] == true || map['dismissed'] == 1) ? 1 : 0,
-              'created_at': map['created_at']?.toString() ?? DateTime.now().toIso8601String(),
+              'dismissed':
+                  (map['dismissed'] == true || map['dismissed'] == 1) ? 1 : 0,
+              'created_at': map['created_at']?.toString() ??
+                  DateTime.now().toIso8601String(),
             };
           }).toList();
           await LocalDatabase.instance.insertCards(cardMaps);

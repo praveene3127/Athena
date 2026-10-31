@@ -334,8 +334,7 @@ class _ConnectionSetupScreenState extends State<ConnectionSetupScreen> {
                           spacing: 8,
                           runSpacing: 6,
                           children: [
-                            _buildPresetChip(
-                                'Localhost (USB / this PC)',
+                            _buildPresetChip('Localhost (USB / this PC)',
                                 'http://127.0.0.1:8000'),
                             _buildPresetChip(
                                 'Android emulator', 'http://10.0.2.2:8000'),

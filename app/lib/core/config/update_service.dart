@@ -3,7 +3,8 @@ import 'package:flutter/foundation.dart';
 import 'package:url_launcher/url_launcher.dart';
 import 'config.dart';
 
-const String kAthenaAppVersion = String.fromEnvironment('ATHENA_VERSION', defaultValue: '1.1.0');
+const String kAthenaAppVersion =
+    String.fromEnvironment('ATHENA_VERSION', defaultValue: '1.1.0');
 
 String detectDevicePlatform([TargetPlatform? overridePlatform]) {
   final platform = overridePlatform ?? defaultTargetPlatform;
@@ -65,7 +66,9 @@ class UpdateInfo {
       releaseNotes: json['release_notes']?.toString() ?? '',
       publishedAt: json['published_at']?.toString() ?? '',
       android: UpdatePlatformArtifact.fromJson(
-        json['android'] is Map ? Map<String, dynamic>.from(json['android'] as Map) : {},
+        json['android'] is Map
+            ? Map<String, dynamic>.from(json['android'] as Map)
+            : {},
       ),
       ios: UpdatePlatformArtifact.fromJson(
         json['ios'] is Map ? Map<String, dynamic>.from(json['ios'] as Map) : {},
@@ -88,7 +91,8 @@ class UpdateService {
     String? clientVersion,
     TargetPlatform? platformOverride,
   }) async {
-    final base = (baseUrl ?? AppConfig.apiBaseUrl).replaceAll(RegExp(r'/+$'), '');
+    final base =
+        (baseUrl ?? AppConfig.apiBaseUrl).replaceAll(RegExp(r'/+$'), '');
     final version = clientVersion ?? kAthenaAppVersion;
     final platform = detectDevicePlatform(platformOverride);
 
@@ -101,7 +105,8 @@ class UpdateService {
         },
       );
       if (response.statusCode == 200 && response.data is Map) {
-        return UpdateInfo.fromJson(Map<String, dynamic>.from(response.data as Map));
+        return UpdateInfo.fromJson(
+            Map<String, dynamic>.from(response.data as Map));
       }
     } catch (_) {
       // Offline or network error: return null gracefully without crashing
@@ -116,7 +121,8 @@ class UpdateService {
     bool useAltStore = false,
     String? baseUrl,
   }) async {
-    final base = (baseUrl ?? AppConfig.apiBaseUrl).replaceAll(RegExp(r'/+$'), '');
+    final base =
+        (baseUrl ?? AppConfig.apiBaseUrl).replaceAll(RegExp(r'/+$'), '');
     String targetUrl;
 
     if (platform == 'android') {
@@ -125,7 +131,9 @@ class UpdateService {
           : updateInfo.android.githubReleaseUrl;
       targetUrl = raw.startsWith('http') ? raw : '$base$raw';
     } else if (platform == 'ios') {
-      if (useAltStore && updateInfo.ios.altstoreUrl != null && updateInfo.ios.altstoreUrl!.isNotEmpty) {
+      if (useAltStore &&
+          updateInfo.ios.altstoreUrl != null &&
+          updateInfo.ios.altstoreUrl!.isNotEmpty) {
         targetUrl = updateInfo.ios.altstoreUrl!;
       } else {
         final raw = updateInfo.ios.downloadUrl.isNotEmpty

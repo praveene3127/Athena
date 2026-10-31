@@ -123,7 +123,9 @@ class _EditorialNavTab extends StatelessWidget {
               size: 16,
               color: isSelected
                   ? (isDark ? Colors.white : AppTheme.ink)
-                  : (isDark ? const Color(0xFF888884) : const Color(0xFF767672)),
+                  : (isDark
+                      ? const Color(0xFF888884)
+                      : const Color(0xFF767672)),
             ),
             const SizedBox(width: 8),
             Text(
@@ -132,7 +134,9 @@ class _EditorialNavTab extends StatelessWidget {
                 fontFamily: AppTheme.fontUI,
                 color: isSelected
                     ? (isDark ? Colors.white : AppTheme.ink)
-                    : (isDark ? const Color(0xFF888884) : const Color(0xFF767672)),
+                    : (isDark
+                        ? const Color(0xFF888884)
+                        : const Color(0xFF767672)),
                 fontSize: 11,
                 fontWeight: isSelected ? FontWeight.w700 : FontWeight.w600,
                 letterSpacing: 0.8,
@@ -189,14 +193,17 @@ class _CenterActionButtonState extends State<_CenterActionButton> {
               Icon(
                 Icons.add_rounded,
                 size: 15,
-                color: isDark ? const Color(0xFF161615) : const Color(0xFFFBF9F5),
+                color:
+                    isDark ? const Color(0xFF161615) : const Color(0xFFFBF9F5),
               ),
               const SizedBox(width: 6),
               Text(
                 'ADD BOOK',
                 style: TextStyle(
                   fontFamily: AppTheme.fontUI,
-                  color: isDark ? const Color(0xFF161615) : const Color(0xFFFBF9F5),
+                  color: isDark
+                      ? const Color(0xFF161615)
+                      : const Color(0xFFFBF9F5),
                   fontSize: 11,
                   fontWeight: FontWeight.w700,
                   letterSpacing: 0.8,

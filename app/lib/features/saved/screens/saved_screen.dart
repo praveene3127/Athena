@@ -197,7 +197,8 @@ class _SavedScreenState extends ConsumerState<SavedScreen> {
               color: isDark ? const Color(0xFF202020) : Colors.white,
               borderRadius: BorderRadius.circular(24),
               border: Border.all(
-                color: isDark ? const Color(0xFF2E2E2E) : const Color(0xFFECEEE4),
+                color:
+                    isDark ? const Color(0xFF2E2E2E) : const Color(0xFFECEEE4),
                 width: 1.0,
               ),
             ),
@@ -211,7 +212,8 @@ class _SavedScreenState extends ConsumerState<SavedScreen> {
                       width: 40,
                       height: 40,
                       decoration: BoxDecoration(
-                        color: Colors.redAccent.withValues(alpha: isDark ? 0.2 : 0.1),
+                        color: Colors.redAccent
+                            .withValues(alpha: isDark ? 0.2 : 0.1),
                         borderRadius: BorderRadius.circular(12),
                         border: Border.all(
                           color: Colors.redAccent.withValues(alpha: 0.3),
@@ -257,7 +259,9 @@ class _SavedScreenState extends ConsumerState<SavedScreen> {
                         style: OutlinedButton.styleFrom(
                           foregroundColor: isDark ? Colors.white : AppTheme.ink,
                           side: BorderSide(
-                            color: isDark ? const Color(0xFF333333) : const Color(0xFFE0E0E0),
+                            color: isDark
+                                ? const Color(0xFF333333)
+                                : const Color(0xFFE0E0E0),
                           ),
                           shape: RoundedRectangleBorder(
                             borderRadius: BorderRadius.circular(14),
@@ -340,10 +344,13 @@ class _SavedScreenState extends ConsumerState<SavedScreen> {
                 color: isDark ? const Color(0xFF202020) : Colors.white,
                 shape: BoxShape.circle,
                 border: Border.all(
-                    color: isDark ? const Color(0xFF2E2E2E) : const Color(0xFFE5E7DC)),
+                    color: isDark
+                        ? const Color(0xFF2E2E2E)
+                        : const Color(0xFFE5E7DC)),
               ),
               child: Icon(Icons.arrow_back_rounded,
-                  color: isDark ? const Color(0xFFF3F3F3) : AppTheme.ink, size: 18),
+                  color: isDark ? const Color(0xFFF3F3F3) : AppTheme.ink,
+                  size: 18),
             ),
             tooltip: 'Back to Library',
             onPressed: () => context.go('/'),
@@ -380,14 +387,17 @@ class _SavedScreenState extends ConsumerState<SavedScreen> {
                   padding: const EdgeInsets.all(7),
                   margin: const EdgeInsets.only(right: 16),
                   decoration: BoxDecoration(
-                    color: isDark ? const Color(0xFF202020) : AppTheme.surfaceWarm,
+                    color:
+                        isDark ? const Color(0xFF202020) : AppTheme.surfaceWarm,
                     borderRadius: BorderRadius.circular(10),
                     border: Border.all(
                       color: isDark ? const Color(0xFF2E2E2E) : AppTheme.border,
                     ),
                   ),
                   child: Icon(
-                    isDark ? Icons.light_mode_outlined : Icons.dark_mode_outlined,
+                    isDark
+                        ? Icons.light_mode_outlined
+                        : Icons.dark_mode_outlined,
                     size: 16,
                     color: isDark ? Colors.amberAccent : AppTheme.ink,
                   ),
@@ -416,7 +426,8 @@ class _SavedScreenState extends ConsumerState<SavedScreen> {
                         borderRadius: BorderRadius.circular(20),
                         border: Border.all(
                             color: isDark
-                                ? const Color(0xFF005E54).withValues(alpha: 0.45)
+                                ? const Color(0xFF005E54)
+                                    .withValues(alpha: 0.45)
                                 : const Color(0xFFDCE2D0)),
                       ),
                       child: Center(
@@ -443,7 +454,9 @@ class _SavedScreenState extends ConsumerState<SavedScreen> {
                       textAlign: TextAlign.center,
                       style: TextStyle(
                         fontFamily: AppTheme.fontReading,
-                        color: isDark ? const Color(0xFF9E9E9E) : AppTheme.textMuted,
+                        color: isDark
+                            ? const Color(0xFF9E9E9E)
+                            : AppTheme.textMuted,
                         fontSize: 14,
                         height: 1.5,
                       ),
@@ -483,15 +496,20 @@ class _SavedScreenState extends ConsumerState<SavedScreen> {
                     // Outer Shell
                     padding: const EdgeInsets.all(4),
                     decoration: BoxDecoration(
-                      color: isDark ? const Color(0xFF181818) : const Color(0xFFF7F6F2),
+                      color: isDark
+                          ? const Color(0xFF181818)
+                          : const Color(0xFFF7F6F2),
                       borderRadius: BorderRadius.circular(26),
                       border: Border.all(
-                        color: isDark ? const Color(0xFF282828) : const Color(0xFFE8EAE0),
+                        color: isDark
+                            ? const Color(0xFF282828)
+                            : const Color(0xFFE8EAE0),
                         width: 1.0,
                       ),
                       boxShadow: [
                         BoxShadow(
-                          color: isDark ? Colors.black26 : const Color(0x06141714),
+                          color:
+                              isDark ? Colors.black26 : const Color(0x06141714),
                           blurRadius: 18,
                           offset: const Offset(0, 4),
                         ),
@@ -511,12 +529,14 @@ class _SavedScreenState extends ConsumerState<SavedScreen> {
                             height: 48,
                             decoration: BoxDecoration(
                               color: isDark
-                                  ? const Color(0xFF005E54).withValues(alpha: 0.25)
+                                  ? const Color(0xFF005E54)
+                                      .withValues(alpha: 0.25)
                                   : const Color(0xFFF2F4EB),
                               borderRadius: BorderRadius.circular(16),
                               border: Border.all(
                                   color: isDark
-                                      ? const Color(0xFF005E54).withValues(alpha: 0.45)
+                                      ? const Color(0xFF005E54)
+                                          .withValues(alpha: 0.45)
                                       : const Color(0xFFDCE2D0)),
                             ),
                             child: Center(
@@ -538,7 +558,9 @@ class _SavedScreenState extends ConsumerState<SavedScreen> {
                                   'Ideas Worth Keeping',
                                   style: TextStyle(
                                     fontFamily: AppTheme.fontDisplay,
-                                    color: isDark ? const Color(0xFFF3F3F3) : AppTheme.ink,
+                                    color: isDark
+                                        ? const Color(0xFFF3F3F3)
+                                        : AppTheme.ink,
                                     fontSize: 22,
                                     fontWeight: FontWeight.w400,
                                     letterSpacing: -0.2,
@@ -549,7 +571,9 @@ class _SavedScreenState extends ConsumerState<SavedScreen> {
                                   '${cards.length} saved ${cards.length == 1 ? 'note & citation' : 'notes & citations'}',
                                   style: TextStyle(
                                     fontFamily: AppTheme.fontUI,
-                                    color: isDark ? const Color(0xFF9E9E9E) : AppTheme.textMuted,
+                                    color: isDark
+                                        ? const Color(0xFF9E9E9E)
+                                        : AppTheme.textMuted,
                                     fontSize: 12.5,
                                     fontWeight: FontWeight.w500,
                                   ),
@@ -569,7 +593,9 @@ class _SavedScreenState extends ConsumerState<SavedScreen> {
                       color: isDark ? const Color(0xFF202020) : Colors.white,
                       borderRadius: BorderRadius.circular(16),
                       border: Border.all(
-                          color: isDark ? const Color(0xFF2E2E2E) : const Color(0xFFE5E7DC),
+                          color: isDark
+                              ? const Color(0xFF2E2E2E)
+                              : const Color(0xFFE5E7DC),
                           width: 1.0),
                     ),
                     padding: const EdgeInsets.symmetric(horizontal: 14),
@@ -577,7 +603,9 @@ class _SavedScreenState extends ConsumerState<SavedScreen> {
                       children: [
                         Icon(Icons.search_rounded,
                             size: 18,
-                            color: isDark ? const Color(0xFF757575) : AppTheme.textMuted),
+                            color: isDark
+                                ? const Color(0xFF757575)
+                                : AppTheme.textMuted),
                         const SizedBox(width: 10),
                         Expanded(
                           child: TextField(
@@ -585,14 +613,18 @@ class _SavedScreenState extends ConsumerState<SavedScreen> {
                             style: TextStyle(
                               fontFamily: AppTheme.fontUI,
                               fontSize: 13,
-                              color: isDark ? const Color(0xFFF3F3F3) : AppTheme.ink,
+                              color: isDark
+                                  ? const Color(0xFFF3F3F3)
+                                  : AppTheme.ink,
                             ),
                             decoration: InputDecoration(
                               hintText: 'Search saved notes & citations...',
                               hintStyle: TextStyle(
                                 fontFamily: AppTheme.fontUI,
                                 fontSize: 13,
-                                color: isDark ? const Color(0xFF757575) : const Color(0xFF9E9E9E),
+                                color: isDark
+                                    ? const Color(0xFF757575)
+                                    : const Color(0xFF9E9E9E),
                               ),
                               border: InputBorder.none,
                               isDense: true,
@@ -609,7 +641,9 @@ class _SavedScreenState extends ConsumerState<SavedScreen> {
                           IconButton(
                             icon: Icon(Icons.close_rounded,
                                 size: 16,
-                                color: isDark ? const Color(0xFF9E9E9E) : AppTheme.textMuted),
+                                color: isDark
+                                    ? const Color(0xFF9E9E9E)
+                                    : AppTheme.textMuted),
                             padding: EdgeInsets.zero,
                             constraints: const BoxConstraints(),
                             onPressed: () {
@@ -630,7 +664,9 @@ class _SavedScreenState extends ConsumerState<SavedScreen> {
                         'No saved notes match "$_searchQuery"',
                         style: TextStyle(
                           fontFamily: AppTheme.fontUI,
-                          color: isDark ? const Color(0xFF9E9E9E) : AppTheme.textMuted,
+                          color: isDark
+                              ? const Color(0xFF9E9E9E)
+                              : AppTheme.textMuted,
                           fontSize: 13,
                         ),
                       ),
@@ -650,7 +686,9 @@ class _SavedScreenState extends ConsumerState<SavedScreen> {
                           child: Row(
                             children: [
                               Icon(Icons.description_outlined,
-                                  color: isDark ? const Color(0xFF2DD4BF) : const Color(0xFF005E54),
+                                  color: isDark
+                                      ? const Color(0xFF2DD4BF)
+                                      : const Color(0xFF005E54),
                                   size: 16),
                               const SizedBox(width: 8),
                               Expanded(
@@ -658,7 +696,9 @@ class _SavedScreenState extends ConsumerState<SavedScreen> {
                                   docTitle,
                                   style: TextStyle(
                                     fontFamily: AppTheme.fontDisplay,
-                                    color: isDark ? const Color(0xFFF3F3F3) : AppTheme.textPrimary,
+                                    color: isDark
+                                        ? const Color(0xFFF3F3F3)
+                                        : AppTheme.textPrimary,
                                     fontWeight: FontWeight.w400,
                                     fontSize: 18,
                                     letterSpacing: 0.1,
@@ -681,15 +721,21 @@ class _SavedScreenState extends ConsumerState<SavedScreen> {
                             // Outer Shell
                             padding: const EdgeInsets.all(3),
                             decoration: BoxDecoration(
-                              color: isDark ? const Color(0xFF181818) : const Color(0xFFF7F6F2),
+                              color: isDark
+                                  ? const Color(0xFF181818)
+                                  : const Color(0xFFF7F6F2),
                               borderRadius: BorderRadius.circular(22),
                               border: Border.all(
-                                color: isDark ? const Color(0xFF282828) : const Color(0xFFE5E7DC),
+                                color: isDark
+                                    ? const Color(0xFF282828)
+                                    : const Color(0xFFE5E7DC),
                                 width: 1.0,
                               ),
                               boxShadow: [
                                 BoxShadow(
-                                  color: isDark ? Colors.black26 : const Color(0x06141714),
+                                  color: isDark
+                                      ? Colors.black26
+                                      : const Color(0x06141714),
                                   blurRadius: 12,
                                   offset: const Offset(0, 3),
                                 ),
@@ -699,7 +745,9 @@ class _SavedScreenState extends ConsumerState<SavedScreen> {
                               // Inner Core
                               padding: const EdgeInsets.all(18),
                               decoration: BoxDecoration(
-                                color: isDark ? const Color(0xFF202020) : Colors.white,
+                                color: isDark
+                                    ? const Color(0xFF202020)
+                                    : Colors.white,
                                 borderRadius: BorderRadius.circular(19),
                               ),
                               child: Column(
@@ -713,7 +761,8 @@ class _SavedScreenState extends ConsumerState<SavedScreen> {
                                             horizontal: 8, vertical: 3),
                                         decoration: BoxDecoration(
                                           color: isDark
-                                              ? const Color(0xFF005E54).withValues(alpha: 0.25)
+                                              ? const Color(0xFF005E54)
+                                                  .withValues(alpha: 0.25)
                                               : const Color(0xFFF2F4EB),
                                           borderRadius:
                                               BorderRadius.circular(16),
@@ -735,7 +784,9 @@ class _SavedScreenState extends ConsumerState<SavedScreen> {
                                       IconButton(
                                         icon: Icon(
                                             Icons.bookmark_remove_outlined,
-                                            color: isDark ? const Color(0xFF9E9E9E) : AppTheme.textMuted,
+                                            color: isDark
+                                                ? const Color(0xFF9E9E9E)
+                                                : AppTheme.textMuted,
                                             size: 18),
                                         tooltip: 'Remove from saved',
                                         constraints: const BoxConstraints(
@@ -756,7 +807,9 @@ class _SavedScreenState extends ConsumerState<SavedScreen> {
                                     card.title,
                                     style: TextStyle(
                                       fontFamily: AppTheme.fontDisplay,
-                                      color: isDark ? const Color(0xFFF3F3F3) : AppTheme.textPrimary,
+                                      color: isDark
+                                          ? const Color(0xFFF3F3F3)
+                                          : AppTheme.textPrimary,
                                       fontWeight: FontWeight.w400,
                                       fontSize: 17,
                                       height: 1.25,
@@ -771,7 +824,9 @@ class _SavedScreenState extends ConsumerState<SavedScreen> {
                                     overflow: TextOverflow.ellipsis,
                                     style: TextStyle(
                                       fontFamily: AppTheme.fontReading,
-                                      color: isDark ? const Color(0xFFB0B0B0) : const Color(0xFF4A4F48),
+                                      color: isDark
+                                          ? const Color(0xFFB0B0B0)
+                                          : const Color(0xFF4A4F48),
                                       fontSize: 13.5,
                                       height: 1.5,
                                     ),
@@ -790,7 +845,9 @@ class _SavedScreenState extends ConsumerState<SavedScreen> {
                                           padding: const EdgeInsets.fromLTRB(
                                               14, 6, 6, 6),
                                           decoration: BoxDecoration(
-                                            color: isDark ? Colors.white : const Color(0xFF141714),
+                                            color: isDark
+                                                ? Colors.white
+                                                : const Color(0xFF141714),
                                             borderRadius:
                                                 BorderRadius.circular(22),
                                           ),
@@ -801,7 +858,9 @@ class _SavedScreenState extends ConsumerState<SavedScreen> {
                                                 'Open in reader',
                                                 style: TextStyle(
                                                   fontFamily: AppTheme.fontUI,
-                                                  color: isDark ? const Color(0xFF141714) : Colors.white,
+                                                  color: isDark
+                                                      ? const Color(0xFF141714)
+                                                      : Colors.white,
                                                   fontSize: 12,
                                                   fontWeight: FontWeight.w600,
                                                 ),
@@ -812,15 +871,21 @@ class _SavedScreenState extends ConsumerState<SavedScreen> {
                                                 height: 22,
                                                 decoration: BoxDecoration(
                                                   color: isDark
-                                                      ? const Color(0xFF141714).withValues(alpha: 0.12)
-                                                      : Colors.white.withValues(alpha: 0.18),
+                                                      ? const Color(0xFF141714)
+                                                          .withValues(
+                                                              alpha: 0.12)
+                                                      : Colors.white.withValues(
+                                                          alpha: 0.18),
                                                   shape: BoxShape.circle,
                                                 ),
                                                 child: Center(
                                                   child: Icon(
                                                     Icons.arrow_forward_rounded,
                                                     size: 13,
-                                                    color: isDark ? const Color(0xFF141714) : Colors.white,
+                                                    color: isDark
+                                                        ? const Color(
+                                                            0xFF141714)
+                                                        : Colors.white,
                                                   ),
                                                 ),
                                               ),
@@ -839,11 +904,16 @@ class _SavedScreenState extends ConsumerState<SavedScreen> {
                                             padding: const EdgeInsets.symmetric(
                                                 horizontal: 10, vertical: 6),
                                             decoration: BoxDecoration(
-                                              color: isDark ? const Color(0xFF181818) : const Color(0xFFF7F6F2),
+                                              color: isDark
+                                                  ? const Color(0xFF181818)
+                                                  : const Color(0xFFF7F6F2),
                                               borderRadius:
                                                   BorderRadius.circular(20),
                                               border: Border.all(
-                                                  color: isDark ? const Color(0xFF282828) : const Color(0xFFE5E7DC)),
+                                                  color: isDark
+                                                      ? const Color(0xFF282828)
+                                                      : const Color(
+                                                          0xFFE5E7DC)),
                                             ),
                                             child: Row(
                                               mainAxisSize: MainAxisSize.min,
@@ -852,7 +922,11 @@ class _SavedScreenState extends ConsumerState<SavedScreen> {
                                                   'Source',
                                                   style: TextStyle(
                                                     fontFamily: AppTheme.fontUI,
-                                                    color: isDark ? const Color(0xFF2DD4BF) : const Color(0xFF005E54),
+                                                    color: isDark
+                                                        ? const Color(
+                                                            0xFF2DD4BF)
+                                                        : const Color(
+                                                            0xFF005E54),
                                                     fontSize: 11.5,
                                                     fontWeight: FontWeight.w600,
                                                   ),
@@ -860,7 +934,11 @@ class _SavedScreenState extends ConsumerState<SavedScreen> {
                                                 const SizedBox(width: 4),
                                                 Icon(Icons.open_in_new_rounded,
                                                     size: 12,
-                                                    color: isDark ? const Color(0xFF2DD4BF) : const Color(0xFF005E54)),
+                                                    color: isDark
+                                                        ? const Color(
+                                                            0xFF2DD4BF)
+                                                        : const Color(
+                                                            0xFF005E54)),
                                               ],
                                             ),
                                           ),
@@ -882,7 +960,8 @@ class _SavedScreenState extends ConsumerState<SavedScreen> {
           );
         },
         loading: () => Center(
-          child: CircularProgressIndicator(color: isDark ? Colors.white : AppTheme.ink),
+          child: CircularProgressIndicator(
+              color: isDark ? Colors.white : AppTheme.ink),
         ),
         error: (err, _) => Center(
           child: Padding(
@@ -926,7 +1005,8 @@ class _SavedScreenState extends ConsumerState<SavedScreen> {
                   textAlign: TextAlign.center,
                   style: TextStyle(
                     fontFamily: AppTheme.fontReading,
-                    color: isDark ? const Color(0xFF9E9E9E) : AppTheme.textMuted,
+                    color:
+                        isDark ? const Color(0xFF9E9E9E) : AppTheme.textMuted,
                     fontSize: 14,
                     height: 1.5,
                   ),
@@ -938,7 +1018,8 @@ class _SavedScreenState extends ConsumerState<SavedScreen> {
                   label: const Text('Try Again'),
                   style: ElevatedButton.styleFrom(
                     backgroundColor: isDark ? Colors.white : AppTheme.ink,
-                    foregroundColor: isDark ? const Color(0xFF141714) : Colors.white,
+                    foregroundColor:
+                        isDark ? const Color(0xFF141714) : Colors.white,
                     shape: RoundedRectangleBorder(
                       borderRadius: BorderRadius.circular(16),
                     ),

@@ -367,4 +367,59 @@ def test_vibe_check_endpoint_and_fallback():
         _clean_doc(doc_id)
 
 
+def test_search_document_endpoint():
+    from fastapi.testclient import TestClient
+    from app.main import app
+
+    client = TestClient(app)
+    unique_id = uuid.uuid4().hex[:8]
+    doc_id = f"test_search_{unique_id}"
+
+    try:
+        with Session(engine) as session:
+            doc = Document(id=doc_id, filename="search_book.pdf", title="Search Theory", status="ready")
+            session.add(doc)
+            chunk1 = ReadingChunk(
+                id=f"{doc_id}-c0001",
+                document_id=doc_id,
+                sequence=1,
+                raw_text="Thermodynamics is the branch of physics that deals with heat, work, and temperature.",
+                source_pages_json="[1]",
+                start_offset=0,
+                end_offset=86,
+                checksum="chk1",
+                canonical_sha256="fake_sha1",
+            )
+            chunk2 = ReadingChunk(
+                id=f"{doc_id}-c0002",
+                document_id=doc_id,
+                sequence=2,
+                raw_text="Cellular respiration is a set of metabolic reactions that convert nutrients into adenosine triphosphate.",
+                source_pages_json="[2]",
+                start_offset=87,
+                end_offset=192,
+                checksum="chk2",
+                canonical_sha256="fake_sha2",
+            )
+            session.add(chunk1)
+            session.add(chunk2)
+            session.commit()
+
+        # Empty query
+        res_empty = client.get(f"/api/documents/{doc_id}/search?q=")
+        assert res_empty.status_code == 200
+        assert res_empty.json()["results"] == []
+
+        # Matching query
+        res = client.get(f"/api/documents/{doc_id}/search?q=thermodynamics")
+        assert res.status_code == 200
+        data = res.json()
+        assert data["document_id"] == doc_id
+        assert len(data["results"]) >= 1
+        assert "thermodynamics" in data["results"][0]["raw_text"].lower()
+    finally:
+        _clean_doc(doc_id)
+
+
+
 

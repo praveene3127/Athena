@@ -151,12 +151,16 @@ class AthenaLogoTile extends StatelessWidget {
       case AthenaTileStyle.limePrimary:
         bgColor = isDark ? const Color(0xFF222222) : AppTheme.ink;
         markColor = Colors.white;
-        border = isDark ? Border.all(color: const Color(0xFF333333), width: 1.0) : null;
+        border = isDark
+            ? Border.all(color: const Color(0xFF333333), width: 1.0)
+            : null;
       case AthenaTileStyle.whiteInverse:
       case AthenaTileStyle.paperMinimal:
         bgColor = isDark ? const Color(0xFF181818) : Colors.white;
         markColor = isDark ? Colors.white : AppTheme.ink;
-        border = Border.all(color: isDark ? const Color(0xFF2E2E2E) : AppTheme.border, width: 1.0);
+        border = Border.all(
+            color: isDark ? const Color(0xFF2E2E2E) : AppTheme.border,
+            width: 1.0);
       case AthenaTileStyle.minimal:
         bgColor = Colors.transparent;
         markColor = isDark ? Colors.white : AppTheme.ink;

@@ -128,8 +128,9 @@ class _InternetAccessGateState extends State<InternetAccessGate>
                 // Outer Shell (Double-Bezel Architecture)
                 padding: const EdgeInsets.all(4),
                 decoration: BoxDecoration(
-                  color:
-                      isDark ? const Color(0xFF181818) : const Color(0xFFF7F6F2),
+                  color: isDark
+                      ? const Color(0xFF181818)
+                      : const Color(0xFFF7F6F2),
                   borderRadius: BorderRadius.circular(6),
                   border: Border.all(
                     color: isDark
@@ -215,7 +216,9 @@ class _InternetAccessGateState extends State<InternetAccessGate>
 
                       // Title
                       Text(
-                        _checking ? 'Checking Connection' : 'Connection Offline',
+                        _checking
+                            ? 'Checking Connection'
+                            : 'Connection Offline',
                         textAlign: TextAlign.center,
                         style: TextStyle(
                           fontFamily: AppTheme.fontDisplay,
