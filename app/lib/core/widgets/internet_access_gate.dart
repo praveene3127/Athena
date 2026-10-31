@@ -130,7 +130,7 @@ class _InternetAccessGateState extends State<InternetAccessGate>
                 decoration: BoxDecoration(
                   color:
                       isDark ? const Color(0xFF181818) : const Color(0xFFF7F6F2),
-                  borderRadius: BorderRadius.circular(28),
+                  borderRadius: BorderRadius.circular(6),
                   border: Border.all(
                     color: isDark
                         ? const Color(0xFF282828)
@@ -151,7 +151,7 @@ class _InternetAccessGateState extends State<InternetAccessGate>
                       const EdgeInsets.symmetric(horizontal: 24, vertical: 28),
                   decoration: BoxDecoration(
                     color: isDark ? const Color(0xFF202020) : Colors.white,
-                    borderRadius: BorderRadius.circular(24),
+                    borderRadius: BorderRadius.circular(6),
                   ),
                   child: Column(
                     mainAxisSize: MainAxisSize.min,
@@ -162,13 +162,13 @@ class _InternetAccessGateState extends State<InternetAccessGate>
                             horizontal: 10, vertical: 4.5),
                         decoration: BoxDecoration(
                           color: isDark
-                              ? const Color(0xFF2DD4BF).withValues(alpha: 0.15)
-                              : const Color(0xFF005E54).withValues(alpha: 0.08),
-                          borderRadius: BorderRadius.circular(20),
+                              ? const Color(0xFF2D6A4F).withValues(alpha: 0.15)
+                              : const Color(0xFF2D6A4F).withValues(alpha: 0.08),
+                          borderRadius: BorderRadius.circular(4),
                           border: Border.all(
                             color: isDark
-                                ? const Color(0xFF2DD4BF).withValues(alpha: 0.3)
-                                : const Color(0xFF005E54)
+                                ? const Color(0xFF2D6A4F).withValues(alpha: 0.3)
+                                : const Color(0xFF2D6A4F)
                                     .withValues(alpha: 0.2),
                           ),
                         ),
@@ -181,8 +181,8 @@ class _InternetAccessGateState extends State<InternetAccessGate>
                                   : Icons.wifi_off_rounded,
                               size: 13,
                               color: isDark
-                                  ? const Color(0xFF2DD4BF)
-                                  : const Color(0xFF005E54),
+                                  ? const Color(0xFF2D6A4F)
+                                  : const Color(0xFF2D6A4F),
                             ),
                             const SizedBox(width: 6),
                             Text(
@@ -193,8 +193,8 @@ class _InternetAccessGateState extends State<InternetAccessGate>
                                 fontWeight: FontWeight.w700,
                                 letterSpacing: 0.8,
                                 color: isDark
-                                    ? const Color(0xFF2DD4BF)
-                                    : const Color(0xFF005E54),
+                                    ? const Color(0xFF2D6A4F)
+                                    : const Color(0xFF2D6A4F),
                               ),
                             ),
                           ],
@@ -247,13 +247,13 @@ class _InternetAccessGateState extends State<InternetAccessGate>
                       // Primary Button: Try Again
                       InkWell(
                         onTap: _checking ? null : _checkInternet,
-                        borderRadius: BorderRadius.circular(24),
+                        borderRadius: BorderRadius.circular(6),
                         child: Container(
                           width: double.infinity,
                           padding: const EdgeInsets.symmetric(vertical: 13),
                           decoration: BoxDecoration(
                             color: isDark ? Colors.white : AppTheme.ink,
-                            borderRadius: BorderRadius.circular(24),
+                            borderRadius: BorderRadius.circular(6),
                             boxShadow: [
                               BoxShadow(
                                 color: isDark
@@ -312,7 +312,7 @@ class _InternetAccessGateState extends State<InternetAccessGate>
                           HapticFeedback.selectionClick();
                           setState(() => _online = true);
                         },
-                        borderRadius: BorderRadius.circular(24),
+                        borderRadius: BorderRadius.circular(6),
                         child: Container(
                           width: double.infinity,
                           padding: const EdgeInsets.symmetric(vertical: 12),
@@ -320,7 +320,7 @@ class _InternetAccessGateState extends State<InternetAccessGate>
                             color: isDark
                                 ? const Color(0xFF181818)
                                 : const Color(0xFFF7F6F2),
-                            borderRadius: BorderRadius.circular(24),
+                            borderRadius: BorderRadius.circular(6),
                             border: Border.all(
                               color: isDark
                                   ? const Color(0xFF282828)
@@ -370,8 +370,8 @@ class _InternetAccessGateState extends State<InternetAccessGate>
                           Icons.dns_outlined,
                           size: 14,
                           color: isDark
-                              ? const Color(0xFF2DD4BF)
-                              : const Color(0xFF005E54),
+                              ? const Color(0xFF2D6A4F)
+                              : const Color(0xFF2D6A4F),
                         ),
                         label: Text(
                           'Configure Backend Link',
@@ -380,8 +380,8 @@ class _InternetAccessGateState extends State<InternetAccessGate>
                             fontSize: 12,
                             fontWeight: FontWeight.w600,
                             color: isDark
-                                ? const Color(0xFF2DD4BF)
-                                : const Color(0xFF005E54),
+                                ? const Color(0xFF2D6A4F)
+                                : const Color(0xFF2D6A4F),
                           ),
                         ),
                       ),

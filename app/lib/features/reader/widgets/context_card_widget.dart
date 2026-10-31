@@ -258,7 +258,7 @@ class _ContextCardWidgetState extends State<ContextCardWidget> {
                     foregroundColor: Colors.white,
                     padding: const EdgeInsets.symmetric(vertical: 14),
                     shape: RoundedRectangleBorder(
-                      borderRadius: BorderRadius.circular(24),
+                      borderRadius: BorderRadius.circular(6),
                     ),
                     elevation: 0,
                   ),

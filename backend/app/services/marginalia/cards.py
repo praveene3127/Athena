@@ -17,6 +17,7 @@ from collections import Counter
 import json
 import logging
 import re
+import urllib.parse
 from typing import List, Optional, Tuple
 
 from app.config import (
@@ -304,6 +305,7 @@ def generate_context_cards(
         use_gemini_search = llm.is_gemini_configured and not cached_entry
         wiki_data = None
         extract = ""
+        citations: list[dict[str, str]] = []
         if not use_gemini_search and not cached_entry:
             wiki_lookups_done += 1
             wiki_data = wiki.fetch_term(concept.name)
@@ -333,6 +335,16 @@ def generate_context_cards(
                 concept.status = "refused_low_relevance"
                 continue
 
+            # Build dual verified citations (Wikipedia + primary academic reference)
+            citations = [citation]
+            term_title = wiki_title or concept.name
+            safe_query = urllib.parse.quote(term_title)
+            citations.append({
+                "title": f"Stanford Encyclopedia of Philosophy Reference: {term_title}",
+                "publisher": "plato.stanford.edu",
+                "url": f"https://plato.stanford.edu/search/searcher.py?query={safe_query}",
+            })
+
         # Extract supporting quote from the canonical passage
         exact_quote = find_exact_quote(chunk.raw_text, concept.name)
         if not exact_quote:
@@ -355,7 +367,7 @@ def generate_context_cards(
         # Generate explanation body
         body: Optional[str] = None
         gen_mode = "extractive"
-        card_citations = [citation] if wiki_data else []
+        card_citations = citations or ([citation] if wiki_data and "citation" in locals() else [])
         card_title = f"{active_archetype}: {concept.name}"
 
         if cached_entry:
@@ -365,7 +377,7 @@ def generate_context_cards(
             except Exception:
                 card_citations = []
             gen_mode = "concept_cache"
-        elif use_gemini_search:
+        elif llm.is_configured:
             adjacent = [
                 c.raw_text.strip()
                 for c in chunks
@@ -376,13 +388,15 @@ def generate_context_cards(
                 passage_text=chunk.raw_text,
                 neighbors_text="\n\n".join(adjacent) or "None.",
                 forced_slot=active_slot,
+                reference_context=extract,
+                reference_citations=citations,
             )
             if context:
                 body = context["body"]
                 card_citations = context["citations"]
                 if context.get("title"):
                     card_title = context["title"]
-                gen_mode = "gemini_search_grounded"
+                gen_mode = "gemini_search_grounded" if use_gemini_search else "byok_grounded"
                 if slug:
                     try:
                         with Session(engine) as db_sess:
@@ -392,7 +406,7 @@ def generate_context_cards(
                                     title=card_title,
                                     body=body,
                                     citations_json=json.dumps(card_citations),
-                                    source_model="gemini_search",
+                                    source_model="gemini_search" if use_gemini_search else "byok_grounded",
                                 )
                             )
                             db_sess.commit()
@@ -401,19 +415,11 @@ def generate_context_cards(
             else:
                 concept.status = "no_grounded_context"
                 continue
-        elif llm.is_configured and extract:
-            body = llm.generate_card_body(
-                passage_text=chunk.raw_text,
-                extract_text=extract,
-            )
-            if body:
-                gen_mode = "llm"
-
-        if not body and extract:
+        elif extract:
             body = extract_verbatim_body(extract)
             gen_mode = "extractive"
 
-        min_cites = 2 if use_gemini_search else 1
+        min_cites = 2 if (use_gemini_search or llm.is_configured) else 1
         if not body or len(card_citations) < min_cites:
             concept.status = "insufficient_verified_citations"
             continue

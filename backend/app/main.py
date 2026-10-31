@@ -14,8 +14,8 @@ from app.config import is_llm_configured
 from app.db import init_db
 from app.errors import AppException, app_exception_handler, generic_exception_handler
 from app.routers import ask, cards, documents, settings, updates
-from app.services.jobs import cleanup_interrupted_jobs
-from app.services.pipeline import ReadAheadPipeline
+from app.services.ingestion.jobs import cleanup_interrupted_jobs
+from app.services.marginalia.pipeline import ReadAheadPipeline
 
 logger = logging.getLogger("athena.api")
 
@@ -37,7 +37,7 @@ async def lifespan(app: FastAPI):
 app = FastAPI(
     title="Athena Backend",
     description="Preserves source text fidelity and document order. Context is separate and grounded.",
-    version="0.1.0",
+    version="1.1.0",
     lifespan=lifespan,
 )
 
@@ -147,7 +147,7 @@ def get_health():
 
     model_status = "ready"
     try:
-        from app.services.edge_ai import _get_embedder
+        from app.services.edge.novelty import _get_embedder
         emb = _get_embedder()
         model_status = "ready" if emb is not None else "unavailable"
     except Exception:
@@ -414,11 +414,11 @@ def get_download_page():
 def get_app_version():
     """Returns the current deployed version and release metadata."""
     data = {
-        "version": "0.1.1",
+        "version": "1.1.0",
         "build_number": 2,
-        "title": "Athena v0.1.1 Update",
-        "release_notes": "Zero-keyword structural document bouncer, BYOK awakening screen, and one-click Android APK & iOS IPA downloads.",
-        "published_at": "2026-10-24T17:50:00Z",
+        "title": "Athena v1.1.0 Release",
+        "release_notes": "Improved Per-Page Document Bouncer, 4-Archetype Marginalia Cards, and Mobile Touch Ergonomics.",
+        "published_at": "2026-10-28T00:00:00Z",
         "download_url_apk": "/api/download/android",
         "download_url_ipa": "/api/download/ios",
         "download_url_web": "/",

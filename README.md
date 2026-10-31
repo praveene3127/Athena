@@ -241,8 +241,9 @@ Athena's interface is crafted for sustained intellectual focus, drawing inspirat
 
 ### Typography Hierarchy
 - **Literary Prose**: *Newsreader* (Variable serif, optical size 18.5px on mobile, line-height 1.65, tracking 0.2px). Fits 60–70 characters per line comfortably on 390px phone screens.
-- **Marginalia & Body UI**: *Plus Jakarta Sans* (Geometric sans-serif, legible at 12px on high-DPI phone displays).
-- **Metadata & Quotes**: *JetBrains Mono* (Tabular numbers, chapter coordinates, and archival dates).
+- **Editorial Display & Chapter Titles**: *DM Serif Display* (High-contrast transitional display serif for mastheads, book titles, and dropcaps).
+- **Marginalia & Body UI**: *Geist* (Clean geometric neo-grotesque sans-serif, legible at 11–13px on high-DPI mobile displays).
+- **Metadata, Checksums & Coordinates**: *JetBrains Mono* / *Monospace* (Tabular numbers, SHA-256 digests, and archival coordinates).
 
 ---
 

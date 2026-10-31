@@ -93,9 +93,17 @@ class ApiClient {
     }
     try {
       final response = await dio.get('/api/documents');
-      return (response.data as List).cast<Map<String, dynamic>>();
+      final list = (response.data as List).cast<Map<String, dynamic>>();
+      _cacheDocumentsLocally(list);
+      return list;
     } on DioException catch (e) {
+      final cached = await _loadCachedDocuments();
+      if (cached.isNotEmpty) return cached;
       throw _handleDioError(e);
+    } catch (_) {
+      final cached = await _loadCachedDocuments();
+      if (cached.isNotEmpty) return cached;
+      rethrow;
     }
   }
 
@@ -384,10 +392,154 @@ class ApiClient {
     }
     try {
       final response = await dio.get('/api/documents/$id/reader');
-      return response.data as Map<String, dynamic>;
+      final data = response.data as Map<String, dynamic>;
+      _cacheReaderLocally(id, data);
+      return data;
+    } on DioException catch (e) {
+      final cached = await _loadCachedReader(id);
+      if (cached != null && cached.isNotEmpty) return cached;
+      throw _handleDioError(e);
+    } catch (_) {
+      final cached = await _loadCachedReader(id);
+      if (cached != null && cached.isNotEmpty) return cached;
+      rethrow;
+    }
+  }
+
+  Future<String> uploadDocumentFromUrl(String url) async {
+    if (AppConfig.apiBaseUrl.isEmpty) {
+      throw const AppError(
+        code: 'NETWORK_REQUIRED',
+        message: 'Importing via URL requires a connection to the Athena server.',
+      );
+    }
+    try {
+      final response = await dio.post(
+        '/api/documents/upload-url',
+        data: {'url': url},
+      );
+      return (response.data as Map<String, dynamic>)['document_id'] as String;
     } on DioException catch (e) {
       throw _handleDioError(e);
     }
+  }
+
+  Future<void> _cacheDocumentsLocally(List<Map<String, dynamic>> list) async {
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      await prefs.setString('cached_documents_list', jsonEncode(list));
+      if (!kIsWeb) {
+        for (final doc in list) {
+          final docId = doc['id']?.toString();
+          if (docId == null) continue;
+          await LocalDatabase.instance.insertDocument({
+            'id': docId,
+            'filename': doc['filename']?.toString() ?? 'document.pdf',
+            'title': doc['title']?.toString() ?? 'Untitled Document',
+            'status': doc['status']?.toString() ?? 'ready',
+            'stage': doc['stage']?.toString() ?? 'done',
+            'stage_label': doc['stage_label']?.toString() ?? 'Ready to read',
+            'percent': (doc['percent'] as num?)?.toInt() ?? 100,
+            'page_count': (doc['page_count'] as num?)?.toInt() ?? 0,
+            'processed_page': (doc['page_count'] as num?)?.toInt() ?? 0,
+            'file_path': 'cached://$docId',
+            'created_at': doc['created_at']?.toString() ?? DateTime.now().toIso8601String(),
+            'updated_at': doc['updated_at']?.toString() ?? DateTime.now().toIso8601String(),
+          });
+        }
+      }
+    } catch (_) {}
+  }
+
+  Future<List<Map<String, dynamic>>> _loadCachedDocuments() async {
+    try {
+      if (!kIsWeb) {
+        final dbDocs = await LocalDatabase.instance.listDocuments();
+        if (dbDocs.isNotEmpty) return dbDocs;
+      }
+      final prefs = await SharedPreferences.getInstance();
+      final raw = prefs.getString('cached_documents_list');
+      if (raw != null && raw.isNotEmpty) {
+        final decoded = jsonDecode(raw) as List;
+        return decoded.map((e) => Map<String, dynamic>.from(e as Map)).toList();
+      }
+    } catch (_) {}
+    return [];
+  }
+
+  Future<void> _cacheReaderLocally(String docId, Map<String, dynamic> data) async {
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      await prefs.setString('reader_cache_$docId', jsonEncode(data));
+      if (!kIsWeb) {
+        final rawChunks = data['chunks'] as List?;
+        final rawCards = data['cards'] as List?;
+        if (rawChunks != null) {
+          final chunkMaps = rawChunks.map((c) {
+            final map = Map<String, dynamic>.from(c as Map);
+            final seq = (map['sequence'] as num?)?.toInt() ?? 1;
+            return <String, Object?>{
+              'id': map['id']?.toString() ?? 'chunk_${docId}_$seq',
+              'document_id': docId,
+              'sequence': seq,
+              'section_title': map['section_title']?.toString(),
+              'raw_text': map['raw_text']?.toString() ?? map['text']?.toString() ?? '',
+              'source_pages_json': jsonEncode(map['source_pages'] ?? [1]),
+              'start_offset': (map['start_offset'] as num?)?.toInt() ?? 0,
+              'end_offset': (map['end_offset'] as num?)?.toInt() ?? 0,
+              'checksum': map['checksum']?.toString() ?? '',
+              'boundary_method': 'sentence',
+              'canonical_sha256': map['canonical_sha256']?.toString() ?? '',
+            };
+          }).toList();
+          await LocalDatabase.instance.insertChunks(chunkMaps);
+        }
+        if (rawCards != null) {
+          final cardMaps = rawCards.map((cd) {
+            final map = Map<String, dynamic>.from(cd as Map);
+            final cId = map['id']?.toString() ?? 'card_${map['concept_name']}';
+            return <String, Object?>{
+              'id': cId,
+              'document_id': docId,
+              'source_chunk_id': map['source_chunk_id']?.toString() ?? '',
+              'concept_name': map['concept_name']?.toString() ?? '',
+              'card_type': map['card_type']?.toString() ?? 'context',
+              'title': map['title']?.toString() ?? '',
+              'body': map['body']?.toString() ?? '',
+              'why_here': map['why_here']?.toString() ?? '',
+              'citations_json': map['citations_json']?.toString() ?? jsonEncode(map['citations'] ?? []),
+              'exact_quote': map['exact_quote']?.toString(),
+              'support_status': 'fully_supported',
+              'canonical_sha256': map['canonical_sha256']?.toString() ?? '',
+              'generation_mode': 'grounded',
+              'verified': 1,
+              'saved': (map['saved'] == true || map['saved'] == 1) ? 1 : 0,
+              'dismissed': (map['dismissed'] == true || map['dismissed'] == 1) ? 1 : 0,
+              'created_at': map['created_at']?.toString() ?? DateTime.now().toIso8601String(),
+            };
+          }).toList();
+          await LocalDatabase.instance.insertCards(cardMaps);
+        }
+      }
+    } catch (_) {}
+  }
+
+  Future<Map<String, dynamic>?> _loadCachedReader(String docId) async {
+    try {
+      if (!kIsWeb) {
+        final dbData = await LocalDatabase.instance.getReaderData(docId);
+        final chunks = dbData['chunks'] as List?;
+        if (chunks != null && chunks.isNotEmpty) {
+          return dbData;
+        }
+      }
+      final prefs = await SharedPreferences.getInstance();
+      final raw = prefs.getString('reader_cache_$docId');
+      if (raw != null && raw.isNotEmpty) {
+        return Map<String, dynamic>.from(jsonDecode(raw) as Map);
+      }
+    } catch (_) {}
+    return null;
   }
 
   Future<Map<String, dynamic>> syncReadingProgress(String id, int chunkIndex,

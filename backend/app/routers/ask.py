@@ -16,7 +16,7 @@ from app.config import (
 from app.db import get_session
 from app.errors import AppException
 from app.models import ReadingChunk, ContextCard, DocumentChapter
-from app.services.llm import LLMService
+from app.services.marginalia.llm import LLMService
 
 router = APIRouter(tags=["ask"])
 

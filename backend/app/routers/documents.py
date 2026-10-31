@@ -5,8 +5,10 @@ import logging
 from pathlib import Path
 import re
 import shutil
+import urllib.parse
 import uuid
 from typing import Any, Dict, List
+import httpx
 from fastapi import APIRouter, Depends, File, Request, UploadFile, status
 from fastapi.responses import Response, StreamingResponse
 from pydantic import BaseModel
@@ -21,9 +23,9 @@ from app.config import (
 from app.db import get_session
 from app.errors import AppException
 from app.models import Document, ReadingChunk, Concept, ContextCard, DocumentChapter, ReadingState, utc_now
-from app.services.extraction import sanitize_filename, validate_pdf_file, get_document_file_path
-from app.services.jobs import queue_document_job, reset_and_requeue_document, force_requeue_document
-from app.services.llm import LLMService
+from app.services.ingestion.extraction import sanitize_filename, validate_pdf_file, get_document_file_path
+from app.services.ingestion.jobs import queue_document_job, reset_and_requeue_document, force_requeue_document
+from app.services.marginalia.llm import LLMService
 
 router = APIRouter(prefix="/api/documents", tags=["documents"])
 logger = logging.getLogger(__name__)
@@ -104,16 +106,48 @@ async def upload_document(
     return {"document_id": doc_id}
 
 
-@router.post("/sample")
-def load_sample_document(session: Session = Depends(get_session)) -> Dict[str, str]:
-    """Loads and queues the bundled sample document for immediate explore."""
-    sample_pdf = BASE_DIR / "samples" / "sample.pdf"
-    if not sample_pdf.exists():
-        raise AppException("NOT_FOUND", "Bundled sample PDF not found", status_code=404)
+class UploadUrlRequest(BaseModel):
+    url: str
+
+
+@router.post("/upload-url")
+def upload_document_from_url(
+    req: UploadUrlRequest,
+    session: Session = Depends(get_session),
+) -> Dict[str, str]:
+    """Downloads a direct PDF or EPUB link from a URL and queues it into the pipeline."""
+    url = req.url.strip()
+    if not url.startswith("http://") and not url.startswith("https://"):
+        raise AppException("INVALID_URL", "URL must start with http:// or https://", status_code=400)
+
+    parsed = urllib.parse.urlparse(url)
+    url_path = Path(parsed.path)
+    ext = url_path.suffix.lower()
+    if ext not in (".pdf", ".epub"):
+        ext = ".pdf"
+
+    original_filename = url_path.name or "downloaded_document.pdf"
+    if not original_filename.lower().endswith(ext):
+        original_filename = f"{original_filename}{ext}"
 
     doc_id = uuid.uuid4().hex
-    target_path = UPLOADS_DIR / f"{doc_id}.pdf"
-    shutil.copy2(sample_pdf, target_path)
+    target_path = UPLOADS_DIR / f"{doc_id}{ext}"
+
+    try:
+        with httpx.stream("GET", url, follow_redirects=True, timeout=30.0) as resp:
+            if resp.status_code >= 400:
+                raise AppException("DOWNLOAD_FAILED", f"Remote server returned HTTP {resp.status_code}", status_code=400)
+            with open(target_path, "wb") as f:
+                for chunk in resp.iter_bytes(chunk_size=64 * 1024):
+                    f.write(chunk)
+    except AppException:
+        if target_path.exists():
+            target_path.unlink()
+        raise
+    except Exception as e:
+        if target_path.exists():
+            target_path.unlink()
+        raise AppException("DOWNLOAD_FAILED", f"Could not download book from URL: {e}", status_code=400)
 
     try:
         page_count = validate_pdf_file(target_path)
@@ -122,11 +156,10 @@ def load_sample_document(session: Session = Depends(get_session)) -> Dict[str, s
             target_path.unlink()
         raise
 
-
     doc = Document(
         id=doc_id,
-        filename="sample.pdf",
-        title="Introduction to Cellular Respiration",
+        filename=sanitize_filename(original_filename),
+        title=Path(original_filename).stem.replace("_", " ").replace("-", " ").title(),
         status="queued",
         stage="validating",
         percent=5,
@@ -328,11 +361,17 @@ def load_sample_document(session: Session = Depends(get_session)) -> Dict[str, s
     target_path = UPLOADS_DIR / f"{doc_id}.pdf"
     shutil.copyfile(sample_src, target_path)
 
-    page_count = validate_pdf_file(target_path)
+    try:
+        page_count = validate_pdf_file(target_path)
+    except Exception:
+        if target_path.exists():
+            target_path.unlink()
+        raise
+
     doc = Document(
         id=doc_id,
         filename="sample.pdf",
-        title="Sample Document",
+        title="Introduction to Cellular Respiration",
         status="queued",
         stage="validating",
         percent=5,
@@ -475,7 +514,7 @@ def search_document(
     if not chunks:
         return {"document_id": id, "query": query, "results": []}
 
-    from app.services.search import HybridSearchService
+    from app.services.marginalia.search import HybridSearchService
     search_svc = HybridSearchService(chunks)
     results = search_svc.search(query=query, top_k=top_k)
 

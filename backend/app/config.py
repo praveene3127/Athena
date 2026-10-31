@@ -40,7 +40,7 @@ class Settings(BaseSettings):
     LLM_MODEL: Optional[str] = None
     GEMINI_API_KEY_PRIMARY: Optional[str] = None
     GEMINI_API_KEY_SECONDARY: Optional[str] = None
-    GEMINI_MODEL: str = "gemini-3.8-flash"
+    GEMINI_MODEL: str = "gemini-2.5-flash"
     ATHENA_CONTEXT_PROXY_TOKEN: Optional[str] = None
     WIKI_CONTACT: str = "athena-reader@example.com"
     VIBE_CHECK_TIMEOUT_S: float = 4.5

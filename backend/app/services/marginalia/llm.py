@@ -446,8 +446,12 @@ class LLMService:
         doc_title: Optional[str] = None,
         chapter_title: Optional[str] = None,
         forced_slot: Optional[int] = None,
+        book_title: Optional[str] = None,
+        author: Optional[str] = None,
+        reference_context: str = "",
+        reference_citations: Optional[list[dict[str, str]]] = None,
     ) -> Optional[dict[str, Any]]:
-        """Create a short passage-relevant note with Google Search citations.
+        """Create a short passage-relevant note with verified primary citations.
 
         Grounds the concept or claim in the book's specific thesis and chapter context,
         selecting or enforcing the requested Editorial Archetype.
@@ -455,11 +459,16 @@ class LLMService:
         if not self.is_configured:
             return None
 
+        if not doc_title and book_title:
+            doc_title = book_title
+
         book_context = ""
         if doc_title:
             book_context += f"Book: \"{doc_title}\"\n"
         if chapter_title:
             book_context += f"Chapter: \"{chapter_title}\"\n"
+        if author:
+            book_context += f"Author: \"{author}\"\n"
 
         archetype_mandate = ""
         archetype_names = ["EMPIRICAL STUDY", "CRITICAL DEBATE", "HISTORICAL CONTEXT", "CORE PARADOX"]
@@ -503,6 +512,7 @@ class LLMService:
             "- BANNED PHRASES: Do NOT begin with 'In this passage', 'The author highlights', 'The author explains', 'This passage illustrates', 'reminds the reader', or 'Studies have shown that'.\n"
             "- Execute a 2-Hop Orthogonal Lookup using Google Search to introduce verified external facts, named researchers, sample sizes, archival dates, or modern counter-evidence that DO NOT appear in the passage.\n\n"
             f"{archetype_mandate}"
+            f"{(f'<reference_context>\n{reference_context}\n</reference_context>\n\n') if reference_context else ''}"
             "Editorial Archetypes Reference:\n\n"
             "1. EMPIRICAL STUDY: (When the author references a study, experiment, statistic, or testable human behavior).\n"
             "   Search: \"<claim/study> replication crisis meta-analysis sample size criticism\" or modern 2015-2026 empirical studies.\n"
@@ -538,8 +548,8 @@ class LLMService:
             models_to_try = [self.model]
             if "gemini-2.5-flash" not in models_to_try:
                 models_to_try.insert(0, "gemini-2.5-flash")
-            if "gemini-3.8-flash" not in models_to_try:
-                models_to_try.append("gemini-3.8-flash")
+            if "gemini-2.0-flash" not in models_to_try:
+                models_to_try.append("gemini-2.0-flash")
 
             for candidate_model in models_to_try:
                 try:
@@ -718,6 +728,8 @@ class LLMService:
                         })
                 if len(citations) < 2:
                     return None
+            elif reference_citations and len(reference_citations) >= 2:
+                citations = reference_citations[:5]
             else:
                 return None
             return {

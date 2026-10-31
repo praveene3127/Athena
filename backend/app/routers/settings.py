@@ -15,8 +15,8 @@ from app.config import (
 )
 from app.db import get_session
 from app.models import AISettings, utc_now
-from app.services.llm import LLMService
-from app.services.providers import (
+from app.services.marginalia.llm import LLMService
+from app.services.marginalia.providers import (
     PROVIDER_CONFIGS,
     fetch_provider_models,
     test_provider_model,

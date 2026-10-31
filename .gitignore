@@ -118,11 +118,9 @@ xtool/.xtool-tmp/
 # --- Internal AI Agent Rules & Prompts ---
 .agents/
 .mcp.json
-CLAUDE.md
 .github/copilot-instructions.md
 
-# --- Local Scripts & Raw Asset Exports ---
-tools/port_8080_forwarder.py
+# --- Raw Asset Exports ---
 athena-brand-kit-v3/
 
 # --- Official App Releases ---
