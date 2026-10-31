@@ -9,8 +9,8 @@
   <img src="https://img.shields.io/badge/FastAPI-0.115+-009688?logo=fastapi&logoColor=white" alt="FastAPI" />
   <img src="https://img.shields.io/badge/ONNX-Edge%20AI-005CED?logo=onnx&logoColor=white" alt="ONNX Edge AI" />
   <img src="https://img.shields.io/badge/SHA--256-Lossless%20Canonical-10B981" alt="Lossless Canonical" />
-  <img src="https://img.shields.io/badge/Tests-50%2F50%20Passing-brightgreen" alt="Tests" />
-  <img src="https://img.shields.io/badge/License-MIT-blue" alt="License" />
+  <img src="https://img.shields.io/badge/Tests-52%2F52%20Passing-brightgreen" alt="Tests" />
+  <a href="docs/LICENSE"><img src="https://img.shields.io/badge/License-MIT-blue" alt="License" /></a>
 </p>
 
 ---
@@ -386,11 +386,11 @@ uvicorn app.main:app --reload --port 8000
 ### Submitting Changes
 1. Run `python scripts/verify_release.py` locally.
 2. Ensure `flutter analyze lib` returns zero warnings or errors.
-3. Ensure `pytest backend/tests` passes all 49 tests.
+3. Ensure `pytest backend/tests` passes all 52 tests.
 4. Open a pull request against `main`. GitHub Actions will automatically validate the build and compile `Athena-Android.apk` and `Athena-iOS.ipa`.
 
 ---
 
 <p align="center">
-  <sub>Built with intellectual rigor for deep reading. Distributed under the MIT License.</sub>
+  <sub>Built with intellectual rigor for deep reading. Distributed under the [MIT License](docs/LICENSE).</sub>
 </p>
