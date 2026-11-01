@@ -31,6 +31,8 @@ from app.services.marginalia.llm import LLMService
 router = APIRouter(prefix="/api/documents", tags=["documents"])
 logger = logging.getLogger(__name__)
 
+MAX_UPLOAD_SIZE = 500 * 1024 * 1024  # 500 MB bound to prevent disk exhaustion
+
 STAGE_LABELS: Dict[str, str] = {
     "validating": "Reading PDF",
     "extracting": "Extracting text",
@@ -58,10 +60,14 @@ async def upload_document(
 
     doc_id = uuid.uuid4().hex
     target_path = UPLOADS_DIR / f"{doc_id}{ext}"
-    # 2. Stream directly to disk in bounded pieces; avoid a fixed file-size cap.
+    # 2. Stream directly to disk in bounded pieces with 500MB exhaustion guard
+    total_bytes = 0
     try:
         with open(target_path, "wb") as f:
             while chunk := await file.read(64 * 1024):
+                total_bytes += len(chunk)
+                if total_bytes > MAX_UPLOAD_SIZE:
+                    raise AppException("RESOURCE_LIMIT", "Uploaded file exceeds 500MB limit", status_code=413)
                 f.write(chunk)
     except OSError as e:
         if target_path.exists():
@@ -148,12 +154,16 @@ def upload_document_from_url(
     doc_id = uuid.uuid4().hex
     target_path = UPLOADS_DIR / f"{doc_id}{ext}"
 
+    total_bytes = 0
     try:
         with httpx.stream("GET", url, follow_redirects=True, timeout=30.0) as resp:
             if resp.status_code >= 400:
                 raise AppException("DOWNLOAD_FAILED", f"Remote server returned HTTP {resp.status_code}", status_code=400)
             with open(target_path, "wb") as f:
                 for chunk in resp.iter_bytes(chunk_size=64 * 1024):
+                    total_bytes += len(chunk)
+                    if total_bytes > MAX_UPLOAD_SIZE:
+                        raise AppException("RESOURCE_LIMIT", "Downloaded file exceeds 500MB limit", status_code=413)
                     f.write(chunk)
     except AppException:
         if target_path.exists():

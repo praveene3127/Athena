@@ -67,6 +67,15 @@ async def reject_untrusted_browser_mutations(request, call_next):
 
 
 @app.middleware("http")
+async def add_security_headers(request: Request, call_next):
+    response = await call_next(request)
+    response.headers["X-Content-Type-Options"] = "nosniff"
+    response.headers["X-Frame-Options"] = "SAMEORIGIN"
+    response.headers["Referrer-Policy"] = "strict-origin-when-cross-origin"
+    return response
+
+
+@app.middleware("http")
 async def log_requests(request: Request, call_next):
     t0 = time.time()
     response = await call_next(request)
