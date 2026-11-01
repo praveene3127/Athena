@@ -817,6 +817,7 @@ class ApiClient {
     required String chunkId,
     required String question,
     String? selectedText,
+    String? passageText,
   }) async {
     // 1. Try companion engine backend
     if (AppConfig.apiBaseUrl.isNotEmpty) {
@@ -827,11 +828,12 @@ class ApiClient {
             'document_id': documentId,
             'chunk_id': chunkId,
             'question': question,
+            'passage_text': passageText ?? selectedText ?? '',
             if (selectedText != null) 'selected_text': selectedText,
           },
           options: Options(
-            sendTimeout: const Duration(seconds: 8),
-            receiveTimeout: const Duration(seconds: 20),
+            sendTimeout: const Duration(seconds: 12),
+            receiveTimeout: const Duration(seconds: 30),
           ),
         );
         return response.data as Map<String, dynamic>;

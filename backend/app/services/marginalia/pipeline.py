@@ -9,8 +9,8 @@ from sqlmodel import Session, select
 
 from app.db import engine
 from app.models import Concept, ConceptCache, ContextCard, Document, ReadingChunk, DocumentChapter
-from app.services.marginalia.cards import find_exact_quote
-from app.services.marginalia.concepts import extract_concepts
+from app.services.marginalia.cards import find_exact_quote, _fetch_multi_source_evidence
+from app.services.marginalia.concepts import extract_concepts, build_search_query_for_concept
 from app.services.edge_ai import compute_semantic_similarity, is_semantic_duplicate
 from app.services.marginalia.llm import LLMService
 from app.services.marginalia.wikipedia import WikipediaClient
@@ -404,8 +404,10 @@ class ReadAheadPipeline:
                 if not exact_quote or exact_quote not in chunk.raw_text:
                     continue
 
+                cache_key_slug = f"v2_{slug}__slot{active_slot}"
+
                 # --- TIER 1: Concept Cache Check (Cross-Book Instant Reuse) ---
-                cached = session.get(ConceptCache, slug)
+                cached = session.get(ConceptCache, cache_key_slug) or session.get(ConceptCache, slug)
                 if cached:
                     clean_cached_title = re.sub(
                         r"^(?:What is\s+|EMPIRICAL STUDY:\s*|CRITICAL DEBATE:\s*|HISTORICAL CONTEXT:\s*|CORE PARADOX:\s*)+",
@@ -453,6 +455,27 @@ class ReadAheadPipeline:
                         existing_bodies.append(cached_body.strip())
                         return card_to_dict(card)
 
+                # Fetch Multi-Source Research Evidence (OpenAlex, Semantic Scholar, DDG, HackerNews, Wikipedia)
+                search_query = build_search_query_for_concept(concept.name, chunk.raw_text, active_archetype)
+                evidence_list = _fetch_multi_source_evidence(
+                    search_query, concept.name, active_archetype, self.wiki_client
+                )
+                evidence_text = "\n\n".join(
+                    f"[{e.get('source', 'Source').upper()} - {e.get('title', 'Study')} ({e.get('year', '')})]: {e.get('snippet', '')}"
+                    for e in evidence_list
+                )
+
+                # Load rolling 2 previous chunks for narrative context bridge
+                prev_chunks = session.exec(
+                    select(ReadingChunk).where(
+                        ReadingChunk.document_id == doc_id,
+                        ReadingChunk.sequence.in_([chunk_index - 2, chunk_index - 1]),
+                    ).order_by(ReadingChunk.sequence.asc())
+                ).all()
+                prev_context_str = "\n\n".join(
+                    f"[Passage {c.sequence}]: {c.raw_text.strip()}" for c in prev_chunks
+                )
+
                 # --- TIER 2: Gemini Google Search Grounding with 3-Chunk Narrative Arc ---
                 if self.llm_service.is_gemini_configured:
                     adjacent = session.exec(
@@ -490,6 +513,8 @@ class ReadAheadPipeline:
                         concept_name=concept.name,
                         passage_text=chunk.raw_text,
                         neighbors_text=neighbors_text,
+                        previous_context=prev_context_str,
+                        external_evidence=evidence_text,
                         doc_title=doc.title if doc else None,
                         chapter_title=chapter_title,
                         forced_slot=active_slot,
@@ -514,11 +539,19 @@ class ReadAheadPipeline:
                             continue
 
                         citations = grounded.get("citations", [])
+                        if not citations and evidence_list:
+                            for ev in evidence_list[:2]:
+                                citations.append({
+                                    "source": ev.get("source", "academic"),
+                                    "url": ev.get("url", ""),
+                                    "title": ev.get("title", ""),
+                                    "year": ev.get("year", ""),
+                                })
                         citations_str = json.dumps(citations)
                         card_why_here = grounded.get("why_here") or "Grounded context from primary sources."
 
                         # Save into concept_cache for future chunks/books (upsert safely)
-                        cache_entry = session.exec(select(ConceptCache).where(ConceptCache.concept_slug == slug)).first()
+                        cache_entry = session.exec(select(ConceptCache).where(ConceptCache.concept_slug == cache_key_slug)).first()
                         if cache_entry:
                             cache_entry.title = card_title
                             cache_entry.body = body
@@ -526,7 +559,7 @@ class ReadAheadPipeline:
                             cache_entry.source_model = "gemini_search"
                         else:
                             cache_entry = ConceptCache(
-                                concept_slug=slug,
+                                concept_slug=cache_key_slug,
                                 title=card_title,
                                 body=body,
                                 citations_json=citations_str,
@@ -558,25 +591,41 @@ class ReadAheadPipeline:
                         existing_bodies.append(body.strip())
                         return card_to_dict(card)
 
-                # --- TIER 3: Wikipedia Extractive API Fallback ---
-                wiki_data = self.wiki_client.fetch_term(concept.name)
-                if wiki_data and wiki_data.get("extract"):
-                    extract = wiki_data["extract"].strip()
+                # --- TIER 3: Multi-Source Evidence & Reference Library Fallback ---
+                evidence_body = ""
+                citations_list = []
+                if evidence_list:
+                    top_ev = evidence_list[0]
+                    ev_snippet = top_ev.get("snippet", "").strip()
+                    if len(ev_snippet) > 20:
+                        evidence_body = ev_snippet
+                        citations_list.append({
+                            "source": top_ev.get("source", "research"),
+                            "url": top_ev.get("url", ""),
+                            "title": top_ev.get("title", ""),
+                            "year": top_ev.get("year", ""),
+                        })
 
+                if not evidence_body:
+                    wiki_data = self.wiki_client.fetch_term(concept.name)
+                    if wiki_data and wiki_data.get("extract"):
+                        evidence_body = wiki_data["extract"].strip()
+                        c = wiki_data.get("citation")
+                        if c:
+                            citations_list.append(c)
+
+                if evidence_body:
                     # Mandatory ONNX Semantic Relevance Gate (edge_ai.py)
-                    relevance = compute_semantic_similarity(chunk.raw_text, extract)
+                    relevance = compute_semantic_similarity(chunk.raw_text, evidence_body)
                     if relevance < 0.38:
                         logger.info(
-                            "Wiki extract for '%s' rejected by ONNX Semantic Relevance Gate (%.3f < 0.38)",
+                            "Evidence extract for '%s' rejected by ONNX Semantic Relevance Gate (%.3f < 0.38)",
                             concept.name, relevance
                         )
                         continue
 
-                    citation = wiki_data.get("citation")
-                    citations_list = [citation] if citation else []
-
                     # Trim at sentence boundary to <= 80 words
-                    sentences = re.split(r"(?<=[.!?])\s+", extract)
+                    sentences = re.split(r"(?<=[.!?])\s+", evidence_body)
                     trimmed = []
                     cur_len = 0
                     for s in sentences:
@@ -586,41 +635,41 @@ class ReadAheadPipeline:
                             cur_len += w_count
                         else:
                             break
-                    raw_wiki_body = " ".join(trimmed) or sentences[0]
+                    raw_body = " ".join(trimmed) or sentences[0]
 
                     # Format into active archetype slot layout
                     if active_slot == 0:
-                        final_body = f"How did empirical observations and research test {concept.name} in practice?\n||REVEAL||\n{raw_wiki_body}"
+                        final_body = f"How did empirical observations and research test {concept.name} in practice?\n||REVEAL||\n{raw_body}"
                     elif active_slot == 1:
-                        final_body = f"Counterpoint: Critical scholars question assumptions regarding {concept.name}.\nEvidence: {raw_wiki_body}"
+                        final_body = f"Counterpoint: Critical scholars question assumptions regarding {concept.name}.\nEvidence: {raw_body}"
                     elif active_slot == 2:
-                        final_body = f"Historical context and primary sources document that {raw_wiki_body}"
+                        final_body = f"Historical context and primary sources document that {raw_body}"
                     else:
-                        final_body = f"The core paradox of {concept.name} reveals an unexpected inversion: {raw_wiki_body}"
+                        final_body = f"The core paradox of {concept.name} reveals an unexpected inversion: {raw_body}"
 
-                    card_title = f"{active_archetype}: {wiki_data.get('title', concept.name)}"
-                    if card_title.lower() in used_titles or wiki_data.get("title", "").lower() in used_titles:
+                    card_title = f"{active_archetype}: {concept.name}"
+                    if card_title.lower() in used_titles:
                         continue
 
                     if is_semantic_duplicate(final_body, existing_bodies, threshold=0.78):
-                        logger.info("Wiki card for '%s' rejected by ONNX Semantic Deduplication Gate (> 0.78)", concept.name)
+                        logger.info("Evidence card for '%s' rejected by ONNX Semantic Deduplication Gate (> 0.78)", concept.name)
                         continue
 
                     citations_str = json.dumps(citations_list)
 
-                    cache_entry = session.exec(select(ConceptCache).where(ConceptCache.concept_slug == slug)).first()
+                    cache_entry = session.exec(select(ConceptCache).where(ConceptCache.concept_slug == cache_key_slug)).first()
                     if cache_entry:
                         cache_entry.title = card_title
                         cache_entry.body = final_body
                         cache_entry.citations_json = citations_str
-                        cache_entry.source_model = "wikipedia"
+                        cache_entry.source_model = "multi_source"
                     else:
                         cache_entry = ConceptCache(
-                            concept_slug=slug,
+                            concept_slug=cache_key_slug,
                             title=card_title,
                             body=final_body,
                             citations_json=citations_str,
-                            source_model="wikipedia",
+                            source_model="multi_source",
                         )
                     session.add(cache_entry)
 
@@ -631,7 +680,7 @@ class ReadAheadPipeline:
                         card_type="explain",
                         title=card_title,
                         body=final_body,
-                        why_here="Extractive summary from reference library.",
+                        why_here="Evidence summary from multi-source research repository.",
                         citations_json=citations_str,
                         exact_quote=exact_quote,
                         support_status="fully_supported",

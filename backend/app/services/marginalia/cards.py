@@ -14,11 +14,13 @@ Every card must satisfy:
 """
 
 from collections import Counter
+from concurrent.futures import ThreadPoolExecutor, as_completed
 import json
 import logging
 import re
 import urllib.parse
-from typing import List, Optional, Tuple
+import urllib.request
+from typing import Any, Dict, List, Optional, Tuple
 
 from app.config import (
     CARD_MAX_WORDS,
@@ -33,11 +35,170 @@ from app.services.edge_ai import (
     compute_semantic_similarity,
     is_semantic_duplicate,
 )
+from app.services.marginalia.concepts import build_search_query_for_concept
 from app.services.marginalia.llm import LLMService
 from app.services.marginalia.wikipedia import WikipediaClient
 from sqlmodel import Session, select
 
 logger = logging.getLogger(__name__)
+
+_EVIDENCE_CACHE: Dict[str, List[Dict[str, str]]] = {}
+
+
+def _fetch_multi_source_evidence(
+    query: str,
+    concept_label: str,
+    slot_archetype: str,
+    wiki_client: Optional[WikipediaClient] = None,
+) -> List[Dict[str, str]]:
+    """Parallel Multi-Source Evidence Aggregator (§6 in Athena Marginalia Mandate).
+    Queries OpenAlex, Semantic Scholar, DuckDuckGo, and HackerNews Algolia.
+    Demotes Wikipedia to supplementary fallback only when fewer than 2 sources return.
+    Results are cached in memory for sub-millisecond repeated queries.
+    """
+    cache_key = f"{concept_label.lower().strip()}__{slot_archetype.lower()}"
+    if cache_key in _EVIDENCE_CACHE:
+        return _EVIDENCE_CACHE[cache_key]
+
+    results: List[Dict[str, str]] = []
+
+    def _get_openalex() -> List[Dict[str, str]]:
+        clean_q = re.sub(r"[^\w\s-]", " ", query).strip()
+        url = f"https://api.openalex.org/works?search={urllib.parse.quote(clean_q)}&per-page=2&sort=cited_by_count:desc"
+        req = urllib.request.Request(url, headers={"User-Agent": "AthenaReader/1.0 (mailto:athena@example.com)"})
+        with urllib.request.urlopen(req, timeout=3.5) as resp:
+            data = json.loads(resp.read().decode("utf-8"))
+            out = []
+            for w in data.get("results", []):
+                inv = w.get("abstract_inverted_index") or {}
+                pos_words = [(p, word) for word, plist in inv.items() for p in plist]
+                pos_words.sort()
+                abst = " ".join(word for _, word in pos_words)[:400]
+                t = w.get("title") or "Empirical Study"
+                y = w.get("publication_year") or ""
+                c = w.get("cited_by_count") or 0
+                doi = w.get("doi") or w.get("id") or "https://openalex.org"
+                out.append({
+                    "title": f"Study ({y}, cited {c}x): {t}",
+                    "publisher": "openalex.org",
+                    "url": doi,
+                    "extract": abst,
+                    "source_type": "academic_paper",
+                })
+            return out
+
+    def _get_semantic_scholar() -> List[Dict[str, str]]:
+        clean_q = re.sub(r"[^\w\s-]", " ", query).strip()
+        url = f"https://api.semanticscholar.org/graph/v1/paper/search?query={urllib.parse.quote(clean_q)}&limit=2&fields=title,year,abstract,url,citationCount"
+        req = urllib.request.Request(url, headers={"User-Agent": "AthenaReader/1.0"})
+        with urllib.request.urlopen(req, timeout=3.5) as resp:
+            data = json.loads(resp.read().decode("utf-8"))
+            out = []
+            for p in data.get("data", []):
+                t = p.get("title")
+                y = p.get("year") or ""
+                c = p.get("citationCount") or 0
+                u = p.get("url") or "https://semanticscholar.org"
+                a = p.get("abstract") or ""
+                out.append({
+                    "title": f"{t} ({y}, {c} citations)",
+                    "publisher": "semanticscholar.org",
+                    "url": u,
+                    "extract": a[:400],
+                    "source_type": "academic_paper",
+                })
+            return out
+
+    def _get_duckduckgo() -> List[Dict[str, str]]:
+        clean_q = re.sub(r"[^\w\s-]", " ", concept_label).strip()
+        url = f"https://api.duckduckgo.com/?q={urllib.parse.quote(clean_q)}&format=json&no_html=1"
+        req = urllib.request.Request(url, headers={"User-Agent": "AthenaReader/1.0"})
+        with urllib.request.urlopen(req, timeout=3.5) as resp:
+            data = json.loads(resp.read().decode("utf-8"))
+            out = []
+            txt = data.get("AbstractText") or data.get("Answer") or ""
+            link = data.get("AbstractURL")
+            if txt and link:
+                out.append({
+                    "title": data.get("Heading") or clean_q.title(),
+                    "publisher": "duckduckgo.com",
+                    "url": link,
+                    "extract": txt[:400],
+                    "source_type": "web_context",
+                })
+            for topic in data.get("RelatedTopics", [])[:2]:
+                if isinstance(topic, dict) and topic.get("Text") and topic.get("FirstURL"):
+                    out.append({
+                        "title": topic.get("Text")[:60],
+                        "publisher": "duckduckgo.com",
+                        "url": topic.get("FirstURL"),
+                        "extract": topic.get("Text")[:300],
+                        "source_type": "web_context",
+                    })
+            return out
+
+    def _get_hackernews() -> List[Dict[str, str]]:
+        clean_q = re.sub(r"[^\w\s-]", " ", concept_label).strip()
+        url = f"https://hn.algolia.com/api/v1/search?query={urllib.parse.quote(clean_q)}&tags=story&hitsPerPage=2"
+        req = urllib.request.Request(url, headers={"User-Agent": "AthenaReader/1.0"})
+        with urllib.request.urlopen(req, timeout=3.5) as resp:
+            data = json.loads(resp.read().decode("utf-8"))
+            out = []
+            for hit in data.get("hits", []):
+                t = hit.get("title")
+                oid = hit.get("objectID")
+                u = hit.get("url") or f"https://news.ycombinator.com/item?id={oid}"
+                out.append({
+                    "title": f"Debate: {t}",
+                    "publisher": "news.ycombinator.com",
+                    "url": u,
+                    "extract": t,
+                    "source_type": "discourse",
+                })
+            return out
+
+    tasks = [_get_openalex, _get_duckduckgo, _get_semantic_scholar]
+    if "DEBATE" in slot_archetype.upper() or "PARADOX" in slot_archetype.upper():
+        tasks.append(_get_hackernews)
+
+    with ThreadPoolExecutor(max_workers=len(tasks)) as pool:
+        futures = [pool.submit(fn) for fn in tasks]
+        for fut in as_completed(futures, timeout=4.0):
+            try:
+                res = fut.result()
+                if res:
+                    results.extend(res)
+            except Exception:
+                pass
+
+    seen_urls = set()
+    deduped = []
+    for item in results:
+        u = item.get("url", "")
+        if u and u not in seen_urls:
+            seen_urls.add(u)
+            deduped.append(item)
+
+    # Wikipedia as last-resort supplementary fallback if < 2 sources
+    if len(deduped) < 2:
+        try:
+            wclient = wiki_client or WikipediaClient()
+            wdata = wclient.fetch_term(concept_label)
+            if wdata and wdata.get("citation", {}).get("url"):
+                cit = wdata["citation"]
+                if cit.get("url") not in seen_urls:
+                    deduped.append({
+                        "title": cit.get("title") or f"{concept_label} (Wikipedia)",
+                        "publisher": cit.get("publisher") or "en.wikipedia.org",
+                        "url": cit.get("url"),
+                        "extract": wdata.get("extract", "")[:400],
+                        "source_type": "encyclopedia",
+                    })
+        except Exception:
+            pass
+
+    _EVIDENCE_CACHE[cache_key] = deduped
+    return deduped
 
 
 def extract_verbatim_body(extract: str, max_words: int = CARD_MAX_WORDS) -> Optional[str]:
@@ -330,62 +491,49 @@ def generate_context_cards(
         active_slot = (len(existing_bodies) + len(cards)) % 4
         active_archetype = archetype_names[active_slot]
 
-        # Check ConceptCache first (Tier 1) - Slot aware
+        # Task 2: Rolling "Before -> Now" Narrative Context Bridge
+        prev_chunks = [
+            c for c in chunks
+            if chunk.sequence - 2 <= c.sequence < chunk.sequence
+        ]
+        prev_chunks.sort(key=lambda c: c.sequence)
+        prev_summaries = [f"[Previous Chunk {pc.sequence}]: {pc.raw_text.strip()[:240]}" for pc in prev_chunks]
+        recent_card_titles = [f"Recent Card: {c.title}" for c in cards[-2:] if c.title]
+        prev_context_str = "\n".join(prev_summaries + recent_card_titles) if prev_summaries else "Opening passage of chapter / book."
+
+        # Check ConceptCache first (Tier 1) - Slot aware (Task 5: v2 invalidation)
         cached_entry = None
         if slug:
             try:
                 with Session(engine) as db_sess:
-                    cached_entry = db_sess.get(ConceptCache, f"{slug}__slot{active_slot}")
-                    if not cached_entry:
-                        base_cached = db_sess.get(ConceptCache, slug)
-                        if base_cached and base_cached.title.startswith(active_archetype):
-                            cached_entry = base_cached
+                    cached_entry = db_sess.get(ConceptCache, f"v2_{slug}__slot{active_slot}")
             except Exception:
                 cached_entry = None
 
         use_gemini_search = llm.is_gemini_configured and not cached_entry
-        wiki_data = None
+        evidence_list: list[dict[str, str]] = []
         extract = ""
         citations: list[dict[str, str]] = []
-        if not use_gemini_search and not cached_entry:
-            wiki_lookups_done += 1
-            wiki_data = wiki.fetch_term(concept.name)
-            if not wiki_data:
-                concept.status = "no_source"
-                continue
 
-            wiki_title = wiki_data.get("title", "")
-            if wiki_title.lower() in seen_wiki_titles:
-                concept.status = "skipped"
-                continue
-
-            citation = wiki_data.get("citation", {})
-            citation_url = citation.get("url")
-            if not citation_url or not citation_url.startswith("https://"):
-                concept.status = "no_source"
-                continue
-            extract = wiki_data.get("extract", "")
-
-            # Mandatory ONNX Semantic Relevance Gate (edge_ai.py)
-            relevance = compute_semantic_similarity(chunk.raw_text, extract)
-            if relevance < 0.38:
-                logger.info(
-                    "Wiki extract for '%s' rejected by ONNX Semantic Relevance Gate (%.3f < 0.38)",
-                    concept.name, relevance
-                )
-                concept.status = "refused_low_relevance"
-                continue
-
-            # Build verified citation (Wikipedia, plus philosophical reference if applicable)
-            citations = [citation]
-            term_title = wiki_title or concept.name
-            safe_query = urllib.parse.quote(term_title)
-            if any(term in term_title.lower() for term in ["paradox", "fallacy", "theory", "ethics", "philosophy", "dualism", "logic"]):
-                citations.append({
-                    "title": f"Stanford Encyclopedia of Philosophy Reference: {term_title}",
-                    "publisher": "plato.stanford.edu",
-                    "url": f"https://plato.stanford.edu/search/searcher.py?query={safe_query}",
-                })
+        if not cached_entry:
+            search_q = build_search_query_for_concept(concept.name, chunk.raw_text, active_archetype)
+            evidence_list = _fetch_multi_source_evidence(
+                query=search_q,
+                concept_label=concept.name,
+                slot_archetype=active_archetype,
+                wiki_client=wiki,
+            )
+            evidence_extract_parts = []
+            for ev in evidence_list:
+                if ev.get("extract"):
+                    evidence_extract_parts.append(f"[{ev['publisher']} - {ev['title']}]: {ev['extract']}")
+                if ev.get("url") and ev.get("title"):
+                    citations.append({
+                        "title": ev["title"],
+                        "publisher": ev["publisher"],
+                        "url": ev["url"],
+                    })
+            extract = "\n\n".join(evidence_extract_parts)
 
         # Extract supporting quote from the canonical passage
         raw_quote = find_exact_quote(chunk.raw_text, concept.name)
@@ -410,7 +558,7 @@ def generate_context_cards(
         # Generate explanation body
         body: Optional[str] = None
         gen_mode = "extractive"
-        card_citations = citations or ([citation] if wiki_data and "citation" in locals() else [])
+        card_citations = citations
         card_title = f"{active_archetype}: {concept.name}"
 
         if cached_entry:
@@ -430,6 +578,7 @@ def generate_context_cards(
                 concept_name=concept.name,
                 passage_text=chunk.raw_text,
                 neighbors_text="\n\n".join(adjacent) or "None.",
+                previous_context=prev_context_str,
                 forced_slot=active_slot,
                 reference_context=extract,
                 reference_citations=citations,
@@ -445,7 +594,7 @@ def generate_context_cards(
                         with Session(engine) as db_sess:
                             db_sess.add(
                                 ConceptCache(
-                                    concept_slug=f"{slug}__slot{active_slot}",
+                                    concept_slug=f"v2_{slug}__slot{active_slot}",
                                     title=card_title,
                                     body=body,
                                     citations_json=json.dumps(card_citations),

@@ -1017,14 +1017,13 @@ async def get_chunk_vibe_check(
             "fallback": True,
         }
 
-    prev_chunk = None
-    if target_chunk.sequence > 1:
-        prev_chunk = session.exec(
-            select(ReadingChunk).where(
-                ReadingChunk.document_id == id,
-                ReadingChunk.sequence == target_chunk.sequence - 1,
-            )
-        ).first()
+    prev_chunks = session.exec(
+        select(ReadingChunk).where(
+            ReadingChunk.document_id == id,
+            ReadingChunk.sequence.in_([target_chunk.sequence - 2, target_chunk.sequence - 1]),
+        ).order_by(ReadingChunk.sequence.asc())
+    ).all()
+    prev_context = "\n\n".join(pc.raw_text.strip() for pc in prev_chunks)
 
     chapter = session.exec(
         select(DocumentChapter)
@@ -1042,7 +1041,7 @@ async def get_chunk_vibe_check(
             asyncio.to_thread(
                 llm.generate_vibe_check,
                 passage=target_chunk.raw_text,
-                prev_passage=prev_chunk.raw_text if prev_chunk else "",
+                prev_passage=prev_context,
                 doc_title=doc.title or doc.filename,
                 chapter_title=chapter.title if chapter else "",
             ),

@@ -146,6 +146,7 @@ class _AskSheetState extends State<AskSheet> {
         chunkId: widget.chunk.id,
         question: effectiveQuestion,
         selectedText: widget.selectedText,
+        passageText: widget.chunk.rawText,
       );
 
       final status = res['status'] as String? ?? 'unavailable';

@@ -20,6 +20,9 @@ STOPWORDS = {
     "makes", "keep", "feels", "feel", "good", "well", "man", "many", "much", "said",
     "says", "like", "way", "get", "come", "make", "know", "see", "take", "give",
     "look", "think", "tell", "become", "leave", "feel good", "feels good", "day", "days",
+    # Mundane and structural book words (§7.1)
+    "chapter", "author", "section", "example", "question", "part", "history", "system",
+    "process", "page", "book", "reader", "text", "case", "fact", "point", "matter", "idea",
 }
 
 COMMON_ACRONYM_EXCLUSIONS = {"PDF", "URL", "HTTP", "HTTPS", "HTML", "USA", "THE", "AND", "FOR"}
@@ -86,6 +89,17 @@ def extract_concepts(
             norm = cleaned.lower()
             if norm not in candidates:
                 candidates[norm] = (cleaned, "entity", 0.5)
+
+    # 4. Causal claims, named mechanisms, paradoxes, and phenomena
+    claim_pattern = re.compile(
+        r"\b([A-Z][a-z]+(?:\s+[a-z]+){0,2}\s+(?:effect|bias|fallacy|paradox|hypothesis|theory|law|syndrome|dilemma|illusion|principle))\b",
+        re.IGNORECASE,
+    )
+    for match in claim_pattern.finditer(canonical_text):
+        cl = match.group(1).strip()
+        if len(cl) >= 6 and not is_stopword(cl):
+            norm = cl.lower()
+            candidates[norm] = (cl, "mechanism", 0.92)
 
     # Apply strict filters:
     # - >= 4 chars (unless acronym >= 3 chars)
@@ -158,3 +172,21 @@ def extract_concepts(
             )
 
     return concepts
+
+
+def build_search_query_for_concept(concept_name: str, passage: str = "", archetype: str = "") -> str:
+    """Constructs a high-precision academic / web search query targeting empirical studies,
+    counter-arguments, or historical receipts for a concept.
+    """
+    clean_name = re.sub(r"[^\w\s-]", "", concept_name).strip()
+    arch_upper = archetype.upper()
+    if "EMPIRICAL" in arch_upper:
+        return f"{clean_name} empirical study experiment data findings"
+    elif "DEBATE" in arch_upper or "CRITICAL" in arch_upper:
+        return f"{clean_name} critique debate counterpoint controversy"
+    elif "PARADOX" in arch_upper:
+        return f"{clean_name} paradox counter-intuitive dilemma contradiction"
+    elif "HISTORICAL" in arch_upper:
+        return f"{clean_name} history archival origin case study"
+    return f"{clean_name} research study analysis"
+

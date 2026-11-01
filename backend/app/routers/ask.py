@@ -42,6 +42,7 @@ class AskRequest(BaseModel):
     document_id: str
     chunk_id: str
     question: str = Field(max_length=2000)
+    passage_text: Optional[str] = Field(default=None, max_length=16000)
     selected_text: Optional[str] = Field(default=None, max_length=16000)
 
 
@@ -160,6 +161,8 @@ def ask_about_passage(
     passage_text = chunk.raw_text.strip()
     if req.selected_text and req.selected_text.strip() in passage_text:
         passage_text = req.selected_text.strip()
+    elif req.passage_text and req.passage_text.strip():
+        passage_text = req.passage_text.strip()
 
     # 5. Call LLM service
     llm = LLMService()
