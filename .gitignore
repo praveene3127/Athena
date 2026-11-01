@@ -125,8 +125,9 @@ xtool/.xtool-tmp/
 # --- Raw Asset Exports ---
 athena-brand-kit-v3/
 
-# --- Official App Releases ---
-releases/*.apk
-releases/*.ipa
+# --- Official App Releases (Tracked for direct 1-click README downloads) ---
+!releases/
+!releases/*.apk
+!releases/*.ipa
 
 
