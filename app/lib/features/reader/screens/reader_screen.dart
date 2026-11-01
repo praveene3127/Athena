@@ -820,7 +820,7 @@ class _ReaderScreenState extends ConsumerState<ReaderScreen> {
         padding: const EdgeInsets.all(14),
         decoration: BoxDecoration(
           color: const Color(0xFF141714),
-          borderRadius: BorderRadius.circular(6),
+          borderRadius: BorderRadius.circular(16),
           border: Border.all(color: AppTheme.lime, width: 1.2),
           boxShadow: [
             BoxShadow(
@@ -840,7 +840,7 @@ class _ReaderScreenState extends ConsumerState<ReaderScreen> {
                       const EdgeInsets.symmetric(horizontal: 7, vertical: 3),
                   decoration: BoxDecoration(
                     color: AppTheme.lime,
-                    borderRadius: BorderRadius.circular(8),
+                    borderRadius: BorderRadius.circular(12),
                   ),
                   child: Row(
                     mainAxisSize: MainAxisSize.min,
@@ -974,7 +974,7 @@ class _ReaderScreenState extends ConsumerState<ReaderScreen> {
             ),
             padding: const EdgeInsets.symmetric(vertical: 10, horizontal: 14),
             shape: RoundedRectangleBorder(
-              borderRadius: BorderRadius.circular(6),
+              borderRadius: BorderRadius.circular(20),
             ),
           ),
         ),
@@ -1547,7 +1547,7 @@ class _ReaderScreenState extends ConsumerState<ReaderScreen> {
           padding: const EdgeInsets.all(4),
           decoration: BoxDecoration(
             color: isDark ? const Color(0xFF181818) : const Color(0xFFF7F6F2),
-            borderRadius: BorderRadius.circular(6),
+            borderRadius: BorderRadius.circular(24),
             border: Border.all(
               color: isDark ? const Color(0xFF282828) : const Color(0xFFE5E7DC),
               width: 1.0,
@@ -1564,7 +1564,7 @@ class _ReaderScreenState extends ConsumerState<ReaderScreen> {
             padding: const EdgeInsets.all(22),
             decoration: BoxDecoration(
               color: isDark ? const Color(0xFF202020) : Colors.white,
-              borderRadius: BorderRadius.circular(6),
+              borderRadius: BorderRadius.circular(20),
               border: Border.all(
                 color:
                     isDark ? const Color(0xFF2E2E2E) : const Color(0xFFECEEE4),
@@ -1583,7 +1583,7 @@ class _ReaderScreenState extends ConsumerState<ReaderScreen> {
                       decoration: BoxDecoration(
                         color: Color(0xFF2D6A4F)
                             .withValues(alpha: isDark ? 0.25 : 0.1),
-                        borderRadius: BorderRadius.circular(6),
+                        borderRadius: BorderRadius.circular(12),
                         border: Border.all(
                           color: Color(0xFF2D6A4F).withValues(alpha: 0.3),
                           width: 1,
@@ -1640,7 +1640,7 @@ class _ReaderScreenState extends ConsumerState<ReaderScreen> {
                     color: isDark
                         ? const Color(0xFF141414)
                         : const Color(0xFFF7F6F2),
-                    borderRadius: BorderRadius.circular(6),
+                    borderRadius: BorderRadius.circular(16),
                     border: Border.all(
                       color: isDark
                           ? const Color(0xFF282828)
@@ -1686,7 +1686,7 @@ class _ReaderScreenState extends ConsumerState<ReaderScreen> {
                       foregroundColor: isDark ? AppTheme.ink : Colors.white,
                       elevation: 0,
                       shape: RoundedRectangleBorder(
-                        borderRadius: BorderRadius.circular(6),
+                        borderRadius: BorderRadius.circular(22),
                       ),
                       padding: const EdgeInsets.symmetric(vertical: 13),
                     ),
@@ -1737,7 +1737,7 @@ class _ReaderScreenState extends ConsumerState<ReaderScreen> {
           padding: const EdgeInsets.all(4),
           decoration: BoxDecoration(
             color: isDark ? const Color(0xFF181818) : const Color(0xFFF7F6F2),
-            borderRadius: BorderRadius.circular(6),
+            borderRadius: BorderRadius.circular(24),
             border: Border.all(
               color: isDark ? const Color(0xFF282828) : const Color(0xFFE5E7DC),
               width: 1.0,
@@ -1754,7 +1754,7 @@ class _ReaderScreenState extends ConsumerState<ReaderScreen> {
             padding: const EdgeInsets.all(22),
             decoration: BoxDecoration(
               color: isDark ? const Color(0xFF202020) : Colors.white,
-              borderRadius: BorderRadius.circular(6),
+              borderRadius: BorderRadius.circular(20),
               border: Border.all(
                 color:
                     isDark ? const Color(0xFF2E2E2E) : const Color(0xFFECEEE4),
@@ -1823,7 +1823,7 @@ class _ReaderScreenState extends ConsumerState<ReaderScreen> {
                       foregroundColor: isDark ? AppTheme.ink : Colors.white,
                       elevation: 0,
                       shape: RoundedRectangleBorder(
-                        borderRadius: BorderRadius.circular(6),
+                        borderRadius: BorderRadius.circular(22),
                       ),
                       padding: const EdgeInsets.symmetric(vertical: 13),
                     ),
@@ -2228,7 +2228,7 @@ class _ReaderScreenState extends ConsumerState<ReaderScreen> {
               child: Container(
                 decoration: BoxDecoration(
                   color: theme.innerCardColor,
-                  borderRadius: BorderRadius.circular(6),
+                  borderRadius: BorderRadius.circular(20),
                   border: Border.all(color: theme.borderColor),
                 ),
                 child: Row(
@@ -2236,7 +2236,7 @@ class _ReaderScreenState extends ConsumerState<ReaderScreen> {
                   children: [
                     InkWell(
                       onTap: () => _setReadingMode('feed'),
-                      borderRadius: BorderRadius.circular(5),
+                      borderRadius: BorderRadius.circular(16),
                       child: Container(
                         padding: const EdgeInsets.symmetric(
                             horizontal: 8, vertical: 4),
@@ -2244,7 +2244,7 @@ class _ReaderScreenState extends ConsumerState<ReaderScreen> {
                           color: _readingMode == 'feed'
                               ? const Color(0xFF2D6A4F)
                               : Colors.transparent,
-                          borderRadius: BorderRadius.circular(5),
+                          borderRadius: BorderRadius.circular(16),
                         ),
                         child: Text(
                           'FEED',
@@ -2261,7 +2261,7 @@ class _ReaderScreenState extends ConsumerState<ReaderScreen> {
                     ),
                     InkWell(
                       onTap: () => _setReadingMode('flow'),
-                      borderRadius: BorderRadius.circular(5),
+                      borderRadius: BorderRadius.circular(16),
                       child: Container(
                         padding: const EdgeInsets.symmetric(
                             horizontal: 8, vertical: 4),
@@ -2269,7 +2269,7 @@ class _ReaderScreenState extends ConsumerState<ReaderScreen> {
                           color: _readingMode == 'flow'
                               ? const Color(0xFF2D6A4F)
                               : Colors.transparent,
-                          borderRadius: BorderRadius.circular(5),
+                          borderRadius: BorderRadius.circular(16),
                         ),
                         child: Text(
                           'FLOW',
@@ -2334,7 +2334,7 @@ class _ReaderScreenState extends ConsumerState<ReaderScreen> {
 
                   _showBrainDeckSheet(context, docTitle);
                 },
-                borderRadius: BorderRadius.circular(6),
+                borderRadius: BorderRadius.circular(16),
                 child: Container(
                   margin:
                       const EdgeInsets.symmetric(vertical: 8, horizontal: 4),
@@ -2342,7 +2342,7 @@ class _ReaderScreenState extends ConsumerState<ReaderScreen> {
                       const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
                   decoration: BoxDecoration(
                     color: theme.innerCardColor,
-                    borderRadius: BorderRadius.circular(6),
+                    borderRadius: BorderRadius.circular(16),
                     border: Border.all(
                       color: theme.accentColor.withValues(alpha: 0.6),
                       width: 1.0,
@@ -2375,7 +2375,7 @@ class _ReaderScreenState extends ConsumerState<ReaderScreen> {
               padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
               decoration: BoxDecoration(
                 color: theme.innerCardColor,
-                borderRadius: BorderRadius.circular(6),
+                borderRadius: BorderRadius.circular(16),
                 border: Border.all(color: theme.borderColor),
               ),
               child: Text(
@@ -3999,15 +3999,15 @@ class _InBookSearchSheetState extends ConsumerState<_InBookSearchSheet> {
                   contentPadding:
                       const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
                   border: OutlineInputBorder(
-                    borderRadius: BorderRadius.circular(6),
+                    borderRadius: BorderRadius.circular(14),
                     borderSide: BorderSide(color: AppTheme.borderOf(context)),
                   ),
                   enabledBorder: OutlineInputBorder(
-                    borderRadius: BorderRadius.circular(6),
+                    borderRadius: BorderRadius.circular(14),
                     borderSide: BorderSide(color: AppTheme.borderOf(context)),
                   ),
                   focusedBorder: OutlineInputBorder(
-                    borderRadius: BorderRadius.circular(6),
+                    borderRadius: BorderRadius.circular(14),
                     borderSide:
                         const BorderSide(color: Color(0xFF2D6A4F), width: 1.5),
                   ),

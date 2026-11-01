@@ -5,7 +5,7 @@ import 'package:athena/core/theme/theme.dart';
 /// Full-width Stripe Press / Tufte editorial bottom bar:
 /// - Crisp, full-width bottom shelf (#FBF9F5 in light mode, #141413 in dark mode)
 /// - 1px solid top hairline border (#E2DDD5 / #282828)
-/// - Sharp 4px-radius editorial action tabs and buttons (zero puffy bubbles)
+/// - Organic rounded pill action tabs and buttons per flutter-ui-ux guidelines
 class AthenaBottomNav extends StatelessWidget {
   final int selectedIndex;
   final ValueChanged<int> onDestinationSelected;
@@ -98,7 +98,7 @@ class _EditorialNavTab extends StatelessWidget {
 
     return InkWell(
       onTap: onTap,
-      borderRadius: BorderRadius.circular(4),
+      borderRadius: BorderRadius.circular(20),
       child: AnimatedContainer(
         duration: const Duration(milliseconds: 160),
         curve: Curves.easeOutCubic,
@@ -107,7 +107,7 @@ class _EditorialNavTab extends StatelessWidget {
           color: isSelected
               ? (isDark ? const Color(0xFF222221) : const Color(0xFFEBE7DF))
               : Colors.transparent,
-          borderRadius: BorderRadius.circular(4),
+          borderRadius: BorderRadius.circular(20),
           border: Border.all(
             color: isSelected
                 ? (isDark ? const Color(0xFF333331) : const Color(0xFFD6D0C5))
@@ -178,14 +178,22 @@ class _CenterActionButtonState extends State<_CenterActionButton> {
         duration: const Duration(milliseconds: 100),
         curve: Curves.easeOutCubic,
         child: Container(
-          padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 8),
+          padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8.5),
           decoration: BoxDecoration(
             color: isDark ? Colors.white : const Color(0xFF161615),
-            borderRadius: BorderRadius.circular(4),
+            borderRadius: BorderRadius.circular(22),
             border: Border.all(
               color: isDark ? const Color(0xFFE2DDD5) : const Color(0xFF161615),
               width: 1,
             ),
+            boxShadow: [
+              BoxShadow(
+                color: (isDark ? Colors.white : Colors.black)
+                    .withValues(alpha: 0.12),
+                blurRadius: 10,
+                offset: const Offset(0, 2),
+              ),
+            ],
           ),
           child: Row(
             mainAxisSize: MainAxisSize.min,

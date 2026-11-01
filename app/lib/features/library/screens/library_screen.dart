@@ -277,7 +277,7 @@ class _LibraryScreenState extends ConsumerState<LibraryScreen>
 
             decoration: BoxDecoration(
               color: isDark ? const Color(0xFF181818) : const Color(0xFFF7F6F2),
-              borderRadius: BorderRadius.circular(6),
+              borderRadius: BorderRadius.circular(24),
               border: Border.all(
                 color:
                     isDark ? const Color(0xFF282828) : const Color(0xFFE5E7DC),
@@ -299,7 +299,7 @@ class _LibraryScreenState extends ConsumerState<LibraryScreen>
 
               decoration: BoxDecoration(
                 color: isDark ? const Color(0xFF202020) : Colors.white,
-                borderRadius: BorderRadius.circular(6),
+                borderRadius: BorderRadius.circular(20),
               ),
 
               child: SingleChildScrollView(
@@ -316,7 +316,7 @@ class _LibraryScreenState extends ConsumerState<LibraryScreen>
                           color: isDark
                               ? const Color(0xFF333333)
                               : const Color(0xFFE0E0E0),
-                          borderRadius: BorderRadius.circular(2),
+                          borderRadius: BorderRadius.circular(4),
                         ),
                       ),
                     ),
@@ -342,7 +342,7 @@ class _LibraryScreenState extends ConsumerState<LibraryScreen>
                                           .withValues(alpha: 0.15)
                                       : const Color(0xFF005E54)
                                           .withValues(alpha: 0.08),
-                                  borderRadius: BorderRadius.circular(6),
+                                  borderRadius: BorderRadius.circular(12),
                                   border: Border.all(
                                     color: isDark
                                         ? const Color(0xFF2DD4BF)
@@ -388,7 +388,7 @@ class _LibraryScreenState extends ConsumerState<LibraryScreen>
                         color: isDark
                             ? const Color(0xFF181818)
                             : const Color(0xFFFBFBF9),
-                        borderRadius: BorderRadius.circular(6),
+                        borderRadius: BorderRadius.circular(16),
                         border: Border.all(
                           color: isDark
                               ? const Color(0xFF2E2E2E)
@@ -456,14 +456,14 @@ class _LibraryScreenState extends ConsumerState<LibraryScreen>
                         Expanded(
                           child: InkWell(
                             onTap: () => Navigator.pop(ctx),
-                            borderRadius: BorderRadius.circular(6),
+                            borderRadius: BorderRadius.circular(22),
                             child: Container(
                               padding: const EdgeInsets.symmetric(vertical: 12),
                               decoration: BoxDecoration(
                                 color: isDark
                                     ? const Color(0xFF181818)
                                     : const Color(0xFFF2F0E8),
-                                borderRadius: BorderRadius.circular(6),
+                                borderRadius: BorderRadius.circular(22),
                                 border: Border.all(
                                   color: isDark
                                       ? const Color(0xFF2E2E2E)
@@ -492,12 +492,12 @@ class _LibraryScreenState extends ConsumerState<LibraryScreen>
 
                               _applyUpdate();
                             },
-                            borderRadius: BorderRadius.circular(6),
+                            borderRadius: BorderRadius.circular(22),
                             child: Container(
                               padding: const EdgeInsets.symmetric(vertical: 12),
                               decoration: BoxDecoration(
                                 color: isDark ? Colors.white : AppTheme.ink,
-                                borderRadius: BorderRadius.circular(6),
+                                borderRadius: BorderRadius.circular(22),
                                 boxShadow: [
                                   BoxShadow(
                                     color: isDark
@@ -623,7 +623,7 @@ class _LibraryScreenState extends ConsumerState<LibraryScreen>
       margin: const EdgeInsets.only(bottom: 18),
       decoration: BoxDecoration(
         color: isDark ? const Color(0xFF1E1E1C) : const Color(0xFFF2EFE9),
-        borderRadius: BorderRadius.circular(4),
+        borderRadius: BorderRadius.circular(16),
         border: Border(
           left: const BorderSide(
             color: Color(0xFFC84B31), // Terracotta accent spine
@@ -679,7 +679,7 @@ class _LibraryScreenState extends ConsumerState<LibraryScreen>
                     _updateDismissed = true;
                   });
                 },
-                borderRadius: BorderRadius.circular(4),
+                borderRadius: BorderRadius.circular(20),
                 child: Padding(
                   padding: const EdgeInsets.all(4.0),
                   child: Icon(
@@ -734,7 +734,7 @@ class _LibraryScreenState extends ConsumerState<LibraryScreen>
                   foregroundColor: Colors.white,
                   elevation: 0,
                   shape: RoundedRectangleBorder(
-                    borderRadius: BorderRadius.circular(4),
+                    borderRadius: BorderRadius.circular(20),
                   ),
                   padding: const EdgeInsets.symmetric(horizontal: 14),
                 ),
@@ -769,7 +769,7 @@ class _LibraryScreenState extends ConsumerState<LibraryScreen>
                       foregroundColor: Colors.white,
                       elevation: 0,
                       shape: RoundedRectangleBorder(
-                        borderRadius: BorderRadius.circular(4),
+                        borderRadius: BorderRadius.circular(20),
                       ),
                       padding: const EdgeInsets.symmetric(horizontal: 14),
                     ),
@@ -802,7 +802,7 @@ class _LibraryScreenState extends ConsumerState<LibraryScreen>
                             : const Color(0xFFCCCCCC),
                       ),
                       shape: RoundedRectangleBorder(
-                        borderRadius: BorderRadius.circular(4),
+                        borderRadius: BorderRadius.circular(20),
                       ),
                       padding: const EdgeInsets.symmetric(horizontal: 12),
                     ),
@@ -837,7 +837,7 @@ class _LibraryScreenState extends ConsumerState<LibraryScreen>
                       foregroundColor: Colors.white,
                       elevation: 0,
                       shape: RoundedRectangleBorder(
-                        borderRadius: BorderRadius.circular(4),
+                        borderRadius: BorderRadius.circular(20),
                       ),
                       padding: const EdgeInsets.symmetric(horizontal: 14),
                     ),
@@ -868,7 +868,7 @@ class _LibraryScreenState extends ConsumerState<LibraryScreen>
                           isDark ? Colors.white : const Color(0xFF161615),
                       elevation: 0,
                       shape: RoundedRectangleBorder(
-                        borderRadius: BorderRadius.circular(4),
+                        borderRadius: BorderRadius.circular(20),
                       ),
                       padding: const EdgeInsets.symmetric(horizontal: 14),
                     ),
@@ -964,7 +964,7 @@ class _LibraryScreenState extends ConsumerState<LibraryScreen>
           padding: const EdgeInsets.all(20),
           decoration: BoxDecoration(
             color: AppTheme.bgOf(ctx),
-            borderRadius: BorderRadius.circular(6),
+            borderRadius: BorderRadius.circular(20),
             border: Border.all(color: AppTheme.borderOf(ctx)),
           ),
           child: Column(
@@ -1010,15 +1010,15 @@ class _LibraryScreenState extends ConsumerState<LibraryScreen>
                   contentPadding:
                       const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
                   border: OutlineInputBorder(
-                    borderRadius: BorderRadius.circular(6),
+                    borderRadius: BorderRadius.circular(14),
                     borderSide: BorderSide(color: AppTheme.borderOf(ctx)),
                   ),
                   enabledBorder: OutlineInputBorder(
-                    borderRadius: BorderRadius.circular(6),
+                    borderRadius: BorderRadius.circular(14),
                     borderSide: BorderSide(color: AppTheme.borderOf(ctx)),
                   ),
                   focusedBorder: OutlineInputBorder(
-                    borderRadius: BorderRadius.circular(6),
+                    borderRadius: BorderRadius.circular(14),
                     borderSide:
                         const BorderSide(color: Color(0xFF2D6A4F), width: 1.5),
                   ),
@@ -1049,7 +1049,7 @@ class _LibraryScreenState extends ConsumerState<LibraryScreen>
                       foregroundColor: Colors.white,
                       elevation: 0,
                       shape: RoundedRectangleBorder(
-                        borderRadius: BorderRadius.circular(6),
+                        borderRadius: BorderRadius.circular(20),
                       ),
                       padding: const EdgeInsets.symmetric(
                           horizontal: 16, vertical: 10),
@@ -1140,7 +1140,7 @@ class _LibraryScreenState extends ConsumerState<LibraryScreen>
           padding: const EdgeInsets.all(4),
           decoration: BoxDecoration(
             color: isDark ? const Color(0xFF181818) : const Color(0xFFF7F6F2),
-            borderRadius: BorderRadius.circular(6),
+            borderRadius: BorderRadius.circular(24),
             border: Border.all(
               color: isDark ? const Color(0xFF282828) : const Color(0xFFE5E7DC),
               width: 1.0,
@@ -1157,7 +1157,7 @@ class _LibraryScreenState extends ConsumerState<LibraryScreen>
             padding: const EdgeInsets.all(22),
             decoration: BoxDecoration(
               color: isDark ? const Color(0xFF202020) : Colors.white,
-              borderRadius: BorderRadius.circular(6),
+              borderRadius: BorderRadius.circular(20),
               border: Border.all(
                 color:
                     isDark ? const Color(0xFF2E2E2E) : const Color(0xFFECEEE4),
@@ -1176,7 +1176,7 @@ class _LibraryScreenState extends ConsumerState<LibraryScreen>
                       decoration: BoxDecoration(
                         color: Colors.redAccent
                             .withValues(alpha: isDark ? 0.2 : 0.1),
-                        borderRadius: BorderRadius.circular(4),
+                        borderRadius: BorderRadius.circular(12),
                         border: Border.all(
                           color: Colors.redAccent.withValues(alpha: 0.3),
                           width: 1,
@@ -1226,7 +1226,7 @@ class _LibraryScreenState extends ConsumerState<LibraryScreen>
                                 : const Color(0xFFE0E0E0),
                           ),
                           shape: RoundedRectangleBorder(
-                            borderRadius: BorderRadius.circular(4),
+                            borderRadius: BorderRadius.circular(22),
                           ),
                           padding: const EdgeInsets.symmetric(vertical: 13),
                         ),
@@ -1248,7 +1248,7 @@ class _LibraryScreenState extends ConsumerState<LibraryScreen>
                           foregroundColor: Colors.white,
                           elevation: 0,
                           shape: RoundedRectangleBorder(
-                            borderRadius: BorderRadius.circular(4),
+                            borderRadius: BorderRadius.circular(22),
                           ),
                           padding: const EdgeInsets.symmetric(vertical: 13),
                         ),
@@ -1434,7 +1434,7 @@ class _LibraryScreenState extends ConsumerState<LibraryScreen>
                                       .read(themeModeProvider.notifier)
                                       .toggleTheme();
                                 },
-                                borderRadius: BorderRadius.circular(10),
+                                borderRadius: BorderRadius.circular(20),
                                 child: Container(
                                   padding: const EdgeInsets.all(7),
                                   margin: const EdgeInsets.only(right: 8),
@@ -1442,7 +1442,7 @@ class _LibraryScreenState extends ConsumerState<LibraryScreen>
                                     color: darkActive
                                         ? const Color(0xFF202020)
                                         : AppTheme.surfaceWarm,
-                                    borderRadius: BorderRadius.circular(10),
+                                    borderRadius: BorderRadius.circular(20),
                                     border: Border.all(
                                       color: darkActive
                                           ? const Color(0xFF2E2E2E)
@@ -1480,7 +1480,7 @@ class _LibraryScreenState extends ConsumerState<LibraryScreen>
                                 _checkForUpdates();
                               }
                             },
-                            borderRadius: BorderRadius.circular(10),
+                            borderRadius: BorderRadius.circular(20),
                             child: Container(
                               padding: const EdgeInsets.all(7),
                               margin: const EdgeInsets.only(right: 8),
@@ -1488,7 +1488,7 @@ class _LibraryScreenState extends ConsumerState<LibraryScreen>
                                 color: isDark
                                     ? const Color(0xFF202020)
                                     : AppTheme.surfaceWarm,
-                                borderRadius: BorderRadius.circular(10),
+                                borderRadius: BorderRadius.circular(20),
                                 border: Border.all(
                                   color: isDark
                                       ? const Color(0xFF2E2E2E)
@@ -1509,7 +1509,7 @@ class _LibraryScreenState extends ConsumerState<LibraryScreen>
                               apiClient: ref.read(apiClientProvider),
                               onConfigSaved: _checkAIConfiguration,
                             ),
-                            borderRadius: BorderRadius.circular(10),
+                            borderRadius: BorderRadius.circular(20),
                             child: Container(
                               padding: const EdgeInsets.symmetric(
                                   horizontal: 10, vertical: 6),
@@ -1521,7 +1521,7 @@ class _LibraryScreenState extends ConsumerState<LibraryScreen>
                                     : (isDark
                                         ? const Color(0xFF332510)
                                         : const Color(0xFFFFF8E7)),
-                                borderRadius: BorderRadius.circular(10),
+                                borderRadius: BorderRadius.circular(20),
                                 border: Border.all(
                                   color: _aiConfigured
                                       ? (isDark
@@ -1580,7 +1580,7 @@ class _LibraryScreenState extends ConsumerState<LibraryScreen>
                         color: isDark
                             ? const Color(0xFF1E1E1E)
                             : const Color(0xFFFFFDF8),
-                        borderRadius: BorderRadius.circular(6),
+                        borderRadius: BorderRadius.circular(16),
                         border: Border.all(
                           color: isDark
                               ? const Color(0xFF333333)
@@ -1645,7 +1645,7 @@ class _LibraryScreenState extends ConsumerState<LibraryScreen>
                               padding: const EdgeInsets.symmetric(
                                   horizontal: 12, vertical: 8),
                               shape: RoundedRectangleBorder(
-                                  borderRadius: BorderRadius.circular(10)),
+                                  borderRadius: BorderRadius.circular(20)),
                             ),
                           ),
                         ],
@@ -1664,7 +1664,7 @@ class _LibraryScreenState extends ConsumerState<LibraryScreen>
                       color: isDark
                           ? const Color(0xFF1B1B19)
                           : const Color(0xFFF2EFE9),
-                      borderRadius: BorderRadius.circular(6),
+                      borderRadius: BorderRadius.circular(20),
                       border: Border.all(
                         color: isDark
                             ? const Color(0xFF282828)
@@ -1684,7 +1684,7 @@ class _LibraryScreenState extends ConsumerState<LibraryScreen>
                                 color: isDark
                                     ? const Color(0xFF2DD4BF)
                                     : const Color(0xFF2D6A4F),
-                                borderRadius: BorderRadius.circular(1.5),
+                                borderRadius: BorderRadius.circular(3),
                               ),
                             ),
                             const SizedBox(width: 8),
@@ -1784,7 +1784,7 @@ class _LibraryScreenState extends ConsumerState<LibraryScreen>
                             color: isDark
                                 ? const Color(0xFF222222)
                                 : const Color(0xFFEFEFEA),
-                            borderRadius: BorderRadius.circular(4),
+                            borderRadius: BorderRadius.circular(12),
                           ),
                           child: Text(
                             '$documentCount ${documentCount == 1 ? 'BOOK' : 'BOOKS'}',
@@ -1809,7 +1809,7 @@ class _LibraryScreenState extends ConsumerState<LibraryScreen>
                   Container(
                     decoration: BoxDecoration(
                       color: isDark ? const Color(0xFF202020) : Colors.white,
-                      borderRadius: BorderRadius.circular(6),
+                      borderRadius: BorderRadius.circular(16),
                       border: Border.all(
                           color: isDark
                               ? const Color(0xFF2E2E2E)
@@ -1971,7 +1971,7 @@ class _LibraryScreenState extends ConsumerState<LibraryScreen>
 
       decoration: BoxDecoration(
         color: isDark ? const Color(0xFF181818) : const Color(0xFFF7F6F2),
-        borderRadius: BorderRadius.circular(6),
+        borderRadius: BorderRadius.circular(24),
         border: Border.all(
           color: isDark ? const Color(0xFF282828) : const Color(0xFFE5E7DC),
           width: 1.0,
@@ -1985,7 +1985,7 @@ class _LibraryScreenState extends ConsumerState<LibraryScreen>
 
         decoration: BoxDecoration(
           color: isDark ? const Color(0xFF202020) : Colors.white,
-          borderRadius: BorderRadius.circular(4),
+          borderRadius: BorderRadius.circular(20),
         ),
 
         child: Column(
@@ -2104,7 +2104,7 @@ class _EditorialPillButtonState extends State<_EditorialPillButton> {
             color: widget.onPressed != null
                 ? (isDark ? Colors.white : const Color(0xFF161615))
                 : const Color(0xFF888884),
-            borderRadius: BorderRadius.circular(6),
+            borderRadius: BorderRadius.circular(24),
             border: Border.all(
               color: isDark ? const Color(0xFFE2DDD5) : const Color(0xFF161615),
               width: 1.0,
@@ -2230,7 +2230,7 @@ class _ConnectionCard extends StatelessWidget {
       padding: const EdgeInsets.all(4),
       decoration: BoxDecoration(
         color: isDark ? const Color(0xFF181818) : const Color(0xFFF7F6F2),
-        borderRadius: BorderRadius.circular(6),
+        borderRadius: BorderRadius.circular(20),
         border: Border.all(
             color: isDark ? const Color(0xFF282828) : const Color(0xFFE5E7DC)),
       ),
@@ -2238,7 +2238,7 @@ class _ConnectionCard extends StatelessWidget {
         padding: const EdgeInsets.all(18),
         decoration: BoxDecoration(
           color: isDark ? const Color(0xFF202020) : Colors.white,
-          borderRadius: BorderRadius.circular(6),
+          borderRadius: BorderRadius.circular(16),
         ),
         child: Row(
           children: [
@@ -2298,7 +2298,7 @@ class _ConnectionCard extends StatelessWidget {
                     ),
                     minimumSize: const Size(58, 34),
                     shape: RoundedRectangleBorder(
-                      borderRadius: BorderRadius.circular(10),
+                      borderRadius: BorderRadius.circular(18),
                     ),
                     padding: const EdgeInsets.symmetric(horizontal: 10),
                   ),
@@ -2315,7 +2315,7 @@ class _ConnectionCard extends StatelessWidget {
                         isDark ? const Color(0xFF141714) : Colors.white,
                     minimumSize: const Size(58, 34),
                     shape: RoundedRectangleBorder(
-                      borderRadius: BorderRadius.circular(10),
+                      borderRadius: BorderRadius.circular(18),
                     ),
                     padding: const EdgeInsets.symmetric(horizontal: 10),
                   ),
@@ -2396,7 +2396,7 @@ class _DocumentTileState extends State<_DocumentTile> {
       onHighlightChanged: (val) {
         if (mounted) setState(() => _isPressed = val);
       },
-      borderRadius: BorderRadius.circular(6),
+      borderRadius: BorderRadius.circular(16),
       child: AnimatedScale(
         scale: _isPressed ? 0.985 : 1.0,
         duration: const Duration(milliseconds: 140),
@@ -2404,7 +2404,7 @@ class _DocumentTileState extends State<_DocumentTile> {
         child: Container(
           decoration: BoxDecoration(
             color: isDark ? const Color(0xFF1A1A18) : const Color(0xFFFAF7F2),
-            borderRadius: BorderRadius.circular(6),
+            borderRadius: BorderRadius.circular(16),
             border: Border.all(
               color: isDark ? const Color(0xFF282828) : const Color(0xFFE2DDD5),
               width: 1.0,
@@ -2425,8 +2425,8 @@ class _DocumentTileState extends State<_DocumentTile> {
                             ? const Color(0xFFE2DDD5)
                             : const Color(0xFF161615)),
                     borderRadius: const BorderRadius.only(
-                      topLeft: Radius.circular(6),
-                      bottomLeft: Radius.circular(6),
+                      topLeft: Radius.circular(16),
+                      bottomLeft: Radius.circular(16),
                     ),
                   ),
                 ),
@@ -2516,7 +2516,7 @@ class _DocumentTileState extends State<_DocumentTile> {
                               if (doc.isProcessing) ...[
                                 const SizedBox(height: 8),
                                 ClipRRect(
-                                  borderRadius: BorderRadius.circular(3),
+                                  borderRadius: BorderRadius.circular(6),
                                   child: LinearProgressIndicator(
                                     value:
                                         (doc.percent ?? 0).clamp(0, 100) / 100,
@@ -2580,7 +2580,7 @@ class _DocumentTileState extends State<_DocumentTile> {
                               color: isDark
                                   ? Colors.white
                                   : const Color(0xFF161615),
-                              borderRadius: BorderRadius.circular(6),
+                              borderRadius: BorderRadius.circular(16),
                             ),
                             child: Row(
                               mainAxisSize: MainAxisSize.min,
@@ -2621,7 +2621,7 @@ class _DocumentTileState extends State<_DocumentTile> {
                               isDark ? const Color(0xFF222222) : Colors.white,
                           elevation: 4,
                           shape: RoundedRectangleBorder(
-                            borderRadius: BorderRadius.circular(6),
+                            borderRadius: BorderRadius.circular(14),
                             side: BorderSide(
                                 color: isDark
                                     ? const Color(0xFF333333)
@@ -2742,7 +2742,7 @@ class _StatusChip extends StatelessWidget {
       padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3.5),
       decoration: BoxDecoration(
         color: bgColor,
-        borderRadius: BorderRadius.circular(4),
+        borderRadius: BorderRadius.circular(12),
       ),
       child: Text(
         label,

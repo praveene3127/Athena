@@ -341,7 +341,7 @@ class _ProcessingScreenState extends ConsumerState<ProcessingScreen>
                         border: Border.all(
                             color: Colors.redAccent.withValues(alpha: 0.3),
                             width: 1),
-                        borderRadius: BorderRadius.circular(6),
+                        borderRadius: BorderRadius.circular(16),
                       ),
                       child: Row(
                         children: [
@@ -377,7 +377,7 @@ class _ProcessingScreenState extends ConsumerState<ProcessingScreen>
                       color: isDark
                           ? const Color(0xFF181818)
                           : const Color(0xFFF7F6F2),
-                      borderRadius: BorderRadius.circular(6),
+                      borderRadius: BorderRadius.circular(24),
                       border: Border.all(
                         color: isDark
                             ? const Color(0xFF282828)
@@ -388,7 +388,7 @@ class _ProcessingScreenState extends ConsumerState<ProcessingScreen>
                       padding: const EdgeInsets.all(20),
                       decoration: BoxDecoration(
                         color: isDark ? const Color(0xFF202020) : Colors.white,
-                        borderRadius: BorderRadius.circular(6),
+                        borderRadius: BorderRadius.circular(20),
                         border: Border.all(
                           color: isDark
                               ? const Color(0xFF2E2E2E)
@@ -455,7 +455,7 @@ class _ProcessingScreenState extends ConsumerState<ProcessingScreen>
                           ),
                           const SizedBox(height: 18),
                           ClipRRect(
-                            borderRadius: BorderRadius.circular(4),
+                            borderRadius: BorderRadius.circular(6),
                             child: LinearProgressIndicator(
                               value: percent / 100.0,
                               minHeight: 8,
@@ -530,7 +530,7 @@ class _ProcessingScreenState extends ConsumerState<ProcessingScreen>
                                     ? AppTheme.surfaceOf(context)
                                     : AppTheme.surfaceOf(context)
                                         .withValues(alpha: 0.65)),
-                            borderRadius: BorderRadius.circular(6),
+                            borderRadius: BorderRadius.circular(16),
                             border: Border.all(
                               color: isActive
                                   ? (isDark
@@ -731,14 +731,14 @@ class _ProcessingScreenState extends ConsumerState<ProcessingScreen>
                   if (isDone)
                     InkWell(
                       onTap: () => context.go('/reader/${widget.documentId}'),
-                      borderRadius: BorderRadius.circular(6),
+                      borderRadius: BorderRadius.circular(24),
                       child: Container(
                         width: double.infinity,
                         height: 54,
                         padding: const EdgeInsets.symmetric(horizontal: 20),
                         decoration: BoxDecoration(
                           color: const Color(0xFF005E54),
-                          borderRadius: BorderRadius.circular(6),
+                          borderRadius: BorderRadius.circular(24),
                           boxShadow: [
                             BoxShadow(
                               color: const Color(0xFF005E54)
@@ -781,14 +781,14 @@ class _ProcessingScreenState extends ConsumerState<ProcessingScreen>
                   else if (isFailed)
                     InkWell(
                       onTap: _isRetrying ? null : _retry,
-                      borderRadius: BorderRadius.circular(6),
+                      borderRadius: BorderRadius.circular(24),
                       child: Container(
                         width: double.infinity,
                         height: 54,
                         padding: const EdgeInsets.symmetric(horizontal: 20),
                         decoration: BoxDecoration(
                           color: const Color(0xFF141714),
-                          borderRadius: BorderRadius.circular(6),
+                          borderRadius: BorderRadius.circular(24),
                           boxShadow: [
                             BoxShadow(
                               color: Colors.black.withValues(alpha: 0.15),
@@ -846,7 +846,7 @@ class _ProcessingScreenState extends ConsumerState<ProcessingScreen>
                         color: isDark
                             ? const Color(0xFF181818)
                             : const Color(0xFFF7F6F2),
-                        borderRadius: BorderRadius.circular(6),
+                        borderRadius: BorderRadius.circular(20),
                         border: Border.all(
                             color: isDark
                                 ? const Color(0xFF282828)
@@ -858,7 +858,7 @@ class _ProcessingScreenState extends ConsumerState<ProcessingScreen>
                         decoration: BoxDecoration(
                           color:
                               isDark ? const Color(0xFF202020) : Colors.white,
-                          borderRadius: BorderRadius.circular(6),
+                          borderRadius: BorderRadius.circular(14),
                           border: Border.all(
                               color: isDark
                                   ? const Color(0xFF2E2E2E)
@@ -918,7 +918,7 @@ class _ProcessingScreenState extends ConsumerState<ProcessingScreen>
           padding: const EdgeInsets.all(28),
           decoration: BoxDecoration(
             color: isDark ? AppTheme.darkSurface : const Color(0xFFFCFBF7),
-            borderRadius: BorderRadius.circular(6),
+            borderRadius: BorderRadius.circular(20),
             border: Border.all(
                 color: isDark ? AppTheme.darkBorder : AppTheme.figmaBlack,
                 width: 1.5),
@@ -940,7 +940,7 @@ class _ProcessingScreenState extends ConsumerState<ProcessingScreen>
                     const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
                 decoration: BoxDecoration(
                   color: isDark ? Colors.white : AppTheme.figmaBlack,
-                  borderRadius: BorderRadius.circular(4),
+                  borderRadius: BorderRadius.circular(12),
                 ),
                 child: Text(
                   'NOT A LONG-FORM READING DOCUMENT',
@@ -989,7 +989,7 @@ class _ProcessingScreenState extends ConsumerState<ProcessingScreen>
                     foregroundColor:
                         isDark ? AppTheme.figmaBlack : Colors.white,
                     shape: RoundedRectangleBorder(
-                      borderRadius: BorderRadius.circular(6),
+                      borderRadius: BorderRadius.circular(24),
                     ),
                     elevation: 0,
                   ),

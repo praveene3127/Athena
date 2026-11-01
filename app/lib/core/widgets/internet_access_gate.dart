@@ -131,7 +131,7 @@ class _InternetAccessGateState extends State<InternetAccessGate>
                   color: isDark
                       ? const Color(0xFF181818)
                       : const Color(0xFFF7F6F2),
-                  borderRadius: BorderRadius.circular(6),
+                  borderRadius: BorderRadius.circular(24),
                   border: Border.all(
                     color: isDark
                         ? const Color(0xFF282828)
@@ -152,7 +152,7 @@ class _InternetAccessGateState extends State<InternetAccessGate>
                       const EdgeInsets.symmetric(horizontal: 24, vertical: 28),
                   decoration: BoxDecoration(
                     color: isDark ? const Color(0xFF202020) : Colors.white,
-                    borderRadius: BorderRadius.circular(6),
+                    borderRadius: BorderRadius.circular(20),
                   ),
                   child: Column(
                     mainAxisSize: MainAxisSize.min,
@@ -165,7 +165,7 @@ class _InternetAccessGateState extends State<InternetAccessGate>
                           color: isDark
                               ? const Color(0xFF2D6A4F).withValues(alpha: 0.15)
                               : const Color(0xFF2D6A4F).withValues(alpha: 0.08),
-                          borderRadius: BorderRadius.circular(4),
+                          borderRadius: BorderRadius.circular(12),
                           border: Border.all(
                             color: isDark
                                 ? const Color(0xFF2D6A4F).withValues(alpha: 0.3)
@@ -250,13 +250,13 @@ class _InternetAccessGateState extends State<InternetAccessGate>
                       // Primary Button: Try Again
                       InkWell(
                         onTap: _checking ? null : _checkInternet,
-                        borderRadius: BorderRadius.circular(6),
+                        borderRadius: BorderRadius.circular(22),
                         child: Container(
                           width: double.infinity,
                           padding: const EdgeInsets.symmetric(vertical: 13),
                           decoration: BoxDecoration(
                             color: isDark ? Colors.white : AppTheme.ink,
-                            borderRadius: BorderRadius.circular(6),
+                            borderRadius: BorderRadius.circular(22),
                             boxShadow: [
                               BoxShadow(
                                 color: isDark
@@ -315,7 +315,7 @@ class _InternetAccessGateState extends State<InternetAccessGate>
                           HapticFeedback.selectionClick();
                           setState(() => _online = true);
                         },
-                        borderRadius: BorderRadius.circular(6),
+                        borderRadius: BorderRadius.circular(22),
                         child: Container(
                           width: double.infinity,
                           padding: const EdgeInsets.symmetric(vertical: 12),
@@ -323,7 +323,7 @@ class _InternetAccessGateState extends State<InternetAccessGate>
                             color: isDark
                                 ? const Color(0xFF181818)
                                 : const Color(0xFFF7F6F2),
-                            borderRadius: BorderRadius.circular(6),
+                            borderRadius: BorderRadius.circular(22),
                             border: Border.all(
                               color: isDark
                                   ? const Color(0xFF282828)

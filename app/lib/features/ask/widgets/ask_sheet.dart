@@ -246,7 +246,7 @@ class _AskSheetState extends State<AskSheet> {
                     const Spacer(),
                     InkWell(
                       onTap: () => Navigator.of(context).pop(),
-                      borderRadius: BorderRadius.circular(6),
+                      borderRadius: BorderRadius.circular(17),
                       child: Container(
                         width: 34,
                         height: 34,
@@ -254,7 +254,7 @@ class _AskSheetState extends State<AskSheet> {
                           color: isDark
                               ? const Color(0xFF222222)
                               : const Color(0xFFF2F0E8),
-                          borderRadius: BorderRadius.circular(6),
+                          borderRadius: BorderRadius.circular(17),
                           border: Border.all(
                             color: isDark
                                 ? const Color(0xFF333333)
@@ -283,7 +283,7 @@ class _AskSheetState extends State<AskSheet> {
                     color: isDark
                         ? const Color(0xFF181818)
                         : const Color(0xFFF7F6F2),
-                    borderRadius: BorderRadius.circular(6),
+                    borderRadius: BorderRadius.circular(20),
                     border: Border.all(
                       color: isDark
                           ? const Color(0xFF282828)
@@ -294,7 +294,7 @@ class _AskSheetState extends State<AskSheet> {
                     padding: const EdgeInsets.all(14),
                     decoration: BoxDecoration(
                       color: isDark ? const Color(0xFF202020) : Colors.white,
-                      borderRadius: BorderRadius.circular(6),
+                      borderRadius: BorderRadius.circular(14),
                       border: Border.all(
                         color: isDark
                             ? const Color(0xFF2E2E2E)
@@ -386,7 +386,7 @@ class _AskSheetState extends State<AskSheet> {
 
                               _submitQuestion(chipText);
                             },
-                      borderRadius: BorderRadius.circular(6),
+                      borderRadius: BorderRadius.circular(20),
                       child: Container(
                         padding: const EdgeInsets.symmetric(
                             horizontal: 14, vertical: 8),
@@ -394,7 +394,7 @@ class _AskSheetState extends State<AskSheet> {
                           color: isDark
                               ? const Color(0xFF1E1E1E)
                               : const Color(0xFFF7F6F2),
-                          borderRadius: BorderRadius.circular(6),
+                          borderRadius: BorderRadius.circular(20),
                           border: Border.all(
                             color: isDark
                                 ? const Color(0xFF2E2E2E)
@@ -443,7 +443,7 @@ class _AskSheetState extends State<AskSheet> {
                     contentPadding: const EdgeInsets.symmetric(
                         horizontal: 16, vertical: 14),
                     border: OutlineInputBorder(
-                      borderRadius: BorderRadius.circular(6),
+                      borderRadius: BorderRadius.circular(16),
                       borderSide: BorderSide(
                         color: isDark
                             ? const Color(0xFF333333)
@@ -451,7 +451,7 @@ class _AskSheetState extends State<AskSheet> {
                       ),
                     ),
                     enabledBorder: OutlineInputBorder(
-                      borderRadius: BorderRadius.circular(6),
+                      borderRadius: BorderRadius.circular(16),
                       borderSide: BorderSide(
                         color: isDark
                             ? const Color(0xFF333333)
@@ -459,7 +459,7 @@ class _AskSheetState extends State<AskSheet> {
                       ),
                     ),
                     focusedBorder: OutlineInputBorder(
-                      borderRadius: BorderRadius.circular(6),
+                      borderRadius: BorderRadius.circular(16),
                       borderSide: const BorderSide(
                           color: Color(0xFF2D6A4F), width: 1.5),
                     ),
@@ -476,7 +476,7 @@ class _AskSheetState extends State<AskSheet> {
                     onTap: _loading || isNotConfigured
                         ? null
                         : () => _submitQuestion(_questionController.text),
-                    borderRadius: BorderRadius.circular(6),
+                    borderRadius: BorderRadius.circular(22),
                     child: Container(
                       padding: const EdgeInsets.symmetric(
                           horizontal: 16, vertical: 8),
@@ -486,7 +486,7 @@ class _AskSheetState extends State<AskSheet> {
                                 ? const Color(0xFF333333)
                                 : const Color(0xFFD8DEC8))
                             : const Color(0xFF2D6A4F),
-                        borderRadius: BorderRadius.circular(6),
+                        borderRadius: BorderRadius.circular(22),
                         boxShadow: [
                           BoxShadow(
                             color:
@@ -514,7 +514,7 @@ class _AskSheetState extends State<AskSheet> {
                             height: 26,
                             decoration: BoxDecoration(
                               color: Colors.white.withValues(alpha: 0.2),
-                              borderRadius: BorderRadius.circular(6),
+                              borderRadius: BorderRadius.circular(13),
                             ),
                             alignment: Alignment.center,
                             child: _loading
@@ -610,7 +610,7 @@ class _AskSheetState extends State<AskSheet> {
               color: isDark
                   ? const Color(0xFF2D6A4F).withValues(alpha: 0.15)
                   : const Color(0xFFEBF5F3),
-              borderRadius: BorderRadius.circular(6),
+              borderRadius: BorderRadius.circular(20),
               border: Border.all(
                 color: isDark
                     ? const Color(0xFF2D6A4F).withValues(alpha: 0.3)
@@ -621,7 +621,7 @@ class _AskSheetState extends State<AskSheet> {
               padding: const EdgeInsets.all(14),
               decoration: BoxDecoration(
                 color: isDark ? const Color(0xFF202020) : Colors.white,
-                borderRadius: BorderRadius.circular(6),
+                borderRadius: BorderRadius.circular(14),
                 border: Border.all(
                   color: isDark
                       ? const Color(0xFF2E2E2E)
@@ -757,14 +757,14 @@ class _AskSheetState extends State<AskSheet> {
       padding: const EdgeInsets.all(7),
       decoration: BoxDecoration(
         color: isDark ? const Color(0xFF181818) : const Color(0xFFF7F6F2),
-        borderRadius: BorderRadius.circular(6),
+        borderRadius: BorderRadius.circular(20),
         border: Border.all(color: accentColor.withValues(alpha: 0.3)),
       ),
       child: Container(
         padding: const EdgeInsets.all(14),
         decoration: BoxDecoration(
           color: isDark ? const Color(0xFF202020) : Colors.white,
-          borderRadius: BorderRadius.circular(6),
+          borderRadius: BorderRadius.circular(14),
           border: Border.all(
             color: isDark ? const Color(0xFF2E2E2E) : const Color(0xFFE5E7DC),
           ),
