@@ -1115,30 +1115,6 @@ class _LibraryScreenState extends ConsumerState<LibraryScreen>
     }
   }
 
-  Future<void> _loadSampleBook() async {
-    setState(() => _uploading = true);
-
-    try {
-      final client = ref.read(apiClientProvider);
-
-      final docId = await client.loadSampleDocument();
-
-      ref.invalidate(documentsProvider);
-
-      if (mounted) context.push('/processing/$docId');
-    } catch (e) {
-      if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(
-            content: Text('Failed to load sample book: $e'),
-            backgroundColor: Colors.redAccent,
-          ),
-        );
-      }
-    } finally {
-      if (mounted) setState(() => _uploading = false);
-    }
-  }
 
   Future<void> _deleteDocument(Document doc) async {
     final isDark = Theme.of(context).brightness == Brightness.dark;
@@ -1359,7 +1335,14 @@ class _LibraryScreenState extends ConsumerState<LibraryScreen>
       final hasProcessing = docs.any((d) => !d.isReady && !d.isFailed);
 
       if (hasProcessing && _pollTimer == null) {
-        _pollTimer = Timer.periodic(const Duration(milliseconds: 1500), (_) {
+        int pollCount = 0;
+        _pollTimer = Timer.periodic(const Duration(milliseconds: 1500), (t) {
+          pollCount++;
+          if (pollCount > 40) {
+            t.cancel();
+            _pollTimer = null;
+            return;
+          }
           ref.invalidate(documentsProvider);
         });
       } else if (!hasProcessing && _pollTimer != null) {
@@ -1757,12 +1740,7 @@ class _LibraryScreenState extends ConsumerState<LibraryScreen>
                               onPressed:
                                   _uploading ? null : _showUrlImportDialog,
                             ),
-                            _EditorialPillButton(
-                              label: 'SAMPLE BOOK',
-                              icon: Icons.menu_book_rounded,
-                              isLoading: _uploading,
-                              onPressed: _uploading ? null : _loadSampleBook,
-                            ),
+
                           ],
                         ),
                       ],
@@ -1891,6 +1869,7 @@ class _LibraryScreenState extends ConsumerState<LibraryScreen>
                   // --- 4. Document List or Minimalist Dropzone ---
 
                   docsState.when(
+                    skipLoadingOnReload: true,
                     data: (docs) {
                       if (docs.isEmpty) {
                         return _buildMinimalistDropZone();
@@ -2048,12 +2027,7 @@ class _LibraryScreenState extends ConsumerState<LibraryScreen>
                   isLoading: false,
                   onPressed: _uploading ? null : _showUrlImportDialog,
                 ),
-                _EditorialPillButton(
-                  label: 'Sample Book',
-                  icon: Icons.menu_book_rounded,
-                  isLoading: _uploading,
-                  onPressed: _uploading ? null : _loadSampleBook,
-                ),
+
               ],
             ),
           ],

@@ -13,62 +13,6 @@ import 'package:athena/core/widgets/athena_avatar.dart';
 /// Pre-populated standard models for each provider so users can immediately
 /// select their desired model from a clean dropdown without needing to test
 /// connection or make network calls first.
-const Map<String, List<Map<String, String>>> kProviderDefaultModels = {
-  'gemini': [
-    {'id': 'gemini-2.5-flash', 'label': 'Gemini 2.5 Flash (Recommended)'},
-    {'id': 'gemini-2.5-pro', 'label': 'Gemini 2.5 Pro (Deep Reasoning)'},
-    {'id': 'gemini-2.0-flash', 'label': 'Gemini 2.0 Flash (Fast)'},
-    {'id': 'gemini-1.5-flash', 'label': 'Gemini 1.5 Flash'},
-    {'id': 'gemini-1.5-pro', 'label': 'Gemini 1.5 Pro'},
-  ],
-  'groq': [
-    {'id': 'llama-3.3-70b-versatile', 'label': 'Llama 3.3 70B (Recommended)'},
-    {'id': 'llama-3.1-8b-instant', 'label': 'Llama 3.1 8B Instant (Ultra-Fast)'},
-    {'id': 'mixtral-8x7b-32768', 'label': 'Mixtral 8x7B'},
-    {'id': 'gemma2-9b-it', 'label': 'Gemma 2 9B IT'},
-  ],
-  'openrouter': [
-    {'id': 'google/gemini-2.5-flash', 'label': 'Gemini 2.5 Flash (Recommended)'},
-    {'id': 'meta-llama/llama-3.3-70b-instruct', 'label': 'Llama 3.3 70B Instruct'},
-    {'id': 'anthropic/claude-3.5-sonnet', 'label': 'Claude 3.5 Sonnet'},
-    {'id': 'deepseek/deepseek-chat', 'label': 'DeepSeek V3'},
-    {'id': 'openai/gpt-4o-mini', 'label': 'GPT-4o Mini'},
-  ],
-  'openai': [
-    {'id': 'gpt-4o-mini', 'label': 'GPT-4o Mini (Recommended)'},
-    {'id': 'gpt-4o', 'label': 'GPT-4o (Flagship)'},
-    {'id': 'o3-mini', 'label': 'o3-mini (Reasoning)'},
-    {'id': 'gpt-3.5-turbo', 'label': 'GPT-3.5 Turbo'},
-  ],
-  'anthropic': [
-    {'id': 'claude-3-5-sonnet-latest', 'label': 'Claude 3.5 Sonnet (Recommended)'},
-    {'id': 'claude-3-5-haiku-latest', 'label': 'Claude 3.5 Haiku (Fast)'},
-    {'id': 'claude-3-opus-latest', 'label': 'Claude 3 Opus'},
-  ],
-  'deepseek': [
-    {'id': 'deepseek-chat', 'label': 'DeepSeek V3 (Recommended)'},
-    {'id': 'deepseek-reasoner', 'label': 'DeepSeek R1 (Reasoning)'},
-  ],
-  'mistral': [
-    {'id': 'mistral-small-latest', 'label': 'Mistral Small (Recommended)'},
-    {'id': 'mistral-large-latest', 'label': 'Mistral Large'},
-    {'id': 'codestral-latest', 'label': 'Codestral'},
-  ],
-  'nvidia': [
-    {'id': 'meta/llama-3.3-70b-instruct', 'label': 'Llama 3.3 70B (Recommended)'},
-    {'id': 'mistralai/mixtral-8x7b-instruct-v0.1', 'label': 'Mixtral 8x7B'},
-  ],
-  'together': [
-    {'id': 'meta-llama/Llama-3.3-70B-Instruct-Turbo', 'label': 'Llama 3.3 70B Turbo'},
-    {'id': 'mistralai/Mixtral-8x7B-Instruct-v0.1', 'label': 'Mixtral 8x7B'},
-  ],
-  'custom': [
-    {'id': 'llama3.2', 'label': 'Llama 3.2 (Ollama Default)'},
-    {'id': 'mistral', 'label': 'Mistral 7B'},
-    {'id': 'qwen2.5', 'label': 'Qwen 2.5'},
-    {'id': 'phi3', 'label': 'Phi-3 Mini'},
-  ],
-};
 
 class BYOKSettingsSheet extends StatefulWidget {
   final ApiClient? apiClient;
@@ -108,11 +52,11 @@ class _BYOKSettingsSheetState extends State<BYOKSettingsSheet> {
   bool _loading = true;
   bool _saving = false;
 
-  // Primary Provider State (Defaults to Google Gemini gemini-2.5-flash)
+  // Primary Provider State (Defaults to Google Gemini)
   String _primaryProvider = 'gemini';
   final _primaryKeyController = TextEditingController();
-  final _primaryModelController =
-      TextEditingController(text: 'gemini-2.5-flash');
+  final _primaryModelController = TextEditingController();
+  List<String> _primaryDiscoveredModels = [];
   final _primaryBaseUrlController = TextEditingController();
   bool _obscurePrimaryKey = true;
   bool _testingPrimary = false;
@@ -123,8 +67,8 @@ class _BYOKSettingsSheetState extends State<BYOKSettingsSheet> {
   bool _enableFallback = false;
   String _fallbackProvider = 'groq';
   final _fallbackKeyController = TextEditingController();
-  final _fallbackModelController =
-      TextEditingController(text: 'llama-3.3-70b-versatile');
+  final _fallbackModelController = TextEditingController();
+  List<String> _fallbackDiscoveredModels = [];
   final _fallbackBaseUrlController = TextEditingController();
   bool _obscureFallbackKey = true;
   bool _testingFallback = false;
@@ -252,9 +196,10 @@ class _BYOKSettingsSheetState extends State<BYOKSettingsSheet> {
         final loadedModel = config.primaryModel.isNotEmpty
             ? config.primaryModel
             : (savedLocalPrimaryModel ?? '');
-        _primaryModelController.text = loadedModel.isNotEmpty
-            ? loadedModel
-            : (_primaryProvider == 'gemini' ? 'gemini-2.5-flash' : _getDefaultModelFor(_primaryProvider));
+        _primaryModelController.text = loadedModel;
+        if (loadedModel.isNotEmpty) {
+          _primaryDiscoveredModels = [loadedModel];
+        }
 
         _primaryBaseUrlController.text =
             config.primaryBaseUrl ?? (savedLocalPrimaryBaseUrl ?? '');
@@ -271,8 +216,12 @@ class _BYOKSettingsSheetState extends State<BYOKSettingsSheet> {
           _enableFallback = true;
           _fallbackProvider = config.fallbackProvider ??
               (savedLocalFallbackProvider ?? 'groq');
-          _fallbackModelController.text =
-              config.fallbackModel ?? (savedLocalFallbackModel ?? _getDefaultModelFor(_fallbackProvider));
+          final loadedFallback =
+              config.fallbackModel ?? (savedLocalFallbackModel ?? '');
+          _fallbackModelController.text = loadedFallback;
+          if (loadedFallback.isNotEmpty) {
+            _fallbackDiscoveredModels = [loadedFallback];
+          }
           _fallbackBaseUrlController.text =
               config.fallbackBaseUrl ?? (savedLocalFallbackBaseUrl ?? '');
           if (savedLocalFallbackKey != null &&
@@ -298,13 +247,6 @@ class _BYOKSettingsSheetState extends State<BYOKSettingsSheet> {
     }
   }
 
-  String _getDefaultModelFor(String provider) {
-    final list = kProviderDefaultModels[provider];
-    if (list != null && list.isNotEmpty) {
-      return list.first['id']!;
-    }
-    return 'gemini-2.5-flash';
-  }
 
   Future<void> _testConnection({required bool isPrimary}) async {
     final provider = isPrimary ? _primaryProvider : _fallbackProvider;
@@ -348,6 +290,7 @@ class _BYOKSettingsSheetState extends State<BYOKSettingsSheet> {
       final res = await _api.testAIConnection(
         provider: provider,
         apiKey: key.isNotEmpty ? key : null,
+        model: isPrimary ? _primaryModelController.text.trim() : _fallbackModelController.text.trim(),
         baseUrl: baseUrl,
       );
 
@@ -355,16 +298,42 @@ class _BYOKSettingsSheetState extends State<BYOKSettingsSheet> {
 
       final ok = res['ok'] as bool? ?? false;
       final msg = res['message'] as String? ?? (ok ? 'Connected successfully.' : 'Test failed.');
+      final rawModels = res['models'] as List? ?? [];
+      final discovered = rawModels
+          .map((m) => m is Map ? (m['id'] ?? m['name'])?.toString() : m.toString())
+          .where((s) => s != null && s.isNotEmpty)
+          .cast<String>()
+          .toList();
 
       setState(() {
         if (isPrimary) {
           _testingPrimary = false;
           _primaryTestOk = ok;
           _primaryTestMessage = msg;
+          if (ok && discovered.isNotEmpty) {
+            _primaryDiscoveredModels = discovered;
+            if (_primaryModelController.text.isEmpty ||
+                !discovered.contains(_primaryModelController.text)) {
+              _primaryModelController.text = discovered.firstWhere(
+                (m) => m.toLowerCase().contains('flash') || m.toLowerCase().contains('chat'),
+                orElse: () => discovered.first,
+              );
+            }
+          }
         } else {
           _testingFallback = false;
           _fallbackTestOk = ok;
           _fallbackTestMessage = msg;
+          if (ok && discovered.isNotEmpty) {
+            _fallbackDiscoveredModels = discovered;
+            if (_fallbackModelController.text.isEmpty ||
+                !discovered.contains(_fallbackModelController.text)) {
+              _fallbackModelController.text = discovered.firstWhere(
+                (m) => m.toLowerCase().contains('flash') || m.toLowerCase().contains('chat'),
+                orElse: () => discovered.first,
+              );
+            }
+          }
         }
       });
     } catch (e) {
@@ -760,10 +729,11 @@ class _BYOKSettingsSheetState extends State<BYOKSettingsSheet> {
           value: _primaryProvider,
           isDark: isDark,
           onChanged: (val) {
-            if (val != null) {
+            if (val != null && val != _primaryProvider) {
               setState(() {
                 _primaryProvider = val;
-                _primaryModelController.text = _getDefaultModelFor(val);
+                _primaryDiscoveredModels.clear();
+                _primaryModelController.clear();
                 _primaryTestMessage = null;
                 _primaryTestOk = null;
               });
@@ -797,6 +767,7 @@ class _BYOKSettingsSheetState extends State<BYOKSettingsSheet> {
         _buildModelDropdown(
           provider: _primaryProvider,
           controller: _primaryModelController,
+          discoveredModels: _primaryDiscoveredModels,
           isDark: isDark,
           onChanged: (val) {
             if (val != null) {
@@ -880,74 +851,103 @@ class _BYOKSettingsSheetState extends State<BYOKSettingsSheet> {
   Widget _buildModelDropdown({
     required String provider,
     required TextEditingController controller,
+    required List<String> discoveredModels,
     required bool isDark,
     required ValueChanged<String?> onChanged,
   }) {
-    final options = kProviderDefaultModels[provider] ?? kProviderDefaultModels['gemini']!;
     final currentVal = controller.text.trim();
-    final hasMatch = options.any((opt) => opt['id'] == currentVal);
-    final effectiveValue = hasMatch
-        ? currentVal
-        : (options.isNotEmpty ? options.first['id']! : 'gemini-2.5-flash');
-
-    if (!hasMatch && currentVal.isEmpty && options.isNotEmpty) {
-      controller.text = effectiveValue;
-    }
 
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
         _buildSectionLabel('AI MODEL'),
         const SizedBox(height: 6),
-        Container(
-          decoration: BoxDecoration(
-            color: isDark ? const Color(0xFF222222) : AppTheme.surfaceWarm,
-            borderRadius: BorderRadius.circular(6),
-            border: Border.all(
-              color: isDark ? const Color(0xFF383838) : AppTheme.border,
-            ),
-          ),
-          child: DropdownButtonHideUnderline(
-            child: DropdownButton<String>(
-              value: effectiveValue,
-              isExpanded: true,
-              dropdownColor: isDark ? const Color(0xFF222222) : Colors.white,
+        if (discoveredModels.isEmpty && currentVal.isEmpty) ...[
+          Container(
+            width: double.infinity,
+            padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
+            decoration: BoxDecoration(
+              color: isDark ? const Color(0xFF222222) : AppTheme.surfaceWarm,
               borderRadius: BorderRadius.circular(6),
-              padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 2),
-              style: TextStyle(
-                fontFamily: 'monospace',
-                fontSize: 13,
-                fontWeight: FontWeight.w600,
-                color: isDark ? Colors.white : AppTheme.ink,
+              border: Border.all(
+                color: isDark ? const Color(0xFF383838) : AppTheme.border,
               ),
-              items: [
-                ...options.map((opt) {
-                  return DropdownMenuItem<String>(
-                    value: opt['id'],
-                    child: Text(
-                      opt['label']!,
-                      overflow: TextOverflow.ellipsis,
-                    ),
-                  );
-                }),
-                if (!hasMatch && currentVal.isNotEmpty)
-                  DropdownMenuItem<String>(
-                    value: currentVal,
-                    child: Text(
-                      '$currentVal (Custom)',
-                      overflow: TextOverflow.ellipsis,
+            ),
+            child: Row(
+              children: [
+                Icon(
+                  Icons.info_outline_rounded,
+                  size: 15,
+                  color: isDark ? AppTheme.darkTextMuted : AppTheme.textMuted,
+                ),
+                const SizedBox(width: 8),
+                Expanded(
+                  child: Text(
+                    'Enter API key and click "Test Connection" to fetch models',
+                    style: TextStyle(
+                      fontFamily: AppTheme.fontUI,
+                      fontSize: 12,
+                      color: isDark ? AppTheme.darkTextMuted : AppTheme.textMuted,
                     ),
                   ),
+                ),
               ],
-              onChanged: (val) {
-                if (val != null) {
-                  controller.text = val;
-                  onChanged(val);
-                }
-              },
             ),
           ),
-        ),
+        ] else ...[
+          Builder(builder: (context) {
+            final options = {
+              ...discoveredModels,
+              if (currentVal.isNotEmpty) currentVal,
+            }.toList();
+            final effectiveValue =
+                options.contains(currentVal) ? currentVal : options.first;
+
+            if (controller.text != effectiveValue) {
+              controller.text = effectiveValue;
+            }
+
+            return Container(
+              decoration: BoxDecoration(
+                color: isDark ? const Color(0xFF222222) : AppTheme.surfaceWarm,
+                borderRadius: BorderRadius.circular(6),
+                border: Border.all(
+                  color: isDark ? const Color(0xFF383838) : AppTheme.border,
+                ),
+              ),
+              child: DropdownButtonHideUnderline(
+                child: DropdownButton<String>(
+                  value: effectiveValue,
+                  isExpanded: true,
+                  dropdownColor: isDark ? const Color(0xFF222222) : Colors.white,
+                  borderRadius: BorderRadius.circular(6),
+                  padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 2),
+                  style: TextStyle(
+                    fontFamily: 'monospace',
+                    fontSize: 13,
+                    fontWeight: FontWeight.w600,
+                    color: isDark ? Colors.white : AppTheme.ink,
+                  ),
+                  items: options.map((opt) {
+                    return DropdownMenuItem<String>(
+                      value: opt,
+                      child: Text(
+                        opt,
+                        overflow: TextOverflow.ellipsis,
+                      ),
+                    );
+                  }).toList(),
+                  onChanged: (val) {
+                    if (val != null) {
+                      controller.text = val;
+                      onChanged(val);
+                    }
+                  },
+                ),
+              ),
+            );
+          }),
+        ],
       ],
     );
   }
@@ -1222,10 +1222,11 @@ class _BYOKSettingsSheetState extends State<BYOKSettingsSheet> {
                 value: _fallbackProvider,
                 isDark: isDark,
                 onChanged: (val) {
-                  if (val != null) {
+                  if (val != null && val != _fallbackProvider) {
                     setState(() {
                       _fallbackProvider = val;
-                      _fallbackModelController.text = _getDefaultModelFor(val);
+                      _fallbackDiscoveredModels.clear();
+                      _fallbackModelController.clear();
                       _fallbackTestMessage = null;
                       _fallbackTestOk = null;
                     });
@@ -1259,6 +1260,7 @@ class _BYOKSettingsSheetState extends State<BYOKSettingsSheet> {
               _buildModelDropdown(
                 provider: _fallbackProvider,
                 controller: _fallbackModelController,
+                discoveredModels: _fallbackDiscoveredModels,
                 isDark: isDark,
                 onChanged: (val) {
                   if (val != null) {

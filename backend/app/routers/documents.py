@@ -370,46 +370,6 @@ def delete_document(id: str, session: Session = Depends(get_session)) -> Dict[st
     return {"status": "deleted", "document_id": id}
 
 
-@router.post("/sample")
-def load_sample_document(session: Session = Depends(get_session)) -> Dict[str, str]:
-    """Copies sample.pdf into pipeline as a normal document (§10 in CLAUDE.md)."""
-    sample_candidates = [
-        BASE_DIR / "samples" / "sample.pdf",
-        BASE_DIR.parent / "backend" / "samples" / "sample.pdf",
-        BASE_DIR / "backend" / "samples" / "sample.pdf",
-    ]
-
-    sample_src = next((p for p in sample_candidates if p.exists()), None)
-    if not sample_src:
-        raise AppException("NOT_FOUND", "Sample document is missing from samples/sample.pdf", status_code=404)
-
-    doc_id = uuid.uuid4().hex
-    target_path = UPLOADS_DIR / f"{doc_id}.pdf"
-    shutil.copyfile(sample_src, target_path)
-
-    try:
-        page_count = validate_pdf_file(target_path)
-    except Exception:
-        if target_path.exists():
-            target_path.unlink()
-        raise
-
-    doc = Document(
-        id=doc_id,
-        filename="sample.pdf",
-        title="Introduction to Cellular Respiration",
-        status="queued",
-        stage="validating",
-        percent=5,
-        page_count=page_count,
-        created_at=utc_now(),
-        updated_at=utc_now(),
-    )
-    session.add(doc)
-    session.commit()
-
-    queue_document_job(doc_id)
-    return {"document_id": doc_id}
 
 
 @router.get("/{id}/reader")

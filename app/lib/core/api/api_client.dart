@@ -20,8 +20,8 @@ class ApiClient {
             Dio(
               BaseOptions(
                 baseUrl: AppConfig.apiBaseUrl,
-                connectTimeout: const Duration(seconds: 6),
-                receiveTimeout: const Duration(seconds: 45),
+                connectTimeout: const Duration(seconds: 4),
+                receiveTimeout: const Duration(seconds: 15),
                 headers: {'Accept': 'application/json'},
               ),
             ) {
@@ -88,22 +88,16 @@ class ApiClient {
   // --- Documents ---
 
   Future<List<Map<String, dynamic>>> listDocuments() async {
-    if (AppConfig.apiBaseUrl.isEmpty) {
-      return await LocalDatabase.instance.listDocuments();
-    }
     try {
-      final response = await dio.get('/api/documents');
+      final response = await dio
+          .get('/api/documents')
+          .timeout(const Duration(seconds: 3));
       final list = (response.data as List).cast<Map<String, dynamic>>();
       _cacheDocumentsLocally(list);
       return list;
-    } on DioException catch (e) {
-      final cached = await _loadCachedDocuments();
-      if (cached.isNotEmpty) return cached;
-      throw _handleDioError(e);
     } catch (_) {
       final cached = await _loadCachedDocuments();
-      if (cached.isNotEmpty) return cached;
-      rethrow;
+      return cached;
     }
   }
 
@@ -266,93 +260,6 @@ class ApiClient {
     }
   }
 
-  Future<String> loadSampleDocument() async {
-    if (AppConfig.apiBaseUrl.isEmpty) {
-      final docId = 'sample_${DateTime.now().millisecondsSinceEpoch}';
-      const sampleText = 'Chapter 7: Cellular Metabolism\n\n'
-          'Introduction to Cellular Respiration\n'
-          'Cellular respiration is a set of metabolic reactions and processes that take place in the cells of organisms to convert chemical energy from nutrients into adenosine triphosphate (ATP), and then release waste products. The catabolic reactions involved in respiration include glycolysis, the citric acid cycle, and oxidative phosphorylation.\n\n'
-          'Glycolysis is a metabolic pathway that converts glucose into pyruvate. The free energy released in this process is used to form the high-energy molecules ATP and reduced nicotinamide adenine dinucleotide (NADH). Glycolysis is a sequence of ten enzyme-catalyzed reactions. Most monosaccharides, such as fructose and galactose, can be converted to one of these intermediates.\n\n'
-          'The Role of Mitochondria\n'
-          'A mitochondrion is a membrane-bound organelle found in the cytoplasm of eukaryotic organisms that is responsible for creating most of the cell supply of chemical energy through aerobic respiration. Mitochondria are often described as the powerhouses of the cell. They generate most of the chemical energy needed to power the biochemical reactions of the cell.\n\n'
-          'Chemical energy produced by the mitochondria is stored in a small molecule called adenosine triphosphate (ATP). Mitochondria contain their own small chromosome and DNA. Mitochondria are generally thought to have evolved through endosymbiosis when an ancestral eukaryote engulfed a symbiotic bacterium.\n\n'
-          'Photosynthesis in Plant Biology\n'
-          'Photosynthesis is a biological process utilized by plants and other photosynthetic organisms to convert light energy into chemical energy. This energy is stored in carbohydrate molecules, such as sugars and starches, which are synthesized from carbon dioxide and water.\n\n'
-          'Chloroplasts are plant cell organelles that conduct photosynthesis. Chloroplasts absorb sunlight and use it in conjunction with water and carbon dioxide gas to produce food for the plant. Chloroplasts are distinguished from other types of plastids by their green color, which results from the presence of two pigment molecules called chlorophyll a and chlorophyll b.';
-
-      final now = DateTime.now().toIso8601String();
-      await LocalDatabase.instance.insertDocument({
-        'id': docId,
-        'filename': 'sample_biology.txt',
-        'title': 'Chapter 7: Cellular Metabolism',
-        'status': 'ready',
-        'stage': 'done',
-        'stage_label': 'Ready to read',
-        'percent': 100,
-        'page_count': 3,
-        'processed_page': 3,
-        'file_path': 'local://sample',
-        'canonical_text': sampleText,
-        'integrity_verified': 1,
-        'context_status': 'ready',
-        'created_at': now,
-        'updated_at': now,
-      });
-
-      final chunkMaps = LosslessChunker().build(
-        documentId: docId,
-        canonicalText: sampleText,
-        spans: [
-          {
-            'start': 0,
-            'end': sampleText.length,
-            'page_start': 1,
-            'page_end': 3,
-            'type': 'paragraph',
-          },
-        ],
-      );
-
-      await LocalDatabase.instance.insertChunks(chunkMaps);
-
-      try {
-        final contextService = LocalContextService();
-        final cards = await contextService.buildCards(docId, chunkMaps);
-        final cardMaps = cards
-            .map((cd) => {
-                  'id': cd['id'] ?? 'card_${cd['concept_name']}',
-                  'document_id': docId,
-                  'source_chunk_id':
-                      cd['source_chunk_id'] ?? chunkMaps.first['id']!,
-                  'concept_name': cd['concept_name'] ?? '',
-                  'card_type': cd['card_type'] ?? 'context',
-                  'title': cd['title'] ?? '',
-                  'body': cd['body'] ?? '',
-                  'why_here': cd['why_here'] ?? '',
-                  'citations_json': cd['citations_json'] ?? '[]',
-                  'exact_quote': cd['exact_quote'],
-                  'support_status': 'fully_supported',
-                  'canonical_sha256': cd['canonical_sha256'] ?? '',
-                  'generation_mode': 'extractive',
-                  'verified': 1,
-                  'saved': 0,
-                  'dismissed': 0,
-                  'created_at': now,
-                })
-            .toList();
-        await LocalDatabase.instance.insertCards(cardMaps);
-      } catch (_) {}
-
-      return docId;
-    }
-
-    try {
-      final response = await dio.post('/api/documents/sample');
-      return (response.data as Map<String, dynamic>)['document_id'] as String;
-    } on DioException catch (e) {
-      throw _handleDioError(e);
-    }
-  }
 
   Future<void> retryDocument(String id) async {
     if (AppConfig.apiBaseUrl.isEmpty) return;
