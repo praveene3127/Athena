@@ -10,6 +10,66 @@ import 'package:athena/models/ai_provider.dart';
 import 'package:athena/core/api/api_client.dart';
 import 'package:athena/core/widgets/athena_avatar.dart';
 
+/// Pre-populated standard models for each provider so users can immediately
+/// select their desired model from a clean dropdown without needing to test
+/// connection or make network calls first.
+const Map<String, List<Map<String, String>>> kProviderDefaultModels = {
+  'gemini': [
+    {'id': 'gemini-2.5-flash', 'label': 'Gemini 2.5 Flash (Recommended)'},
+    {'id': 'gemini-2.5-pro', 'label': 'Gemini 2.5 Pro (Deep Reasoning)'},
+    {'id': 'gemini-2.0-flash', 'label': 'Gemini 2.0 Flash (Fast)'},
+    {'id': 'gemini-1.5-flash', 'label': 'Gemini 1.5 Flash'},
+    {'id': 'gemini-1.5-pro', 'label': 'Gemini 1.5 Pro'},
+  ],
+  'groq': [
+    {'id': 'llama-3.3-70b-versatile', 'label': 'Llama 3.3 70B (Recommended)'},
+    {'id': 'llama-3.1-8b-instant', 'label': 'Llama 3.1 8B Instant (Ultra-Fast)'},
+    {'id': 'mixtral-8x7b-32768', 'label': 'Mixtral 8x7B'},
+    {'id': 'gemma2-9b-it', 'label': 'Gemma 2 9B IT'},
+  ],
+  'openrouter': [
+    {'id': 'google/gemini-2.5-flash', 'label': 'Gemini 2.5 Flash (Recommended)'},
+    {'id': 'meta-llama/llama-3.3-70b-instruct', 'label': 'Llama 3.3 70B Instruct'},
+    {'id': 'anthropic/claude-3.5-sonnet', 'label': 'Claude 3.5 Sonnet'},
+    {'id': 'deepseek/deepseek-chat', 'label': 'DeepSeek V3'},
+    {'id': 'openai/gpt-4o-mini', 'label': 'GPT-4o Mini'},
+  ],
+  'openai': [
+    {'id': 'gpt-4o-mini', 'label': 'GPT-4o Mini (Recommended)'},
+    {'id': 'gpt-4o', 'label': 'GPT-4o (Flagship)'},
+    {'id': 'o3-mini', 'label': 'o3-mini (Reasoning)'},
+    {'id': 'gpt-3.5-turbo', 'label': 'GPT-3.5 Turbo'},
+  ],
+  'anthropic': [
+    {'id': 'claude-3-5-sonnet-latest', 'label': 'Claude 3.5 Sonnet (Recommended)'},
+    {'id': 'claude-3-5-haiku-latest', 'label': 'Claude 3.5 Haiku (Fast)'},
+    {'id': 'claude-3-opus-latest', 'label': 'Claude 3 Opus'},
+  ],
+  'deepseek': [
+    {'id': 'deepseek-chat', 'label': 'DeepSeek V3 (Recommended)'},
+    {'id': 'deepseek-reasoner', 'label': 'DeepSeek R1 (Reasoning)'},
+  ],
+  'mistral': [
+    {'id': 'mistral-small-latest', 'label': 'Mistral Small (Recommended)'},
+    {'id': 'mistral-large-latest', 'label': 'Mistral Large'},
+    {'id': 'codestral-latest', 'label': 'Codestral'},
+  ],
+  'nvidia': [
+    {'id': 'meta/llama-3.3-70b-instruct', 'label': 'Llama 3.3 70B (Recommended)'},
+    {'id': 'mistralai/mixtral-8x7b-instruct-v0.1', 'label': 'Mixtral 8x7B'},
+  ],
+  'together': [
+    {'id': 'meta-llama/Llama-3.3-70B-Instruct-Turbo', 'label': 'Llama 3.3 70B Turbo'},
+    {'id': 'mistralai/Mixtral-8x7B-Instruct-v0.1', 'label': 'Mixtral 8x7B'},
+  ],
+  'custom': [
+    {'id': 'llama3.2', 'label': 'Llama 3.2 (Ollama Default)'},
+    {'id': 'mistral', 'label': 'Mistral 7B'},
+    {'id': 'qwen2.5', 'label': 'Qwen 2.5'},
+    {'id': 'phi3', 'label': 'Phi-3 Mini'},
+  ],
+};
+
 class BYOKSettingsSheet extends StatefulWidget {
   final ApiClient? apiClient;
   final VoidCallback? onConfigSaved;
@@ -55,8 +115,6 @@ class _BYOKSettingsSheetState extends State<BYOKSettingsSheet> {
       TextEditingController(text: 'gemini-2.5-flash');
   final _primaryBaseUrlController = TextEditingController();
   bool _obscurePrimaryKey = true;
-  List<AIModelOption> _primaryModels = [];
-  bool _fetchingPrimaryModels = false;
   bool _testingPrimary = false;
   String? _primaryTestMessage;
   bool? _primaryTestOk;
@@ -69,8 +127,6 @@ class _BYOKSettingsSheetState extends State<BYOKSettingsSheet> {
       TextEditingController(text: 'llama-3.3-70b-versatile');
   final _fallbackBaseUrlController = TextEditingController();
   bool _obscureFallbackKey = true;
-  List<AIModelOption> _fallbackModels = [];
-  bool _fetchingFallbackModels = false;
   bool _testingFallback = false;
   String? _fallbackTestMessage;
   bool? _fallbackTestOk;
@@ -91,7 +147,7 @@ class _BYOKSettingsSheetState extends State<BYOKSettingsSheet> {
         currentVersion: kAthenaAppVersion,
         latestVersion: kAthenaAppVersion,
         releaseNotes:
-            'Improved Per-Page Document Bouncer, 4-Archetype Marginalia Cards, and Mobile Touch Ergonomics.',
+            'Lossless Non-Fiction Reader with Grounded Edge AI and Gemini 2.5 Flash default.',
         publishedAt: '2026-11-01',
         android: const UpdatePlatformArtifact(
           filename: 'athena-release.apk',
@@ -104,8 +160,6 @@ class _BYOKSettingsSheetState extends State<BYOKSettingsSheet> {
           downloadUrl: '/api/download/ios',
           githubReleaseUrl:
               'https://github.com/praveene3127/Athena/raw/main/releases/athena-ios-release.ipa',
-          altstoreUrl:
-              'altstore://install?url=https://github.com/praveene3127/Athena/raw/main/releases/athena-ios-release.ipa',
         ),
       );
 
@@ -116,27 +170,24 @@ class _BYOKSettingsSheetState extends State<BYOKSettingsSheet> {
     });
 
     try {
-      final info = await _api.checkAppUpdate(
-        currentVersion: kAthenaAppVersion,
-        platform: detectDevicePlatform(),
+      final info = await UpdateService.checkForUpdates(
+        clientVersion: kAthenaAppVersion,
       );
-
       if (!mounted) return;
-
       if (info != null) {
         setState(() {
-          _settingsUpdateInfo = UpdateInfo.fromJson(info);
+          _settingsUpdateInfo = info;
           _checkingUpdates = false;
-          _updateStatusMessage = _settingsUpdateInfo!.updateAvailable
-              ? 'New version ${_settingsUpdateInfo!.latestVersion} available!'
-              : 'You are on the latest version ($kAthenaAppVersion).';
+          _updateStatusMessage = info.updateAvailable
+              ? 'New version available: v${info.latestVersion}'
+              : 'Athena is up to date (v$kAthenaAppVersion).';
         });
       } else {
         setState(() {
           _settingsUpdateInfo = _fallbackSettingsUpdateInfo;
           _checkingUpdates = false;
           _updateStatusMessage =
-              'You are running version $kAthenaAppVersion (up to date).';
+              'Could not connect to update feed. Current version: v$kAthenaAppVersion.';
         });
       }
     } catch (_) {
@@ -203,7 +254,7 @@ class _BYOKSettingsSheetState extends State<BYOKSettingsSheet> {
             : (savedLocalPrimaryModel ?? '');
         _primaryModelController.text = loadedModel.isNotEmpty
             ? loadedModel
-            : (_primaryProvider == 'gemini' ? 'gemini-2.5-flash' : '');
+            : (_primaryProvider == 'gemini' ? 'gemini-2.5-flash' : _getDefaultModelFor(_primaryProvider));
 
         _primaryBaseUrlController.text =
             config.primaryBaseUrl ?? (savedLocalPrimaryBaseUrl ?? '');
@@ -221,7 +272,7 @@ class _BYOKSettingsSheetState extends State<BYOKSettingsSheet> {
           _fallbackProvider = config.fallbackProvider ??
               (savedLocalFallbackProvider ?? 'groq');
           _fallbackModelController.text =
-              config.fallbackModel ?? (savedLocalFallbackModel ?? '');
+              config.fallbackModel ?? (savedLocalFallbackModel ?? _getDefaultModelFor(_fallbackProvider));
           _fallbackBaseUrlController.text =
               config.fallbackBaseUrl ?? (savedLocalFallbackBaseUrl ?? '');
           if (savedLocalFallbackKey != null &&
@@ -247,77 +298,12 @@ class _BYOKSettingsSheetState extends State<BYOKSettingsSheet> {
     }
   }
 
-  Future<List<AIModelOption>> _fetchModels({required bool isPrimary}) async {
-    final provider = isPrimary ? _primaryProvider : _fallbackProvider;
-    final key = isPrimary
-        ? _primaryKeyController.text.trim()
-        : _fallbackKeyController.text.trim();
-    final baseUrl = isPrimary
-        ? (_primaryBaseUrlController.text.trim().isNotEmpty
-            ? _primaryBaseUrlController.text.trim()
-            : null)
-        : (_fallbackBaseUrlController.text.trim().isNotEmpty
-            ? _fallbackBaseUrlController.text.trim()
-            : null);
-
-    if (provider != 'custom' && key.isEmpty) {
-      setState(() {
-        if (isPrimary) {
-          _primaryModels = [];
-          _fetchingPrimaryModels = false;
-        } else {
-          _fallbackModels = [];
-          _fetchingFallbackModels = false;
-        }
-      });
-      return [];
+  String _getDefaultModelFor(String provider) {
+    final list = kProviderDefaultModels[provider];
+    if (list != null && list.isNotEmpty) {
+      return list.first['id']!;
     }
-
-    setState(() {
-      if (isPrimary) {
-        _fetchingPrimaryModels = true;
-      } else {
-        _fetchingFallbackModels = true;
-      }
-    });
-
-    try {
-      final models = await _api.fetchModels(
-        provider: provider,
-        apiKey: key.isNotEmpty ? key : null,
-        baseUrl: baseUrl,
-      );
-
-      if (!mounted) return models;
-      setState(() {
-        if (isPrimary) {
-          _primaryModels = models;
-          _fetchingPrimaryModels = false;
-          if (_primaryModelController.text.isEmpty && models.isNotEmpty) {
-            _primaryModelController.text = models.first.id;
-          }
-        } else {
-          _fallbackModels = models;
-          _fetchingFallbackModels = false;
-          if (_fallbackModelController.text.isEmpty && models.isNotEmpty) {
-            _fallbackModelController.text = models.first.id;
-          }
-        }
-      });
-      return models;
-    } catch (_) {
-      if (!mounted) return [];
-      setState(() {
-        if (isPrimary) {
-          _fetchingPrimaryModels = false;
-          _primaryModels = [];
-        } else {
-          _fetchingFallbackModels = false;
-          _fallbackModels = [];
-        }
-      });
-      return [];
-    }
+    return 'gemini-2.5-flash';
   }
 
   Future<void> _testConnection({required bool isPrimary}) async {
@@ -325,9 +311,6 @@ class _BYOKSettingsSheetState extends State<BYOKSettingsSheet> {
     final key = isPrimary
         ? _primaryKeyController.text.trim()
         : _fallbackKeyController.text.trim();
-    final model = isPrimary
-        ? _primaryModelController.text.trim()
-        : _fallbackModelController.text.trim();
     final baseUrl = isPrimary
         ? (_primaryBaseUrlController.text.trim().isNotEmpty
             ? _primaryBaseUrlController.text.trim()
@@ -340,10 +323,10 @@ class _BYOKSettingsSheetState extends State<BYOKSettingsSheet> {
       setState(() {
         if (isPrimary) {
           _primaryTestOk = false;
-          _primaryTestMessage = 'Please enter an API key first.';
+          _primaryTestMessage = 'Please enter an API key to test.';
         } else {
           _fallbackTestOk = false;
-          _fallbackTestMessage = 'Please enter a backup API key first.';
+          _fallbackTestMessage = 'Please enter a backup API key to test.';
         }
       });
       return;
@@ -365,15 +348,14 @@ class _BYOKSettingsSheetState extends State<BYOKSettingsSheet> {
       final res = await _api.testAIConnection(
         provider: provider,
         apiKey: key.isNotEmpty ? key : null,
-        model: model.isNotEmpty ? model : null,
         baseUrl: baseUrl,
       );
 
-      final ok = res['status'] == 'ok';
-      final msg = res['message'] as String? ??
-          (ok ? 'Connected successfully!' : 'Connection test failed.');
-
       if (!mounted) return;
+
+      final ok = res['ok'] as bool? ?? false;
+      final msg = res['message'] as String? ?? (ok ? 'Connected successfully.' : 'Test failed.');
+
       setState(() {
         if (isPrimary) {
           _testingPrimary = false;
@@ -385,10 +367,6 @@ class _BYOKSettingsSheetState extends State<BYOKSettingsSheet> {
           _fallbackTestMessage = msg;
         }
       });
-
-      if (ok) {
-        _fetchModels(isPrimary: isPrimary);
-      }
     } catch (e) {
       if (!mounted) return;
       setState(() {
@@ -499,54 +477,55 @@ class _BYOKSettingsSheetState extends State<BYOKSettingsSheet> {
         ? primaryKey
         : prefs.getString('athena_ai_primary_api_key');
 
-    final fallbackKeyToSend = _enableFallback
-        ? ((_fallbackKeyController.text.trim().isNotEmpty &&
-                !_fallbackKeyController.text.contains('...'))
-            ? _fallbackKeyController.text.trim()
-            : prefs.getString('athena_ai_fallback_api_key'))
-        : null;
-
-    await AppConfig.setBaseUrl(_serverUrlController.text.trim());
+    final fallbackKeyToSend =
+        (fallbackKeyControllerTrim.isNotEmpty && !fallbackKeyControllerTrim.contains('...'))
+            ? fallbackKeyControllerTrim
+            : prefs.getString('athena_ai_fallback_api_key');
 
     await _api.saveAIConfig(
       primaryProvider: _primaryProvider,
-      primaryApiKey: keyToSend,
       primaryModel: _primaryModelController.text.trim().isNotEmpty
           ? _primaryModelController.text.trim()
-          : null,
+          : 'gemini-2.5-flash',
+      primaryApiKey: keyToSend,
       primaryBaseUrl: _primaryBaseUrlController.text.trim().isNotEmpty
           ? _primaryBaseUrlController.text.trim()
           : null,
       fallbackProvider: _enableFallback ? _fallbackProvider : null,
-      fallbackApiKey: fallbackKeyToSend,
-      fallbackModel:
-          _enableFallback && _fallbackModelController.text.trim().isNotEmpty
-              ? _fallbackModelController.text.trim()
-              : null,
-      fallbackBaseUrl:
-          _enableFallback && _fallbackBaseUrlController.text.trim().isNotEmpty
-              ? _fallbackBaseUrlController.text.trim()
-              : null,
+      fallbackModel: _enableFallback && _fallbackModelController.text.trim().isNotEmpty
+          ? _fallbackModelController.text.trim()
+          : null,
+      fallbackApiKey: _enableFallback ? fallbackKeyToSend : null,
+      fallbackBaseUrl: _enableFallback && _fallbackBaseUrlController.text.trim().isNotEmpty
+          ? _fallbackBaseUrlController.text.trim()
+          : null,
     );
   }
 
+  String get fallbackKeyControllerTrim => _fallbackKeyController.text.trim();
+
   Future<void> _saveConfig() async {
     setState(() => _saving = true);
-
     try {
+      final serverUrl = _serverUrlController.text.trim();
+      if (serverUrl.isNotEmpty) {
+        await AppConfig.setBaseUrl(serverUrl);
+      }
+
       await _persistToLocalStorageAndBackend();
 
       if (!mounted) return;
       setState(() => _saving = false);
-
       widget.onConfigSaved?.call();
       Navigator.of(context).pop();
 
-      if (_enableFallback && _fallbackKeyController.text.trim().isEmpty) {
+      final primaryKey = _primaryKeyController.text.trim();
+      if (primaryKey.isEmpty) {
         ScaffoldMessenger.of(context).showSnackBar(
           const SnackBar(
             content: Text(
-                'Saved! Athena is active with your primary key. (Note: Backup failover is standby until a secondary key is set).'),
+              'No API key provided. Free offline Wikipedia & pre-cached cards will be used.',
+            ),
             backgroundColor: Color(0xFFB45309),
             duration: Duration(seconds: 4),
           ),
@@ -570,39 +549,6 @@ class _BYOKSettingsSheetState extends State<BYOKSettingsSheet> {
         ),
       );
     }
-  }
-
-  void _showModelPicker({required bool isPrimary}) {
-    final models = isPrimary ? _primaryModels : _fallbackModels;
-    final controller =
-        isPrimary ? _primaryModelController : _fallbackModelController;
-    final provider = isPrimary ? _primaryProvider : _fallbackProvider;
-    final key = isPrimary
-        ? _primaryKeyController.text.trim()
-        : _fallbackKeyController.text.trim();
-
-    showModalBottomSheet(
-      context: context,
-      useSafeArea: true,
-      isScrollControlled: true,
-      backgroundColor: Colors.transparent,
-      builder: (ctx) {
-        return _ModelSelectionModal(
-          models: models,
-          currentModel: controller.text,
-          provider: provider,
-          hasKey: key.isNotEmpty,
-          onRefresh:
-              key.isNotEmpty ? () => _fetchModels(isPrimary: isPrimary) : null,
-          onModelSelected: (selectedId) {
-            setState(() {
-              controller.text = selectedId;
-            });
-            Navigator.of(ctx).pop();
-          },
-        );
-      },
-    );
   }
 
   @override
@@ -756,18 +702,17 @@ class _BYOKSettingsSheetState extends State<BYOKSettingsSheet> {
       onTap: () => setState(() => _activeSegment = index),
       behavior: HitTestBehavior.opaque,
       child: Container(
-        alignment: Alignment.center,
         decoration: BoxDecoration(
           color: isSelected
-              ? (isDark ? const Color(0xFF333333) : Colors.white)
+              ? (isDark ? const Color(0xFF383838) : Colors.white)
               : Colors.transparent,
           borderRadius: BorderRadius.circular(6),
           boxShadow: isSelected
-              ? const [
+              ? [
                   BoxShadow(
-                    color: Color(0x0C000000),
+                    color: Colors.black.withValues(alpha: 0.08),
                     blurRadius: 4,
-                    offset: Offset(0, 1),
+                    offset: const Offset(0, 1),
                   ),
                 ]
               : null,
@@ -818,16 +763,9 @@ class _BYOKSettingsSheetState extends State<BYOKSettingsSheet> {
             if (val != null) {
               setState(() {
                 _primaryProvider = val;
-                if (val == 'gemini') {
-                  _primaryModelController.text = 'gemini-2.5-flash';
-                } else if (val == 'groq') {
-                  _primaryModelController.text = 'llama-3.3-70b-versatile';
-                } else {
-                  _primaryModelController.text = '';
-                }
+                _primaryModelController.text = _getDefaultModelFor(val);
                 _primaryTestMessage = null;
                 _primaryTestOk = null;
-                _primaryModels = [];
               });
             }
           },
@@ -843,11 +781,10 @@ class _BYOKSettingsSheetState extends State<BYOKSettingsSheet> {
           providerName: info.name,
           isDark: isDark,
           onChanged: (val) {
-            if (_primaryTestOk != null || _primaryModels.isNotEmpty) {
+            if (_primaryTestOk != null) {
               setState(() {
                 _primaryTestOk = null;
                 _primaryTestMessage = null;
-                _primaryModels = [];
               });
             }
           },
@@ -857,12 +794,17 @@ class _BYOKSettingsSheetState extends State<BYOKSettingsSheet> {
           _buildBaseUrlField(_primaryBaseUrlController, isDark),
         ],
         const SizedBox(height: 14),
-        _buildModelSelector(
-          isPrimary: true,
-          modelController: _primaryModelController,
-          models: _primaryModels,
-          isFetching: _fetchingPrimaryModels,
+        _buildModelDropdown(
+          provider: _primaryProvider,
+          controller: _primaryModelController,
           isDark: isDark,
+          onChanged: (val) {
+            if (val != null) {
+              setState(() {
+                _primaryModelController.text = val;
+              });
+            }
+          },
         ),
         const SizedBox(height: 14),
         _buildTestConnectionButton(
@@ -887,13 +829,13 @@ class _BYOKSettingsSheetState extends State<BYOKSettingsSheet> {
   }) {
     final dropdownOptions = [
       {'id': 'gemini', 'label': 'Google Gemini (Recommended)'},
-      {'id': 'openrouter', 'label': 'OpenRouter'},
       {'id': 'groq', 'label': 'Groq (Ultra-Fast)'},
+      {'id': 'openrouter', 'label': 'OpenRouter'},
       {'id': 'openai', 'label': 'OpenAI'},
       {'id': 'anthropic', 'label': 'Anthropic Claude'},
-      {'id': 'nvidia', 'label': 'NVIDIA NIM'},
       {'id': 'deepseek', 'label': 'DeepSeek'},
       {'id': 'mistral', 'label': 'Mistral AI'},
+      {'id': 'nvidia', 'label': 'NVIDIA NIM'},
       {'id': 'together', 'label': 'Together AI'},
       {'id': 'custom', 'label': 'Local Ollama / Custom'},
     ];
@@ -932,6 +874,81 @@ class _BYOKSettingsSheetState extends State<BYOKSettingsSheet> {
           onChanged: onChanged,
         ),
       ),
+    );
+  }
+
+  Widget _buildModelDropdown({
+    required String provider,
+    required TextEditingController controller,
+    required bool isDark,
+    required ValueChanged<String?> onChanged,
+  }) {
+    final options = kProviderDefaultModels[provider] ?? kProviderDefaultModels['gemini']!;
+    final currentVal = controller.text.trim();
+    final hasMatch = options.any((opt) => opt['id'] == currentVal);
+    final effectiveValue = hasMatch
+        ? currentVal
+        : (options.isNotEmpty ? options.first['id']! : 'gemini-2.5-flash');
+
+    if (!hasMatch && currentVal.isEmpty && options.isNotEmpty) {
+      controller.text = effectiveValue;
+    }
+
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        _buildSectionLabel('AI MODEL'),
+        const SizedBox(height: 6),
+        Container(
+          decoration: BoxDecoration(
+            color: isDark ? const Color(0xFF222222) : AppTheme.surfaceWarm,
+            borderRadius: BorderRadius.circular(6),
+            border: Border.all(
+              color: isDark ? const Color(0xFF383838) : AppTheme.border,
+            ),
+          ),
+          child: DropdownButtonHideUnderline(
+            child: DropdownButton<String>(
+              value: effectiveValue,
+              isExpanded: true,
+              dropdownColor: isDark ? const Color(0xFF222222) : Colors.white,
+              borderRadius: BorderRadius.circular(6),
+              padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 2),
+              style: TextStyle(
+                fontFamily: 'monospace',
+                fontSize: 13,
+                fontWeight: FontWeight.w600,
+                color: isDark ? Colors.white : AppTheme.ink,
+              ),
+              items: [
+                ...options.map((opt) {
+                  return DropdownMenuItem<String>(
+                    value: opt['id'],
+                    child: Text(
+                      opt['label']!,
+                      overflow: TextOverflow.ellipsis,
+                    ),
+                  );
+                }),
+                if (!hasMatch && currentVal.isNotEmpty)
+                  DropdownMenuItem<String>(
+                    value: currentVal,
+                    child: Text(
+                      '$currentVal (Custom)',
+                      overflow: TextOverflow.ellipsis,
+                    ),
+                  ),
+              ],
+              onChanged: (val) {
+                if (val != null) {
+                  controller.text = val;
+                  onChanged(val);
+                }
+              },
+            ),
+          ),
+        ),
+      ],
     );
   }
 
@@ -1058,73 +1075,6 @@ class _BYOKSettingsSheetState extends State<BYOKSettingsSheet> {
               border: InputBorder.none,
               contentPadding:
                   const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
-            ),
-          ),
-        ),
-      ],
-    );
-  }
-
-  Widget _buildModelSelector({
-    required bool isPrimary,
-    required TextEditingController modelController,
-    required List<AIModelOption> models,
-    required bool isFetching,
-    required bool isDark,
-  }) {
-    final currentVal = modelController.text.trim();
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.start,
-      children: [
-        Row(
-          mainAxisAlignment: MainAxisAlignment.spaceBetween,
-          children: [
-            _buildSectionLabel(isPrimary ? 'AI MODEL' : 'BACKUP MODEL'),
-            if (isFetching)
-              SizedBox(
-                width: 12,
-                height: 12,
-                child: CircularProgressIndicator(
-                  strokeWidth: 1.5,
-                  color: isDark ? Colors.white : AppTheme.ink,
-                ),
-              ),
-          ],
-        ),
-        const SizedBox(height: 6),
-        InkWell(
-          onTap: () => _showModelPicker(isPrimary: isPrimary),
-          borderRadius: BorderRadius.circular(6),
-          child: Container(
-            padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
-            decoration: BoxDecoration(
-              color: isDark ? const Color(0xFF222222) : AppTheme.surfaceWarm,
-              borderRadius: BorderRadius.circular(6),
-              border: Border.all(
-                color: isDark ? const Color(0xFF383838) : AppTheme.border,
-              ),
-            ),
-            child: Row(
-              children: [
-                Expanded(
-                  child: Text(
-                    currentVal.isNotEmpty
-                        ? currentVal
-                        : (isPrimary ? 'gemini-2.5-flash' : 'Select model...'),
-                    style: TextStyle(
-                      fontFamily: 'monospace',
-                      fontSize: 13,
-                      fontWeight: FontWeight.w600,
-                      color: isDark ? Colors.white : AppTheme.ink,
-                    ),
-                  ),
-                ),
-                Icon(
-                  Icons.unfold_more_rounded,
-                  size: 18,
-                  color: isDark ? AppTheme.darkTextMuted : AppTheme.textMuted,
-                ),
-              ],
             ),
           ),
         ),
@@ -1259,7 +1209,6 @@ class _BYOKSettingsSheetState extends State<BYOKSettingsSheet> {
                   onChanged: (val) {
                     setState(() {
                       _enableFallback = val;
-                      if (!val) _fallbackModels = [];
                     });
                   },
                 ),
@@ -1276,10 +1225,9 @@ class _BYOKSettingsSheetState extends State<BYOKSettingsSheet> {
                   if (val != null) {
                     setState(() {
                       _fallbackProvider = val;
-                      _fallbackModelController.text = '';
+                      _fallbackModelController.text = _getDefaultModelFor(val);
                       _fallbackTestMessage = null;
                       _fallbackTestOk = null;
-                      _fallbackModels = [];
                     });
                   }
                 },
@@ -1295,11 +1243,10 @@ class _BYOKSettingsSheetState extends State<BYOKSettingsSheet> {
                 providerName: info.name,
                 isDark: isDark,
                 onChanged: (val) {
-                  if (_fallbackTestOk != null || _fallbackModels.isNotEmpty) {
+                  if (_fallbackTestOk != null) {
                     setState(() {
                       _fallbackTestOk = null;
                       _fallbackTestMessage = null;
-                      _fallbackModels = [];
                     });
                   }
                 },
@@ -1309,12 +1256,17 @@ class _BYOKSettingsSheetState extends State<BYOKSettingsSheet> {
                 _buildBaseUrlField(_fallbackBaseUrlController, isDark),
               ],
               const SizedBox(height: 12),
-              _buildModelSelector(
-                isPrimary: false,
-                modelController: _fallbackModelController,
-                models: _fallbackModels,
-                isFetching: _fetchingFallbackModels,
+              _buildModelDropdown(
+                provider: _fallbackProvider,
+                controller: _fallbackModelController,
                 isDark: isDark,
+                onChanged: (val) {
+                  if (val != null) {
+                    setState(() {
+                      _fallbackModelController.text = val;
+                    });
+                  }
+                },
               ),
               const SizedBox(height: 12),
               _buildTestConnectionButton(
@@ -1485,88 +1437,61 @@ class _BYOKSettingsSheetState extends State<BYOKSettingsSheet> {
                           color: isDark ? Colors.white : AppTheme.ink,
                         ),
                       )
-                    : const Icon(Icons.bolt_rounded, size: 16),
+                    : const Icon(Icons.sensors_rounded, size: 16),
                 label: Text(_testingServer ? 'Pinging...' : 'Test Connection'),
                 style: OutlinedButton.styleFrom(
                   foregroundColor: isDark ? Colors.white : AppTheme.ink,
-                  padding: const EdgeInsets.symmetric(vertical: 12),
                   side: BorderSide(
                     color: isDark ? const Color(0xFF444444) : AppTheme.border,
                   ),
                   shape: RoundedRectangleBorder(
                     borderRadius: BorderRadius.circular(6),
                   ),
-                ),
-              ),
-            ),
-            const SizedBox(width: 12),
-            Expanded(
-              child: ElevatedButton.icon(
-                onPressed: () async {
-                  final raw = _serverUrlController.text.trim();
-                  await AppConfig.setBaseUrl(raw);
-                  widget.onConfigSaved?.call();
-                  if (!mounted) return;
-                  ScaffoldMessenger.of(context).showSnackBar(
-                    SnackBar(
-                      content: Text(raw.isEmpty
-                          ? 'Server URL reset to automatic host detection.'
-                          : 'Server URL saved: $raw'),
-                      duration: const Duration(seconds: 2),
-                    ),
-                  );
-                },
-                icon: const Icon(Icons.check_rounded, size: 16),
-                label: const Text('Save Host'),
-                style: ElevatedButton.styleFrom(
-                  backgroundColor: isDark ? Colors.white : AppTheme.ink,
-                  foregroundColor: isDark ? Colors.black : Colors.white,
-                  elevation: 0,
-                  padding: const EdgeInsets.symmetric(vertical: 12),
-                  shape: RoundedRectangleBorder(
-                    borderRadius: BorderRadius.circular(6),
-                  ),
+                  padding:
+                      const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
                 ),
               ),
             ),
           ],
         ),
         if (_serverTestMessage != null) ...[
-          const SizedBox(height: 12),
+          const SizedBox(height: 10),
           Container(
-            padding: const EdgeInsets.all(12),
+            padding: const EdgeInsets.all(10),
             decoration: BoxDecoration(
               color: _serverTestOk == true
-                  ? const Color(0x1A10B981)
-                  : const Color(0x1AEF4444),
+                  ? const Color(0x15007A3D)
+                  : const Color(0x15C84B31),
               borderRadius: BorderRadius.circular(6),
               border: Border.all(
                 color: _serverTestOk == true
-                    ? const Color(0xFF10B981)
-                    : const Color(0xFFEF4444),
+                    ? const Color(0xFF007A3D)
+                    : const Color(0xFFC84B31),
               ),
             ),
             child: Row(
               children: [
-                Icon(
-                  _serverTestOk == true
-                      ? Icons.check_circle_outline
-                      : Icons.error_outline,
-                  size: 18,
-                  color: _serverTestOk == true
-                      ? const Color(0xFF10B981)
-                      : const Color(0xFFEF4444),
-                ),
-                const SizedBox(width: 10),
+                if (_serverTestOk == true)
+                  const AthenaAvatar(
+                    expression: AthenaExpression.happy,
+                    size: 20,
+                  )
+                else
+                  const AthenaAvatar(
+                    expression: AthenaExpression.surprised,
+                    size: 20,
+                  ),
+                const SizedBox(width: 8),
                 Expanded(
                   child: Text(
                     _serverTestMessage!,
                     style: TextStyle(
                       fontFamily: AppTheme.fontUI,
                       fontSize: 12,
+                      fontWeight: FontWeight.w600,
                       color: _serverTestOk == true
-                          ? const Color(0xFF10B981)
-                          : const Color(0xFFEF4444),
+                          ? const Color(0xFF007A3D)
+                          : const Color(0xFFC84B31),
                     ),
                   ),
                 ),
@@ -1574,7 +1499,7 @@ class _BYOKSettingsSheetState extends State<BYOKSettingsSheet> {
             ),
           ),
         ],
-        const SizedBox(height: 20),
+        const SizedBox(height: 16),
         _buildAppVersionAndDownloadsCard(isDark),
         const SizedBox(height: 16),
         _buildMobileGuideCard(isDark),
@@ -1705,116 +1630,64 @@ class _BYOKSettingsSheetState extends State<BYOKSettingsSheet> {
             ),
           ],
           const SizedBox(height: 14),
+          _buildSectionLabel('OFFLINE BINARY DOWNLOADS'),
+          const SizedBox(height: 8),
           Row(
             children: [
               Expanded(
-                child: currentPlatform == 'android'
-                    ? ElevatedButton.icon(
-                        onPressed: () {
-                          UpdateService.downloadPlatformUpdate(
-                            updateInfo: effectiveInfo,
-                            platform: 'android',
-                          );
-                        },
-                        icon: const Icon(Icons.android_rounded, size: 15),
-                        label: const Text(
-                          'Android (.APK) ★',
-                          style: TextStyle(
-                            fontSize: 11.5,
-                            fontWeight: FontWeight.w700,
-                          ),
-                        ),
-                        style: ElevatedButton.styleFrom(
-                          backgroundColor: const Color(0xFF161615),
-                          foregroundColor: Colors.white,
-                          elevation: 0,
-                          shape: RoundedRectangleBorder(
-                            borderRadius: BorderRadius.circular(6),
-                          ),
-                          padding: const EdgeInsets.symmetric(vertical: 12),
-                        ),
-                      )
-                    : OutlinedButton.icon(
-                        onPressed: () {
-                          UpdateService.downloadPlatformUpdate(
-                            updateInfo: effectiveInfo,
-                            platform: 'android',
-                          );
-                        },
-                        icon: const Icon(Icons.android_rounded, size: 15),
-                        label: const Text(
-                          'Android (.APK)',
-                          style: TextStyle(fontSize: 11.5),
-                        ),
-                        style: OutlinedButton.styleFrom(
-                          foregroundColor:
-                              isDark ? Colors.white : AppTheme.ink,
-                          side: BorderSide(
-                            color: isDark
-                                ? const Color(0xFF444444)
-                                : const Color(0xFFCCCCCC),
-                          ),
-                          shape: RoundedRectangleBorder(
-                            borderRadius: BorderRadius.circular(6),
-                          ),
-                          padding: const EdgeInsets.symmetric(vertical: 12),
-                        ),
-                      ),
+                child: OutlinedButton.icon(
+                  onPressed: () {
+                    UpdateService.downloadPlatformUpdate(
+                      updateInfo: effectiveInfo,
+                      platform: 'android',
+                    );
+                  },
+                  icon: const Icon(Icons.android_rounded, size: 15),
+                  label: const Text(
+                    'Android (.APK)',
+                    style: TextStyle(fontSize: 11.5),
+                  ),
+                  style: OutlinedButton.styleFrom(
+                    foregroundColor: isDark ? Colors.white : AppTheme.ink,
+                    side: BorderSide(
+                      color: isDark
+                          ? const Color(0xFF444444)
+                          : const Color(0xFFCCCCCC),
+                    ),
+                    shape: RoundedRectangleBorder(
+                      borderRadius: BorderRadius.circular(6),
+                    ),
+                    padding: const EdgeInsets.symmetric(vertical: 12),
+                  ),
+                ),
               ),
               const SizedBox(width: 8),
               Expanded(
-                child: currentPlatform == 'ios'
-                    ? ElevatedButton.icon(
-                        onPressed: () {
-                          UpdateService.downloadPlatformUpdate(
-                            updateInfo: effectiveInfo,
-                            platform: 'ios',
-                          );
-                        },
-                        icon: const Icon(Icons.apple_rounded, size: 15),
-                        label: const Text(
-                          'iOS (.IPA) ★',
-                          style: TextStyle(
-                            fontSize: 11.5,
-                            fontWeight: FontWeight.w700,
-                          ),
-                        ),
-                        style: ElevatedButton.styleFrom(
-                          backgroundColor: const Color(0xFF161615),
-                          foregroundColor: Colors.white,
-                          elevation: 0,
-                          shape: RoundedRectangleBorder(
-                            borderRadius: BorderRadius.circular(6),
-                          ),
-                          padding: const EdgeInsets.symmetric(vertical: 12),
-                        ),
-                      )
-                    : OutlinedButton.icon(
-                        onPressed: () {
-                          UpdateService.downloadPlatformUpdate(
-                            updateInfo: effectiveInfo,
-                            platform: 'ios',
-                          );
-                        },
-                        icon: const Icon(Icons.apple_rounded, size: 15),
-                        label: const Text(
-                          'iOS (.IPA)',
-                          style: TextStyle(fontSize: 11.5),
-                        ),
-                        style: OutlinedButton.styleFrom(
-                          foregroundColor:
-                              isDark ? Colors.white : AppTheme.ink,
-                          side: BorderSide(
-                            color: isDark
-                                ? const Color(0xFF444444)
-                                : const Color(0xFFCCCCCC),
-                          ),
-                          shape: RoundedRectangleBorder(
-                            borderRadius: BorderRadius.circular(6),
-                          ),
-                          padding: const EdgeInsets.symmetric(vertical: 12),
-                        ),
-                      ),
+                child: OutlinedButton.icon(
+                  onPressed: () {
+                    UpdateService.downloadPlatformUpdate(
+                      updateInfo: effectiveInfo,
+                      platform: 'ios',
+                    );
+                  },
+                  icon: const Icon(Icons.apple_rounded, size: 15),
+                  label: const Text(
+                    'iOS (.IPA)',
+                    style: TextStyle(fontSize: 11.5),
+                  ),
+                  style: OutlinedButton.styleFrom(
+                    foregroundColor: isDark ? Colors.white : AppTheme.ink,
+                    side: BorderSide(
+                      color: isDark
+                          ? const Color(0xFF444444)
+                          : const Color(0xFFCCCCCC),
+                    ),
+                    shape: RoundedRectangleBorder(
+                      borderRadius: BorderRadius.circular(6),
+                    ),
+                    padding: const EdgeInsets.symmetric(vertical: 12),
+                  ),
+                ),
               ),
             ],
           ),
@@ -1910,362 +1783,6 @@ class _BYOKSettingsSheetState extends State<BYOKSettingsSheet> {
         fontWeight: FontWeight.w700,
         letterSpacing: 1.0,
         color: AppTheme.textMuted,
-      ),
-    );
-  }
-}
-
-class _ModelSelectionModal extends StatefulWidget {
-  final List<AIModelOption> models;
-  final String currentModel;
-  final String provider;
-  final bool hasKey;
-  final ValueChanged<String> onModelSelected;
-  final Future<List<AIModelOption>> Function()? onRefresh;
-
-  const _ModelSelectionModal({
-    required this.models,
-    required this.currentModel,
-    this.provider = '',
-    this.hasKey = false,
-    required this.onModelSelected,
-    this.onRefresh,
-  });
-
-  @override
-  State<_ModelSelectionModal> createState() => _ModelSelectionModalState();
-}
-
-class _ModelSelectionModalState extends State<_ModelSelectionModal> {
-  final _searchController = TextEditingController();
-  final _manualController = TextEditingController();
-  late List<AIModelOption> _models;
-  String _query = '';
-  bool _customMode = false;
-  bool _isRefreshing = false;
-
-  @override
-  void initState() {
-    super.initState();
-    _models = List.from(widget.models);
-  }
-
-  @override
-  void dispose() {
-    _searchController.dispose();
-    _manualController.dispose();
-    super.dispose();
-  }
-
-  Future<void> _handleRefresh() async {
-    if (widget.onRefresh == null || _isRefreshing) return;
-    setState(() => _isRefreshing = true);
-    try {
-      final updated = await widget.onRefresh!();
-      if (!mounted) return;
-      setState(() {
-        _models = updated;
-        _isRefreshing = false;
-      });
-    } catch (_) {
-      if (!mounted) return;
-      setState(() => _isRefreshing = false);
-    }
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    final filtered = _models.where((m) {
-      if (_query.isEmpty) return true;
-      final q = _query.toLowerCase();
-      return m.id.toLowerCase().contains(q) || m.name.toLowerCase().contains(q);
-    }).toList();
-
-    return Container(
-      height: MediaQuery.of(context).size.height * 0.75,
-      decoration: const BoxDecoration(
-        color: AppTheme.surface,
-        borderRadius: BorderRadius.vertical(top: Radius.circular(20)),
-      ),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.stretch,
-        children: [
-          Padding(
-            padding: const EdgeInsets.fromLTRB(20, 16, 20, 12),
-            child: Row(
-              mainAxisAlignment: MainAxisAlignment.spaceBetween,
-              children: [
-                const Text(
-                  'Select Model',
-                  style: TextStyle(
-                    fontFamily: AppTheme.fontDisplay,
-                    fontSize: 18,
-                    fontWeight: FontWeight.w600,
-                  ),
-                ),
-                Row(
-                  mainAxisSize: MainAxisSize.min,
-                  children: [
-                    if (widget.onRefresh != null &&
-                        !_customMode &&
-                        _models.isNotEmpty)
-                      IconButton(
-                        icon: _isRefreshing
-                            ? const SizedBox(
-                                width: 14,
-                                height: 14,
-                                child: CircularProgressIndicator(
-                                    strokeWidth: 2, color: AppTheme.ink),
-                              )
-                            : const Icon(Icons.refresh_rounded,
-                                size: 20, color: AppTheme.ink),
-                        tooltip: 'Refresh Available Models',
-                        onPressed: _handleRefresh,
-                      ),
-                    TextButton(
-                      onPressed: () {
-                        setState(() => _customMode = !_customMode);
-                      },
-                      child: Text(
-                          _customMode ? 'Browse Catalog' : 'Enter Manually'),
-                    ),
-                  ],
-                ),
-              ],
-            ),
-          ),
-          const Divider(height: 1, color: AppTheme.hairline),
-          if (_customMode)
-            Padding(
-              padding: const EdgeInsets.all(20),
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  const Text(
-                    'Exact Model Slug',
-                    style: TextStyle(
-                      fontFamily: AppTheme.fontUI,
-                      fontSize: 12,
-                      fontWeight: FontWeight.w600,
-                    ),
-                  ),
-                  const SizedBox(height: 6),
-                  TextField(
-                    controller: _manualController,
-                    decoration: InputDecoration(
-                      hintText: widget.currentModel.isNotEmpty
-                          ? widget.currentModel
-                          : 'e.g. meta-llama/llama-3.3-70b-instruct',
-                      border: OutlineInputBorder(
-                        borderRadius: BorderRadius.circular(6),
-                      ),
-                      contentPadding: const EdgeInsets.symmetric(
-                          horizontal: 14, vertical: 12),
-                    ),
-                  ),
-                  const SizedBox(height: 14),
-                  ElevatedButton(
-                    onPressed: () {
-                      if (_manualController.text.trim().isNotEmpty) {
-                        widget.onModelSelected(_manualController.text.trim());
-                      }
-                    },
-                    style: ElevatedButton.styleFrom(
-                      shape: RoundedRectangleBorder(
-                        borderRadius: BorderRadius.circular(6),
-                      ),
-                    ),
-                    child: const Text('Use This Model'),
-                  ),
-                ],
-              ),
-            )
-          else if (_models.isEmpty)
-            Expanded(
-              child: Center(
-                child: Padding(
-                  padding: const EdgeInsets.symmetric(horizontal: 32),
-                  child: Column(
-                    mainAxisSize: MainAxisSize.min,
-                    children: [
-                      Container(
-                        padding: const EdgeInsets.all(16),
-                        decoration: const BoxDecoration(
-                          color: AppTheme.surfaceWarm,
-                          shape: BoxShape.circle,
-                        ),
-                        child: const Icon(
-                          Icons.vpn_key_outlined,
-                          size: 32,
-                          color: AppTheme.textMuted,
-                        ),
-                      ),
-                      const SizedBox(height: 16),
-                      const Text(
-                        'No live models fetched',
-                        style: TextStyle(
-                          fontFamily: AppTheme.fontUI,
-                          fontSize: 15,
-                          fontWeight: FontWeight.w600,
-                          color: AppTheme.ink,
-                        ),
-                      ),
-                      const SizedBox(height: 6),
-                      Text(
-                        widget.hasKey
-                            ? 'Tap "Test Connection" on the settings sheet to verify your key and discover models.'
-                            : 'Enter your API key and tap "Test Connection" to discover available models.',
-                        textAlign: TextAlign.center,
-                        style: const TextStyle(
-                          fontFamily: AppTheme.fontUI,
-                          fontSize: 12,
-                          color: AppTheme.textMuted,
-                          height: 1.4,
-                        ),
-                      ),
-                      const SizedBox(height: 18),
-                      OutlinedButton(
-                        onPressed: () {
-                          setState(() => _customMode = true);
-                        },
-                        style: OutlinedButton.styleFrom(
-                          shape: RoundedRectangleBorder(
-                            borderRadius: BorderRadius.circular(6),
-                          ),
-                        ),
-                        child: const Text('Enter Model Slug Manually'),
-                      ),
-                    ],
-                  ),
-                ),
-              ),
-            )
-          else ...[
-            Padding(
-              padding: const EdgeInsets.fromLTRB(16, 12, 16, 8),
-              child: TextField(
-                controller: _searchController,
-                onChanged: (val) => setState(() => _query = val),
-                decoration: InputDecoration(
-                  prefixIcon: const Icon(Icons.search_rounded, size: 20),
-                  suffixIcon: _isRefreshing
-                      ? const SizedBox(
-                          width: 14,
-                          height: 14,
-                          child: Center(
-                            child: SizedBox(
-                              width: 14,
-                              height: 14,
-                              child: CircularProgressIndicator(
-                                  strokeWidth: 2, color: AppTheme.ink),
-                            ),
-                          ),
-                        )
-                      : null,
-                  hintText: 'Search ${_models.length} live models...',
-                  border: OutlineInputBorder(
-                    borderRadius: BorderRadius.circular(6),
-                    borderSide: const BorderSide(color: AppTheme.border),
-                  ),
-                  contentPadding:
-                      const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
-                ),
-              ),
-            ),
-            Expanded(
-              child: filtered.isEmpty
-                  ? Center(
-                      child: Text(
-                        'No models matching "$_query"',
-                        style: const TextStyle(color: AppTheme.textMuted),
-                      ),
-                    )
-                  : ListView.builder(
-                      itemCount: filtered.length,
-                      itemBuilder: (ctx, i) {
-                        final m = filtered[i];
-                        final isSelected = m.id == widget.currentModel;
-
-                        return ListTile(
-                          onTap: () => widget.onModelSelected(m.id),
-                          title: Text(
-                            m.name,
-                            style: TextStyle(
-                              fontFamily: AppTheme.fontUI,
-                              fontWeight: isSelected
-                                  ? FontWeight.w700
-                                  : FontWeight.w500,
-                              color: isSelected
-                                  ? AppTheme.ink
-                                  : AppTheme.textPrimary,
-                            ),
-                          ),
-                          subtitle: Text(
-                            m.id,
-                            style: const TextStyle(
-                              fontFamily: 'monospace',
-                              fontSize: 11,
-                              color: AppTheme.textMuted,
-                            ),
-                          ),
-                          trailing: Row(
-                            mainAxisSize: MainAxisSize.min,
-                            children: [
-                              if (isSelected) ...[
-                                Container(
-                                  padding: const EdgeInsets.symmetric(
-                                    horizontal: 6,
-                                    vertical: 2,
-                                  ),
-                                  decoration: BoxDecoration(
-                                    color: const Color(0xFFE0F2FE),
-                                    borderRadius: BorderRadius.circular(4),
-                                  ),
-                                  child: const Text(
-                                    'CHOSEN',
-                                    style: TextStyle(
-                                      fontFamily: AppTheme.fontUI,
-                                      fontSize: 9,
-                                      fontWeight: FontWeight.w700,
-                                      color: Color(0xFF0369A1),
-                                    ),
-                                  ),
-                                ),
-                                const SizedBox(width: 8),
-                              ],
-                              if (m.contextLength != null)
-                                Container(
-                                  padding: const EdgeInsets.symmetric(
-                                    horizontal: 6,
-                                    vertical: 3,
-                                  ),
-                                  decoration: BoxDecoration(
-                                    color: AppTheme.surfaceWarm,
-                                    borderRadius: BorderRadius.circular(6),
-                                    border: Border.all(color: AppTheme.border),
-                                  ),
-                                  child: Text(
-                                    '${(m.contextLength! / 1024).round()}K ctx',
-                                    style: const TextStyle(
-                                      fontFamily: AppTheme.fontUI,
-                                      fontSize: 10,
-                                      color: AppTheme.textMuted,
-                                    ),
-                                  ),
-                                ),
-                              if (isSelected) ...[
-                                const SizedBox(width: 8),
-                                const Icon(Icons.check_rounded,
-                                    color: AppTheme.ink, size: 20),
-                              ],
-                            ],
-                          ),
-                        );
-                      },
-                    ),
-            ),
-          ],
-        ],
       ),
     );
   }
