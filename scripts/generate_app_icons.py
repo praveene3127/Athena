@@ -145,6 +145,34 @@ def generate_icons():
             print(f"  [iOS] {fn} -> {pixel_w}x{pixel_h}px")
 
     # =========================================================================
+    # B2. Generate iOS Launch Images (LaunchImage.imageset)
+    # =========================================================================
+    ios_launchset = root / "app" / "ios" / "Runner" / "Assets.xcassets" / "LaunchImage.imageset"
+    ios_launchset.mkdir(parents=True, exist_ok=True)
+    owl_src = root / "athena-brand-kit-v3" / "avatar" / "png" / "athena-owl-neutral-black-transparent.png"
+    if owl_src.exists():
+        owl_img = Image.open(owl_src).convert("RGBA")
+        owl_bbox = owl_img.getbbox()
+        if owl_bbox:
+            owl_cropped = owl_img.crop(owl_bbox)
+            print("\n--- Generating iOS Launch Images ---")
+            for scale, fn in [(1, "LaunchImage.png"), (2, "LaunchImage@2x.png"), (3, "LaunchImage@3x.png")]:
+                lw, lh = 168 * scale, 185 * scale
+                lcanvas = Image.new("RGBA", (lw, lh), (0, 0, 0, 0))
+                target_h = int(lh * 0.75)
+                aspect = owl_cropped.width / owl_cropped.height
+                target_w = int(target_h * aspect)
+                if target_w > int(lw * 0.85):
+                    target_w = int(lw * 0.85)
+                    target_h = int(target_w / aspect)
+                resized_owl = owl_cropped.resize((target_w, target_h), Image.Resampling.LANCZOS)
+                pos_x = (lw - target_w) // 2
+                pos_y = (lh - target_h) // 2
+                lcanvas.paste(resized_owl, (pos_x, pos_y), resized_owl)
+                lcanvas.save(ios_launchset / fn, format="PNG")
+                print(f"  [iOS Launch] {fn} -> {lw}x{lh}px")
+
+    # =========================================================================
     # C. Generate Web Icons
     # =========================================================================
     web_dir = root / "app" / "web"

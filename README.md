@@ -20,11 +20,11 @@
 Athena runs as a native application on **Android** and **iOS**, pairing over local Wi-Fi or Cloudflare Tunnel to your local companion engine with zero telemetry or cloud lock-in.
 
 <p align="center">
-  <a href="../../releases/latest/download/Athena-Android.apk">
+  <a href="https://github.com/praveene3127/Athena/raw/main/releases/athena-release.apk">
     <img src="https://img.shields.io/badge/Download_for_Android-.APK_Installer-2D6A4F?style=for-the-badge&logo=android&logoColor=white" alt="Download Android APK" />
   </a>
   &nbsp;&nbsp;
-  <a href="../../releases/latest/download/Athena-iOS.ipa">
+  <a href="https://github.com/praveene3127/Athena/raw/main/releases/athena-ios-release.ipa">
     <img src="https://img.shields.io/badge/Download_for_iOS-.IPA_Package-161615?style=for-the-badge&logo=apple&logoColor=white" alt="Download iOS IPA" />
   </a>
 </p>
@@ -35,14 +35,14 @@ Athena runs as a native application on **Android** and **iOS**, pairing over loc
 
 | Android (.apk) | iOS (.ipa &amp; PWA) | Companion Engine (Windows / Mac / Linux) |
 | :--- | :--- | :--- |
-| [![Download Android APK](https://img.shields.io/badge/Direct_Download-Athena--Android.apk-2D6A4F?style=for-the-badge&logo=android&logoColor=white)](../../releases/latest/download/Athena-Android.apk) | [![Download iOS IPA](https://img.shields.io/badge/Direct_Download-Athena--iOS.ipa-161615?style=for-the-badge&logo=apple&logoColor=white)](../../releases/latest/download/Athena-iOS.ipa) | **1-Click Windows Launch**<br>Double-click [`scripts/start_athena.bat`](scripts/start_athena.bat)<br>*(or run `python scripts/run_athena.py`)* |
+| [![Download Android APK](https://img.shields.io/badge/Direct_Download-Athena--Android.apk-2D6A4F?style=for-the-badge&logo=android&logoColor=white)](https://github.com/praveene3127/Athena/raw/main/releases/athena-release.apk) | [![Download iOS IPA](https://img.shields.io/badge/Direct_Download-Athena--iOS.ipa-161615?style=for-the-badge&logo=apple&logoColor=white)](https://github.com/praveene3127/Athena/raw/main/releases/athena-ios-release.ipa) | **1-Click Windows Launch**<br>Double-click [`scripts/start_athena.bat`](scripts/start_athena.bat)<br>*(or run `python scripts/run_athena.py`)* |
 | [![Add to Obtainium](https://img.shields.io/badge/Obtainium-1--Click%20Auto--Update-10B981?style=flat-square&logo=git&logoColor=white)](https://obtainium.imranr.dev) | **Instant Fullscreen iOS WebApp**<br>*(Zero sideloading, never expires)*<br>1. Open Phone Wi-Fi URL in Safari<br>2. Tap **Share** &rarr; **Add to Home Screen** | Starts unified FastAPI + ONNX server (`:8000`), Web Reader (`:8080`), and auto-discovers your phone's Wi-Fi IP |
 | **Local USB 1-Click**:<br>`flutter install -d android` | **Windows Sideload (Free Apple ID)**:<br>Open [Sideloadly](https://sideloadly.io/) or AltStore &rarr; drag `Athena-iOS.ipa` &rarr; tap Install | **Wi-Fi Pairing URL**:<br>`http://<LAN_IP>:8000`<br>*(Inspect via `http://127.0.0.1:8000/api/pair-info`)* |
 
 ### Installation &amp; Setup Reference
 
-* **Android**: Tap the green button to download [`Athena-Android.apk`](../../releases/latest/download/Athena-Android.apk) (or stream from local server via [`/api/download/android`](http://127.0.0.1:8000/api/download/android)) &rarr; Open Downloads &rarr; Tap **Install**. Background auto-updates are supported through Obtainium (`https://github.com/praveene3127/Athena`) or the in-app update service.
-* **iOS (Sideload .ipa from Windows or Mac)**: Tap the black button to download [`Athena-iOS.ipa`](../../releases/latest/download/Athena-iOS.ipa) (or stream from local server via [`/api/download/ios`](http://127.0.0.1:8000/api/download/ios)) &rarr; Connect iPhone via USB &rarr; Install via free [Sideloadly](https://sideloadly.io/) or AltStore / SideStore using a standard Apple ID (no Mac, Xcode, or paid developer account required).
+* **Android**: Tap the green button to download [`Athena-Android.apk`](https://github.com/praveene3127/Athena/raw/main/releases/athena-release.apk) (or stream from local server via [`/api/download/android`](http://127.0.0.1:8000/api/download/android)) &rarr; Open Downloads &rarr; Tap **Install**. Background auto-updates are supported through Obtainium (`https://github.com/praveene3127/Athena`) or the in-app update service.
+* **iOS (Sideload .ipa from Windows or Mac)**: Tap the black button to download [`Athena-iOS.ipa`](https://github.com/praveene3127/Athena/raw/main/releases/athena-ios-release.ipa) (or stream from local server via [`/api/download/ios`](http://127.0.0.1:8000/api/download/ios)) &rarr; Connect iPhone via USB &rarr; Install via free [Sideloadly](https://sideloadly.io/) or AltStore / SideStore using a standard Apple ID (no Mac, Xcode, or paid developer account required).
 * **iOS (Instant Fullscreen WebApp without Sideloading)**: Open your companion server URL (`http://<LAN_IP>:8000`) in mobile Safari &rarr; Tap **Share** &rarr; Tap **Add to Home Screen**. Athena runs in standalone fullscreen mode powered by native iOS web-app-capable configuration.
 
 #### Windows / macOS / Linux (Companion Engine)

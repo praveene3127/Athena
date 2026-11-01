@@ -103,6 +103,29 @@ def build_info_plist() -> bytes:
         "CFBundleShortVersionString": "1.1.0",
         "CFBundleSignature": "????",
         "CFBundleVersion": "2",
+        "CFBundleIcons": {
+            "CFBundlePrimaryIcon": {
+                "CFBundleIconFiles": [
+                    "Icon-App-20x20",
+                    "Icon-App-29x29",
+                    "Icon-App-40x40",
+                    "Icon-App-60x60"
+                ],
+                "CFBundleIconName": "AppIcon"
+            }
+        },
+        "CFBundleIcons~ipad": {
+            "CFBundlePrimaryIcon": {
+                "CFBundleIconFiles": [
+                    "Icon-App-20x20",
+                    "Icon-App-29x29",
+                    "Icon-App-40x40",
+                    "Icon-App-76x76",
+                    "Icon-App-83.5x83.5"
+                ],
+                "CFBundleIconName": "AppIcon"
+            }
+        },
         "LSRequiresIPhoneOS": True,
         "MinimumOSVersion": "16.0",
         "UIDeviceFamily": [1, 2],  # iPhone and iPad
@@ -181,6 +204,24 @@ def package_ipa():
         for fname in os.listdir(icon_src_dir):
             fpath = os.path.join(icon_src_dir, fname)
             if os.path.isfile(fpath):
+                with open(fpath, "rb") as f:
+                    icon_bytes = f.read()
+                    bundle_files[fname] = icon_bytes
+                    if fname == "Icon-App-60x60@2x.png":
+                        bundle_files["AppIcon60x60@2x.png"] = icon_bytes
+                    elif fname == "Icon-App-60x60@3x.png":
+                        bundle_files["AppIcon60x60@3x.png"] = icon_bytes
+                    elif fname == "Icon-App-76x76@2x.png":
+                        bundle_files["AppIcon76x76@2x~ipad.png"] = icon_bytes
+                    elif fname == "Icon-App-1024x1024@1x.png":
+                        bundle_files["iTunesArtwork@2x"] = icon_bytes
+
+    # 3b. Add launch screen images
+    launch_src_dir = os.path.join(IOS_DIR, "Runner", "Assets.xcassets", "LaunchImage.imageset")
+    if os.path.isdir(launch_src_dir):
+        for fname in os.listdir(launch_src_dir):
+            fpath = os.path.join(launch_src_dir, fname)
+            if os.path.isfile(fpath) and fname.endswith(".png"):
                 with open(fpath, "rb") as f:
                     bundle_files[fname] = f.read()
 
