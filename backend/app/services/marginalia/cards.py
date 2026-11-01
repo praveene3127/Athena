@@ -33,8 +33,8 @@ from app.services.edge_ai import (
     compute_semantic_similarity,
     is_semantic_duplicate,
 )
-from app.services.llm import LLMService
-from app.services.wikipedia import WikipediaClient
+from app.services.marginalia.llm import LLMService
+from app.services.marginalia.wikipedia import WikipediaClient
 from sqlmodel import Session, select
 
 logger = logging.getLogger(__name__)

@@ -1,6 +1,7 @@
 import json
-from typing import Any, Dict, List
+from typing import Any, Dict, List, Optional
 from fastapi import APIRouter, Depends
+from pydantic import BaseModel
 from sqlmodel import Session, select
 
 from app.db import get_session
@@ -8,6 +9,54 @@ from app.errors import AppException
 from app.models import ContextCard, Document, ReadingChunk
 
 router = APIRouter(tags=["cards"])
+
+
+class UserQuoteRequest(BaseModel):
+    id: str
+    document_id: str
+    source_chunk_id: Optional[str] = ""
+    title: Optional[str] = "Saved Passage"
+    body: str
+    exact_quote: Optional[str] = None
+
+
+@router.post("/api/cards/quote")
+def create_or_save_user_quote(
+    req: UserQuoteRequest, session: Session = Depends(get_session)
+) -> Dict[str, Any]:
+    """Saves or updates an authentic user passage quote into the SQLite ContextCard vault."""
+    card = session.get(ContextCard, req.id)
+    if not card:
+        card = ContextCard(
+            id=req.id,
+            document_id=req.document_id,
+            source_chunk_id=req.source_chunk_id or "",
+            concept_name="Saved Passage",
+            card_type="user_highlight",
+            title=req.title or "Saved Passage",
+            body=req.body,
+            why_here="Saved directly by reader",
+            exact_quote=req.exact_quote or (req.body[:280] if len(req.body) > 280 else req.body),
+            saved=True,
+            dismissed=False,
+            citations_json="[]",
+            support_status="fully_supported",
+            generation_mode="user_highlight",
+            verified=True,
+        )
+    else:
+        card.saved = True
+        card.dismissed = False
+        if req.title:
+            card.title = req.title
+        if req.body:
+            card.body = req.body
+        if req.exact_quote:
+            card.exact_quote = req.exact_quote
+
+    session.add(card)
+    session.commit()
+    return {"id": card.id, "saved": True}
 
 
 @router.post("/api/cards/{id}/save")
@@ -65,7 +114,7 @@ def get_saved_cards(session: Session = Depends(get_session)) -> List[Dict[str, A
     results: List[Dict[str, Any]] = []
     for card in cards:
         doc = session.get(Document, card.document_id)
-        chunk = session.get(ReadingChunk, card.source_chunk_id)
+        chunk = session.get(ReadingChunk, card.source_chunk_id) if card.source_chunk_id else None
 
         doc_title = doc.title if doc else "Document"
         seq = chunk.sequence if chunk else 1

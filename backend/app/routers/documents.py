@@ -552,7 +552,10 @@ def get_page_image(
 
     try:
         with pymupdf.open(file_path) as pdf_doc:
-            page = pdf_doc[n - 1]  # 0-indexed
+            if len(pdf_doc) == 0:
+                raise AppException("NOT_FOUND", "Document has no renderable pages", status_code=404)
+            page_idx = min(max(0, n - 1), len(pdf_doc) - 1)
+            page = pdf_doc[page_idx]  # 0-indexed, clamped for reflowable EPUB / PDF bounds
             rect = page.rect
             dpi = 110
             estimated_pixels = (rect.width * dpi / 72) * (rect.height * dpi / 72)

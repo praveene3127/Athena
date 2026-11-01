@@ -8,11 +8,11 @@ from sqlmodel import Session, select, delete
 from app.db import engine
 from app.errors import AppException, ERROR_MESSAGES
 from app.models import Document, ReadingChunk, Concept, ContextCard, DocumentChapter, ReadingState, utc_now
-from app.services.extraction import validate_pdf_file, extract_document_content, extract_toc_with_chunk_mapping, get_document_file_path
-from app.services.chunker import chunk_document
-from app.services.integrity import verify_integrity
-from app.services.concepts import extract_concepts
-from app.services.cards import generate_context_cards
+from app.services.ingestion.extraction import validate_pdf_file, extract_document_content, extract_toc_with_chunk_mapping, get_document_file_path
+from app.services.ingestion.chunker import chunk_document
+from app.services.ingestion.integrity import verify_integrity
+from app.services.marginalia.concepts import extract_concepts
+from app.services.marginalia.cards import generate_context_cards
 from app.services.edge_ai import classify_document_purpose
 from app.config import UPLOADS_DIR
 

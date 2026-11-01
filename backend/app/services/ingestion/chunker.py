@@ -11,8 +11,8 @@ import hashlib
 import re
 from typing import Any, Dict, List, Tuple
 
-from app.services.canonical import find_safe_sentence_boundaries
-from app.services.arrangement import classify_block, UnitType
+from app.services.ingestion.canonical import find_safe_sentence_boundaries
+from app.services.ingestion.arrangement import classify_block, UnitType
 
 
 _FEED_MIN_WORDS = 25

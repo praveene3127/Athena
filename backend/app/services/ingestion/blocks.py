@@ -11,7 +11,7 @@ import re
 from typing import Any, Callable, Dict, List, Optional, Set, Tuple
 import pymupdf
 
-from app.services.repairs import repair_text, RepairLedger
+from app.services.ingestion.repairs import repair_text, RepairLedger
 from app.services.edge_ai import (
     clean_block_hygiene,
     is_front_matter_or_noise_page,

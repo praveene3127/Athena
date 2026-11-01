@@ -9,7 +9,7 @@
   <img src="https://img.shields.io/badge/FastAPI-0.115+-009688?logo=fastapi&logoColor=white" alt="FastAPI" />
   <img src="https://img.shields.io/badge/ONNX-Edge%20AI-005CED?logo=onnx&logoColor=white" alt="ONNX Edge AI" />
   <img src="https://img.shields.io/badge/SHA--256-Lossless%20Canonical-10B981" alt="Lossless Canonical" />
-  <img src="https://img.shields.io/badge/Tests-52%2F52%20Passing-brightgreen" alt="Tests" />
+  <img src="https://img.shields.io/badge/Tests-53%2F53%20Passing-brightgreen" alt="Tests" />
   <a href="docs/LICENSE"><img src="https://img.shields.io/badge/License-MIT-blue" alt="License" /></a>
 </p>
 
@@ -279,7 +279,7 @@ Athena/
 │   │   │   └── edge_ai.py               # ONNX runtime embedder & cosine similarity
 │   │   ├── db.py                        # SQLModel SQLite database engine
 │   │   └── main.py                      # FastAPI application & static Flutter SPA mount
-│   ├── tests/                           # 52 automated pytest suites
+│   ├── tests/                           # 53 automated pytest suites
 │   └── requirements.txt                 # Backend dependencies
 │
 ├── scripts/                             # Operator tooling & verification
@@ -316,6 +316,8 @@ Athena/
 | `/api/ask/local` | `POST` | `{"question": "...", "passage_text": "..."}` | `{"answer": "...", "status": "ok"}` | Grounded Q&A against current passage (requires context token) |
 | `/api/settings/ai-config` | `GET` | None | `{"primary_provider": "gemini", ...}` | Inspect current BYOK provider configurations |
 | `/api/settings/ai-config` | `POST` | `{"primary_provider": "...", "primary_api_key": "..."}` | `{"status": "saved"}` | Persist updated primary and failover AI credentials |
+| `/api/cards/quote` | `POST` | `{"document_id": "...", "chunk_id": "...", "quote_text": "..."}` | `{"status": "ok", "card_id": "..."}` | Save custom user highlight quote as a marginalia card |
+| `/api/saved` | `GET` | None | `{"cards": [...]}` | Fetch user saved marginalia cards and highlights |
 | `/api/app-update` | `GET` | `?current_version=1.1.0&platform=android` | `{"update_available": false, ...}` | Check latest client release and platform download metadata |
 | `/api/download/android` | `GET` | None | Streams APK | Download latest Athena-Android.apk binary |
 | `/api/download/ios` | `GET` | None | Streams IPA | Download latest unsigned Athena-iOS.ipa binary |
@@ -344,7 +346,7 @@ Athena enforces an automated verification suite that audits code hygiene, techni
 # 1. Run the Full 6-Gate Release Verifier
 python scripts/verify_release.py
 
-# 2. Run Backend Pytest Suite (52 unit tests)
+# 2. Run Backend Pytest Suite (53 unit tests)
 pytest backend/tests -q
 
 # 3. Run Flutter Analyzer & Tests
@@ -386,7 +388,7 @@ uvicorn app.main:app --reload --port 8000
 ### Submitting Changes
 1. Run `python scripts/verify_release.py` locally.
 2. Ensure `flutter analyze lib` returns zero warnings or errors.
-3. Ensure `pytest backend/tests` passes all 52 tests.
+3. Ensure `pytest backend/tests` passes all 53 tests.
 4. Open a pull request against `main`. GitHub Actions will automatically validate the build and compile `Athena-Android.apk` and `Athena-iOS.ipa`.
 
 ---

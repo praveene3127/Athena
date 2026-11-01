@@ -480,7 +480,14 @@ class _ReaderScreenState extends ConsumerState<ReaderScreen> {
         'athena_saved_notes_v1', json.encode(_brainDeckCards));
     ref
         .read(apiClientProvider)
-        .saveCard(noteId)
+        .saveUserQuote(
+          id: noteId,
+          documentId: widget.documentId,
+          chunkId: chunk.id,
+          title: newCard['title']?.toString() ?? 'Saved Passage',
+          quoteText: quoteText,
+          exactQuote: newCard['exactQuote']?.toString(),
+        )
         .catchError((_) {});
     ref.invalidate(savedCardsProvider);
     if (mounted) {

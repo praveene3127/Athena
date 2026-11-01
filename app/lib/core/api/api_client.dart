@@ -548,7 +548,7 @@ class ApiClient {
           }).toList();
           await LocalDatabase.instance.insertChunks(chunkMaps);
         }
-        if (rawCards != null) {
+        if (rawCards != null && rawCards.isNotEmpty) {
           final cardMaps = rawCards.map((cd) {
             final map = Map<String, dynamic>.from(cd as Map);
             final cId = map['id']?.toString() ?? 'card_${map['concept_name']}';
@@ -655,6 +655,53 @@ class ApiClient {
   }
 
   // --- Cards & Saved (Phase 5) ---
+
+  Future<void> saveUserQuote({
+    required String id,
+    required String documentId,
+    required String chunkId,
+    required String title,
+    required String quoteText,
+    String? exactQuote,
+  }) async {
+    final noteMap = {
+      'id': id,
+      'document_id': documentId,
+      'source_chunk_id': chunkId,
+      'concept_name': 'Saved Passage',
+      'card_type': 'user_highlight',
+      'title': title,
+      'body': quoteText,
+      'why_here': 'Saved directly by reader',
+      'exact_quote': exactQuote ??
+          (quoteText.length > 280
+              ? '${quoteText.substring(0, 280)}…'
+              : quoteText),
+      'citations_json': '[]',
+      'saved': 1,
+      'dismissed': 0,
+      'created_at': DateTime.now().toIso8601String(),
+    };
+
+    if (!kIsWeb) {
+      try {
+        await LocalDatabase.instance.insertCards([noteMap]);
+      } catch (_) {}
+    }
+
+    if (AppConfig.apiBaseUrl.isNotEmpty) {
+      try {
+        await dio.post('/api/cards/quote', data: {
+          'id': id,
+          'document_id': documentId,
+          'source_chunk_id': chunkId,
+          'title': title,
+          'body': quoteText,
+          'exact_quote': exactQuote ?? quoteText,
+        });
+      } catch (_) {}
+    }
+  }
 
   Future<void> saveCard(String id) async {
     if (AppConfig.apiBaseUrl.isEmpty) {

@@ -7,11 +7,11 @@ import pymupdf
 
 from app.config import RAW_DIR, UPLOADS_DIR
 from app.errors import AppException
-from app.services.normalize import normalize_document_blocks
-from app.services.repairs import RepairLedger
-from app.services.triage import triage_document
-from app.services.blocks import extract_document_structure
-from app.services.canonical import assemble_canonical_text
+from app.services.ingestion.normalize import normalize_document_blocks
+from app.services.ingestion.repairs import RepairLedger
+from app.services.ingestion.triage import triage_document
+from app.services.ingestion.blocks import extract_document_structure
+from app.services.ingestion.canonical import assemble_canonical_text
 from app.services.edge_ai import extract_clean_book_title, extract_document_telemetry
 
 MAGIC_PDF_HEADER = b"%PDF-"

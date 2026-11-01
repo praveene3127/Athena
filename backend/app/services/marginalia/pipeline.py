@@ -9,11 +9,11 @@ from sqlmodel import Session, select
 
 from app.db import engine
 from app.models import Concept, ConceptCache, ContextCard, Document, ReadingChunk, DocumentChapter
-from app.services.cards import find_exact_quote
-from app.services.concepts import extract_concepts
+from app.services.marginalia.cards import find_exact_quote
+from app.services.marginalia.concepts import extract_concepts
 from app.services.edge_ai import compute_semantic_similarity, is_semantic_duplicate
-from app.services.llm import LLMService
-from app.services.wikipedia import WikipediaClient
+from app.services.marginalia.llm import LLMService
+from app.services.marginalia.wikipedia import WikipediaClient
 
 logger = logging.getLogger("athena.pipeline")
 

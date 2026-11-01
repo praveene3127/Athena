@@ -18,7 +18,7 @@ RE_SPACES = re.compile(r"[ \t]+")
 RE_PAGE_NUM = re.compile(r"^(?:page\s+)?(?:\d+|[ivxlcdm]+)$", re.IGNORECASE)
 
 
-from app.services.repairs import repair_text
+from app.services.ingestion.repairs import repair_text
 
 
 def normalize_block_text(text: str, ledger: Any = None) -> str:

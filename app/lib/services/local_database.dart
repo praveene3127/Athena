@@ -1,3 +1,5 @@
+import 'dart:convert';
+
 import 'package:path/path.dart' as p;
 import 'package:path_provider/path_provider.dart';
 import 'package:sqflite/sqflite.dart';
@@ -171,12 +173,78 @@ class LocalDatabase {
         orderBy: 'sequence ASC');
     final cardRows = await db.query('context_cards',
         where: 'document_id = ? AND dismissed = 0', whereArgs: [documentId]);
+
+    final chunks = chunkRows.map((r) => Map<String, dynamic>.from(r)).toList();
+    final cards = cardRows.map((r) => Map<String, dynamic>.from(r)).toList();
+
+    final items = <Map<String, dynamic>>[];
+    for (final chunk in chunks) {
+      final pagesJson = chunk['source_pages_json'] as String?;
+      List pages = [];
+      if (pagesJson != null) {
+        try {
+          pages = jsonDecode(pagesJson) as List;
+        } catch (_) {}
+      }
+      String pageRef = 'Page 1';
+      if (pages.length == 1) {
+        pageRef = 'Page ${pages[0]}';
+      } else if (pages.length >= 2) {
+        pageRef = 'Pages ${pages.first}\u2013${pages.last}';
+      }
+
+      items.add({
+        'type': 'reading_chunk',
+        'id': chunk['id'],
+        'sequence': chunk['sequence'],
+        'text': chunk['raw_text'],
+        'raw_text': chunk['raw_text'],
+        'page_reference': pageRef,
+        'section_title': chunk['section_title'],
+        'boundary_method': chunk['boundary_method'] ?? 'paragraph',
+      });
+
+      final matchingCards =
+          cards.where((c) => c['source_chunk_id'] == chunk['id']);
+      for (final card in matchingCards) {
+        List citations = [];
+        if (card['citations_json'] != null) {
+          try {
+            citations = jsonDecode(card['citations_json'] as String) as List;
+          } catch (_) {}
+        }
+        items.add({
+          'type': 'context_card',
+          'id': card['id'],
+          'concept_name': card['concept_name'],
+          'card_type': card['card_type'] ?? 'context',
+          'title': card['title'] ?? '',
+          'body': card['body'] ?? '',
+          'why_here': card['why_here'] ?? '',
+          'exact_quote': card['exact_quote'],
+          'support_status': card['support_status'] ?? 'fully_supported',
+          'generation_mode': card['generation_mode'] ?? 'grounded',
+          'saved': card['saved'] == 1,
+          'citations': citations,
+        });
+      }
+    }
+
+    final docMap = docRows.isNotEmpty
+        ? Map<String, dynamic>.from(docRows.first)
+        : <String, dynamic>{};
+    if (!docMap.containsKey('integrity')) {
+      docMap['integrity'] = {
+        'verified': true,
+        'chunk_count': chunks.length,
+      };
+    }
+
     return {
-      'document': docRows.isNotEmpty
-          ? Map<String, dynamic>.from(docRows.first)
-          : <String, dynamic>{},
-      'chunks': chunkRows.map((r) => Map<String, dynamic>.from(r)).toList(),
-      'cards': cardRows.map((r) => Map<String, dynamic>.from(r)).toList(),
+      'document': docMap,
+      'items': items,
+      'chunks': chunks,
+      'cards': cards,
     };
   }
 

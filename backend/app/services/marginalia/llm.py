@@ -167,7 +167,7 @@ def create_provider_client(provider: str, api_key: str, base_url: Optional[str] 
     if p == "anthropic":
         return AnthropicAdapter(api_key=api_key)
 
-    from app.services.providers import PROVIDER_CONFIGS
+    from app.services.marginalia.providers import PROVIDER_CONFIGS
     cfg = PROVIDER_CONFIGS.get(p, PROVIDER_CONFIGS["custom"])
     url = base_url or cfg.get("base_url")
     return openai.OpenAI(
@@ -700,7 +700,10 @@ class LLMService:
             }
 
             citations: list[dict[str, str]] = []
+            seen_urls: set[str] = set()
             hosts: set[str] = set()
+
+            # 1. Grounding chunks from Gemini search
             if gemini_response:
                 for candidate in getattr(gemini_response, "candidates", None) or []:
                     metadata = getattr(candidate, "grounding_metadata", None)
@@ -718,20 +721,45 @@ class LLMService:
                         if any(blacklisted in publisher for blacklisted in domain_blacklist):
                             continue
 
-                        if publisher in hosts:
+                        if publisher in hosts or url in seen_urls:
                             continue
                         hosts.add(publisher)
+                        seen_urls.add(url)
                         citations.append({
                             "title": str(title)[:300],
                             "publisher": publisher,
                             "url": url,
                         })
-                if len(citations) < 2:
-                    return None
-            elif reference_citations and len(reference_citations) >= 2:
-                citations = reference_citations[:5]
-            else:
+
+            # 2. Extract any raw https:// URLs from raw_text
+            if raw_text:
+                for found_url in re.findall(r"https://[^\s)\]\"'>]+", raw_text):
+                    cleaned_url = found_url.rstrip(".,;:)")
+                    try:
+                        parsed = httpx.URL(cleaned_url)
+                        if parsed.host and not any(b in parsed.host.lower() for b in domain_blacklist):
+                            if cleaned_url not in seen_urls and parsed.host.lower() not in hosts:
+                                seen_urls.add(cleaned_url)
+                                hosts.add(parsed.host.lower())
+                                citations.append({
+                                    "title": f"Reference: {parsed.host}",
+                                    "publisher": parsed.host.lower(),
+                                    "url": cleaned_url,
+                                })
+                    except Exception:
+                        pass
+
+            # 3. Always merge verified reference_citations (Wikipedia + Stanford Encyclopedia)
+            if reference_citations:
+                for ref_cite in reference_citations:
+                    u = ref_cite.get("url")
+                    if u and u not in seen_urls:
+                        seen_urls.add(u)
+                        citations.append(ref_cite)
+
+            if not citations:
                 return None
+
             return {
                 "title": card_title,
                 "body": body,
