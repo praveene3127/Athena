@@ -11,6 +11,11 @@ class AppConfig {
 
   static const String nativeFallback = 'http://127.0.0.1:8000';
 
+  static bool get isCustomServerConfigured =>
+      _runtimeBaseUrl != null && _runtimeBaseUrl!.isNotEmpty;
+
+  static String? get runtimeBaseUrl => _runtimeBaseUrl;
+
   /// Load runtime URL from local preferences (native Server URL).
   static Future<void> init() async {
     try {

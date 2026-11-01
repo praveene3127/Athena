@@ -3,8 +3,10 @@
   "build_number": 2,
   "title": "Athena v1.1.0 Release",
   "release_notes": "Improved Per-Page Document Bouncer, 4-Archetype Marginalia Cards, and Mobile Touch Ergonomics.",
-  "published_at": "2026-10-28T00:00:00Z",
+  "published_at": "2026-11-01T00:00:00Z",
   "download_url_apk": "/api/download/android",
   "download_url_ipa": "/api/download/ios",
+  "github_apk_url": "https://github.com/praveene3127/Athena/raw/main/releases/athena-release.apk",
+  "github_ipa_url": "https://github.com/praveene3127/Athena/raw/main/releases/athena-ios-release.ipa",
   "download_url_web": "/"
 }

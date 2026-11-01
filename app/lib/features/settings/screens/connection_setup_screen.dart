@@ -37,8 +37,16 @@ class _ConnectionSetupScreenState extends State<ConnectionSetupScreen> {
     final url = await storage.getBackendUrl();
     final token = await storage.getContextToken();
     if (mounted) {
+      final isMobile = Theme.of(context).platform == TargetPlatform.android ||
+          Theme.of(context).platform == TargetPlatform.iOS;
       setState(() {
-        _urlController.text = url.isNotEmpty ? url : AppConfig.apiBaseUrl;
+        if (url.isNotEmpty) {
+          _urlController.text = url;
+        } else if (isMobile && !AppConfig.isCustomServerConfigured) {
+          _urlController.text = '';
+        } else {
+          _urlController.text = AppConfig.apiBaseUrl;
+        }
         if (token != null) _tokenController.text = token;
       });
     }
@@ -298,7 +306,7 @@ class _ConnectionSetupScreenState extends State<ConnectionSetupScreen> {
                           style: const TextStyle(
                               color: Color(0xFF141714), fontSize: 14),
                           decoration: InputDecoration(
-                            hintText: 'http://localhost:8000',
+                            hintText: 'http://192.168.1.5:8000 (or tunnel URL)',
                             filled: true,
                             fillColor: const Color(0xFFFBFBF9),
                             contentPadding: const EdgeInsets.symmetric(
@@ -334,10 +342,12 @@ class _ConnectionSetupScreenState extends State<ConnectionSetupScreen> {
                           spacing: 8,
                           runSpacing: 6,
                           children: [
-                            _buildPresetChip('Localhost (USB / this PC)',
-                                'http://127.0.0.1:8000'),
                             _buildPresetChip(
-                                'Android emulator', 'http://10.0.2.2:8000'),
+                                'Wi-Fi Prefix', 'http://192.168.1.'),
+                            _buildPresetChip(
+                                'Android Emulator', 'http://10.0.2.2:8000'),
+                            _buildPresetChip(
+                                'USB Tether (:8000)', 'http://127.0.0.1:8000'),
                           ],
                         ),
                         const SizedBox(height: 8),

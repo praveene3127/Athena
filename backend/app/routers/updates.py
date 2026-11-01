@@ -33,12 +33,14 @@ def get_app_update(
         "Improved Per-Page Document Bouncer, 4-Archetype Marginalia Cards, "
         "and Mobile Touch Ergonomics."
     )
-    published_at = "2026-10-28"
+    published_at = "2026-11-01"
 
-    android_gh = f"https://github.com/{github_repo}/releases/latest/download/Athena-Android.apk"
-    ios_gh = f"https://github.com/{github_repo}/releases/latest/download/Athena-iOS.ipa"
+    android_gh = f"https://github.com/{github_repo}/raw/main/releases/athena-release.apk"
+    ios_gh = f"https://github.com/{github_repo}/raw/main/releases/athena-ios-release.ipa"
 
     return {
+        "version": latest_version,
+        "build_number": 2,
         "update_available": update_available,
         "current_version": current_version,
         "latest_version": latest_version,
@@ -48,11 +50,13 @@ def get_app_update(
             "filename": "Athena-Android.apk",
             "download_url": "/api/download/android",
             "github_release_url": android_gh,
+            "github_raw_url": android_gh,
         },
         "ios": {
             "filename": "Athena-iOS.ipa",
             "download_url": "/api/download/ios",
             "github_release_url": ios_gh,
+            "github_raw_url": ios_gh,
             "altstore_url": f"altstore://install?url={ios_gh}",
         },
     }
@@ -87,11 +91,11 @@ def download_android_apk():
         )
 
     github_repo = os.environ.get("GITHUB_REPO", GITHUB_REPO_DEFAULT)
-    gh_url = f"https://github.com/{github_repo}/releases/latest/download/Athena-Android.apk"
+    gh_url = f"https://github.com/{github_repo}/raw/main/releases/athena-release.apk"
     return RedirectResponse(
         url=gh_url,
         status_code=302,
-        headers={"Content-Disposition": 'attachment; filename="Athena-Android.apk"'},
+        headers={"Content-Disposition": 'attachment; filename="athena-release.apk"'},
     )
 
 
@@ -115,7 +119,7 @@ def download_ios_ipa():
         )
 
     github_repo = os.environ.get("GITHUB_REPO", GITHUB_REPO_DEFAULT)
-    gh_url = f"https://github.com/{github_repo}/releases/latest/download/Athena-iOS.ipa"
+    gh_url = f"https://github.com/{github_repo}/raw/main/releases/athena-ios-release.ipa"
     return RedirectResponse(
         url=gh_url,
         status_code=302,

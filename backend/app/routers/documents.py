@@ -1,5 +1,6 @@
 import asyncio
 import errno
+import ipaddress
 import json
 import logging
 from pathlib import Path
@@ -121,6 +122,20 @@ def upload_document_from_url(
         raise AppException("INVALID_URL", "URL must start with http:// or https://", status_code=400)
 
     parsed = urllib.parse.urlparse(url)
+    hostname = (parsed.hostname or "").lower().strip()
+    if not hostname:
+        raise AppException("INVALID_URL", "Invalid host in URL", status_code=400)
+
+    # SSRF guard: reject cloud metadata, loopback, and reserved addresses
+    if hostname in ("localhost", "metadata.google.internal") or hostname.endswith(".internal"):
+        raise AppException("SSRF_BLOCKED", "Requests to local or metadata addresses are forbidden", status_code=403)
+    try:
+        ip = ipaddress.ip_address(hostname)
+        if ip.is_loopback or ip.is_link_local or ip.is_multicast or ip.is_reserved:
+            raise AppException("SSRF_BLOCKED", "Requests to local or metadata addresses are forbidden", status_code=403)
+    except ValueError:
+        pass
+
     url_path = Path(parsed.path)
     ext = url_path.suffix.lower()
     if ext not in (".pdf", ".epub"):

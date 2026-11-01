@@ -22,11 +22,12 @@ _rapid_ocr_engine = None
 
 def get_document_file_path(doc_id: str) -> Path:
     """Finds the stored document file (.pdf or .epub) on disk for a given document ID."""
+    clean_id = Path(doc_id).name
     for ext in (".pdf", ".epub"):
-        p = UPLOADS_DIR / f"{doc_id}{ext}"
+        p = UPLOADS_DIR / f"{clean_id}{ext}"
         if p.exists():
             return p
-    return UPLOADS_DIR / f"{doc_id}.pdf"
+    return UPLOADS_DIR / f"{clean_id}.pdf"
 
 
 

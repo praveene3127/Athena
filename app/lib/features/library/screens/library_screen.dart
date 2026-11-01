@@ -221,12 +221,14 @@ class _LibraryScreenState extends ConsumerState<LibraryScreen>
       final update = await client.checkAppUpdate();
 
       if (update != null && mounted) {
-        final serverBuild = update['build_number'] as int? ?? 1;
-
-        final serverVersion = update['version'] as String? ?? '0.1.0';
-
-        final isNewer = serverBuild > AppConfig.appBuildNumber ||
-            serverVersion != AppConfig.appVersion;
+        final serverBuild = update['build_number'] as int? ?? 2;
+        final serverVersion = update['latest_version']?.toString() ??
+            update['version']?.toString() ??
+            '1.1.0';
+        final isAvailable = update['update_available'] == true;
+        final isNewer = isAvailable ||
+            serverBuild > AppConfig.appBuildNumber ||
+            UpdateService.isVersionNewer(serverVersion, AppConfig.appVersion);
 
         setState(() {
           _updateInfo = update;

@@ -1,5 +1,5 @@
 import 'package:dio/dio.dart';
-import 'package:flutter/foundation.dart' show kIsWeb;
+import 'package:flutter/foundation.dart' show kIsWeb, defaultTargetPlatform;
 import 'package:flutter/material.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:athena/core/config/config.dart';
@@ -91,24 +91,25 @@ class _BYOKSettingsSheetState extends State<BYOKSettingsSheet>
   String? _updateStatusMessage;
 
   UpdateInfo get _fallbackSettingsUpdateInfo => UpdateInfo(
-        updateAvailable: true,
+        updateAvailable: false,
         currentVersion: kAthenaAppVersion,
-        latestVersion: '1.1.0',
-        releaseNotes: 'Mobile touches and platform OTA packages.',
-        publishedAt: '2026-10-28',
+        latestVersion: kAthenaAppVersion,
+        releaseNotes:
+            'Improved Per-Page Document Bouncer, 4-Archetype Marginalia Cards, and Mobile Touch Ergonomics.',
+        publishedAt: '2026-11-01',
         android: const UpdatePlatformArtifact(
-          filename: 'Athena-Android.apk',
+          filename: 'athena-release.apk',
           downloadUrl: '/api/download/android',
           githubReleaseUrl:
-              'https://github.com/praveene3127/Athena/releases/latest/download/Athena-Android.apk',
+              'https://github.com/praveene3127/Athena/raw/main/releases/athena-release.apk',
         ),
         ios: const UpdatePlatformArtifact(
-          filename: 'Athena-iOS.ipa',
+          filename: 'athena-ios-release.ipa',
           downloadUrl: '/api/download/ios',
           githubReleaseUrl:
-              'https://github.com/praveene3127/Athena/releases/latest/download/Athena-iOS.ipa',
+              'https://github.com/praveene3127/Athena/raw/main/releases/athena-ios-release.ipa',
           altstoreUrl:
-              'altstore://install?url=https://github.com/praveene3127/Athena/releases/latest/download/Athena-iOS.ipa',
+              'altstore://install?url=https://github.com/praveene3127/Athena/raw/main/releases/athena-ios-release.ipa',
         ),
       );
 
@@ -170,8 +171,26 @@ class _BYOKSettingsSheetState extends State<BYOKSettingsSheet>
 
     try {
       final prefs = await SharedPreferences.getInstance();
-      _serverUrlController.text = AppConfig.apiBaseUrl;
-      final config = await _api.getAIConfig();
+      final savedUrl = prefs.getString('custom_server_url') ??
+          prefs.getString('athena_backend_url');
+      final isMobile = !kIsWeb &&
+          (defaultTargetPlatform == TargetPlatform.android ||
+              defaultTargetPlatform == TargetPlatform.iOS);
+
+      if (savedUrl != null && savedUrl.isNotEmpty) {
+        _serverUrlController.text = savedUrl;
+      } else if (isMobile) {
+        _serverUrlController.text = '';
+      } else {
+        _serverUrlController.text = AppConfig.apiBaseUrl;
+      }
+
+      AIConfig? config;
+      if (!isMobile || (savedUrl != null && savedUrl.isNotEmpty)) {
+        try {
+          config = await _api.getAIConfig();
+        } catch (_) {}
+      }
       if (!mounted) return;
 
       final savedLocalPrimaryProvider =
@@ -191,45 +210,46 @@ class _BYOKSettingsSheetState extends State<BYOKSettingsSheet>
           prefs.getString('athena_ai_fallback_base_url');
 
       setState(() {
-        _primaryProvider = config.primaryProvider.isNotEmpty
+        _primaryProvider = (config != null && config.primaryProvider.isNotEmpty)
             ? config.primaryProvider
             : (savedLocalPrimaryProvider ?? 'gemini');
 
-        _primaryModelController.text = config.primaryModel.isNotEmpty
+        _primaryModelController.text = (config != null && config.primaryModel.isNotEmpty)
             ? config.primaryModel
             : (savedLocalPrimaryModel ?? '');
 
         _primaryBaseUrlController.text =
-            config.primaryBaseUrl ?? (savedLocalPrimaryBaseUrl ?? '');
+            config?.primaryBaseUrl ?? (savedLocalPrimaryBaseUrl ?? '');
 
         if (savedLocalPrimaryKey != null && savedLocalPrimaryKey.isNotEmpty) {
           _primaryKeyController.text = savedLocalPrimaryKey;
-        } else if (config.primaryApiKeyMasked != null) {
-          _primaryKeyController.text = config.primaryApiKeyMasked!;
+        } else if (config?.primaryApiKeyMasked != null) {
+          _primaryKeyController.text = config!.primaryApiKeyMasked!;
         }
 
-        if (config.fallbackProvider != null ||
+        if ((config != null && config.fallbackProvider != null) ||
             (savedLocalFallbackProvider != null &&
                 savedLocalFallbackProvider.isNotEmpty)) {
           _enableFallback = true;
           _fallbackProvider =
-              config.fallbackProvider ?? (savedLocalFallbackProvider ?? 'groq');
+              config?.fallbackProvider ?? (savedLocalFallbackProvider ?? 'groq');
           _fallbackModelController.text =
-              config.fallbackModel ?? (savedLocalFallbackModel ?? '');
+              config?.fallbackModel ?? (savedLocalFallbackModel ?? '');
           _fallbackBaseUrlController.text =
-              config.fallbackBaseUrl ?? (savedLocalFallbackBaseUrl ?? '');
+              config?.fallbackBaseUrl ?? (savedLocalFallbackBaseUrl ?? '');
           if (savedLocalFallbackKey != null &&
               savedLocalFallbackKey.isNotEmpty) {
             _fallbackKeyController.text = savedLocalFallbackKey;
-          } else if (config.fallbackApiKeyMasked != null) {
-            _fallbackKeyController.text = config.fallbackApiKeyMasked!;
+          } else if (config?.fallbackApiKeyMasked != null) {
+            _fallbackKeyController.text = config!.fallbackApiKeyMasked!;
           }
         }
         _loading = false;
       });
 
       // If backend was empty but local preferences has verified credentials, auto-sync to backend immediately
-      if (!config.isConfigured &&
+      if (config != null &&
+          !config.isConfigured &&
           savedLocalPrimaryKey != null &&
           savedLocalPrimaryKey.isNotEmpty) {
         _persistToLocalStorageAndBackend();
@@ -1077,14 +1097,20 @@ class _BYOKSettingsSheetState extends State<BYOKSettingsSheet>
             spacing: 8,
             runSpacing: 8,
             children: [
-              _buildPresetChip('Localhost (:8000)', 'http://127.0.0.1:8000'),
-              _buildPresetChip('Alt Port (:8080)', 'http://127.0.0.1:8080'),
-              _buildPresetChip('Android Emulator', 'http://10.0.2.2:8000'),
               if (kIsWeb)
                 _buildPresetChip(
                   'Web Origin',
                   Uri.base.origin,
-                ),
+                )
+              else if (defaultTargetPlatform == TargetPlatform.android ||
+                  defaultTargetPlatform == TargetPlatform.iOS) ...[
+                _buildPresetChip('Wi-Fi (:8000)', 'http://192.168.1.'),
+                _buildPresetChip('Android Emulator', 'http://10.0.2.2:8000'),
+                _buildPresetChip('USB Tether (:8000)', 'http://127.0.0.1:8000'),
+              ] else ...[
+                _buildPresetChip('Localhost (:8000)', 'http://127.0.0.1:8000'),
+                _buildPresetChip('Alt Port (:8080)', 'http://127.0.0.1:8080'),
+              ],
             ],
           ),
           const SizedBox(height: 20),
