@@ -250,23 +250,20 @@
       }
     }
 
-    // Service Worker update logic with skipWaiting
+    // Ensure all stale service workers and cached assets are evicted
     if ('serviceWorker' in navigator) {
-      navigator.serviceWorker.addEventListener('controllerchange', function () {
-        // Automatic refresh when a new service worker takes control
-        console.log('[Athena] New service worker active, refreshing application...');
-      });
-
       navigator.serviceWorker.getRegistrations().then(function (registrations) {
         for (var reg of registrations) {
-          reg.update();
-          if (reg.waiting) {
-            reg.waiting.postMessage({ type: 'SKIP_WAITING' });
-          }
+          reg.unregister();
         }
       });
     }
+    if ('caches' in window) {
+      caches.keys().then(function (names) {
+        for (var name of names) caches.delete(name);
+      });
+    }
   </script>
-  <script src="flutter_bootstrap.js" async></script>
+  <script src="flutter_bootstrap.js?v=2" async></script>
 </body>
 </html>

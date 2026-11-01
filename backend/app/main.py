@@ -469,11 +469,19 @@ async def serve_static_or_spa(full_path: str, request: Request):
 
     if _web_static is not None:
         try:
-            return await _web_static.get_response(full_path, request.scope)
+            response = await _web_static.get_response(full_path, request.scope)
+            response.headers["Cache-Control"] = "no-cache, no-store, must-revalidate"
+            response.headers["Pragma"] = "no-cache"
+            response.headers["Expires"] = "0"
+            return response
         except StarletteHTTPException:
             index_html = os.path.join(_WEB_BUILD_DIR, "index.html")
             if os.path.isfile(index_html):
-                return FileResponse(index_html)
+                response = FileResponse(index_html)
+                response.headers["Cache-Control"] = "no-cache, no-store, must-revalidate"
+                response.headers["Pragma"] = "no-cache"
+                response.headers["Expires"] = "0"
+                return response
             return JSONResponse(status_code=404, content={"error": "Not found"})
 
     return JSONResponse(status_code=404, content={"error": "Not found"})
