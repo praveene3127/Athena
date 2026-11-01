@@ -40,6 +40,7 @@ import 'package:athena/features/reader/widgets/original_page_sheet.dart';
 import 'package:athena/features/saved/screens/saved_screen.dart';
 
 import 'package:athena/features/ask/widgets/ask_sheet.dart';
+import 'package:athena/features/settings/widgets/byok_settings_sheet.dart';
 
 import 'package:athena/core/widgets/athena_logo.dart';
 
@@ -599,13 +600,69 @@ class _ReaderScreenState extends ConsumerState<ReaderScreen> {
     }
   }
 
+  static List<String> _splitChunkIntoMicroBeats(String text, {int maxChars = 460}) {
+    if (text.length <= maxChars) return [text];
+
+    final sentences = text.split(RegExp(r'(?<=[.!?])\s+'));
+    if (sentences.length <= 1) {
+      final words = text.split(RegExp(r'\s+'));
+      final parts = <String>[];
+      var current = StringBuffer();
+      for (final w in words) {
+        if (current.isNotEmpty && current.length + w.length + 1 > maxChars) {
+          parts.add(current.toString().trim());
+          current = StringBuffer();
+        }
+        if (current.isNotEmpty) current.write(' ');
+        current.write(w);
+      }
+      if (current.isNotEmpty) parts.add(current.toString().trim());
+      return parts.isNotEmpty ? parts : [text];
+    }
+
+    final beats = <String>[];
+    var currentBeat = StringBuffer();
+    for (final s in sentences) {
+      final trimmed = s.trim();
+      if (trimmed.isEmpty) continue;
+      if (currentBeat.isNotEmpty && currentBeat.length + trimmed.length + 1 > maxChars) {
+        beats.add(currentBeat.toString().trim());
+        currentBeat = StringBuffer();
+      }
+      if (currentBeat.isNotEmpty) currentBeat.write(' ');
+      currentBeat.write(trimmed);
+    }
+    if (currentBeat.isNotEmpty) {
+      if (beats.isNotEmpty && currentBeat.length < 100 && (beats.last.length + currentBeat.length + 1) <= maxChars + 80) {
+        beats[beats.length - 1] = '${beats.last} ${currentBeat.toString().trim()}';
+      } else {
+        beats.add(currentBeat.toString().trim());
+      }
+    }
+    return beats.isNotEmpty ? beats : [text];
+  }
+
   List<ReaderItem> _getFeedItems(List<ReaderItem> rawItems) {
     final chunks = rawItems.where((it) => it.isReadingChunk).toList();
 
     final feedItems = <ReaderItem>[];
 
     for (final chunk in chunks) {
-      feedItems.add(chunk);
+      final raw = chunk.rawText;
+      final beats = _splitChunkIntoMicroBeats(raw, maxChars: 460);
+      if (beats.length <= 1) {
+        feedItems.add(chunk);
+      } else {
+        for (int bIdx = 0; bIdx < beats.length; bIdx++) {
+          feedItems.add(chunk.copyWith(
+            id: '${chunk.id}_beat_$bIdx',
+            text: beats[bIdx],
+            pageReference: chunk.pageReference != null
+                ? '${chunk.pageReference} (${bIdx + 1}/${beats.length})'
+                : null,
+          ));
+        }
+      }
 
       final seq = chunk.sequence ?? 0;
 
@@ -2476,6 +2533,21 @@ class _ReaderScreenState extends ConsumerState<ReaderScreen> {
               }
             }
           }
+          for (final it in data.cards) {
+            if (it.isContextCard) {
+              int? seq = it.sequence;
+
+              if (seq == null && it.insertAfter != null) {
+                final m = RegExp(r'-c(\d+)$').firstMatch(it.insertAfter!);
+
+                if (m != null) seq = int.tryParse(m.group(1)!);
+              }
+
+              if (seq != null && !_cardsByChunkSeq.containsKey(seq)) {
+                _cardsByChunkSeq[seq] = it;
+              }
+            }
+          }
 
           // Feed mode item list (chunks interleaved with ready cards)
 
@@ -2652,8 +2724,7 @@ class _ReaderScreenState extends ConsumerState<ReaderScreen> {
                               child: PageView.builder(
                                 scrollDirection: Axis.vertical,
                                 controller: _pageController,
-                                physics: const BouncingScrollPhysics(
-                                    parent: AlwaysScrollableScrollPhysics()),
+                                physics: const PageScrollPhysics(),
                                 onPageChanged: (index) {
                                   setState(() => _lastVisibleIndex = index);
 
@@ -2822,12 +2893,17 @@ class _ReaderScreenState extends ConsumerState<ReaderScreen> {
                                   if (item.isReadingChunk) {
                                     final seq = item.sequence ?? (index + 1);
 
+                                    final bool hasNextCard =
+                                        (index + 1 < feedItems.length) &&
+                                            feedItems[index + 1].isContextCard;
+                                    final String nextCardTitle = hasNextCard
+                                        ? (feedItems[index + 1].title ?? 'AI Marginalia')
+                                        : '';
+
                                     return SizedBox.expand(
-                                      child: SingleChildScrollView(
-                                        physics: const BouncingScrollPhysics(
-                                          parent:
-                                              AlwaysScrollableScrollPhysics(),
-                                        ),
+                                      child: Center(
+                                        child: SingleChildScrollView(
+                                          physics: const NeverScrollableScrollPhysics(),
                                         child: Column(
                                           mainAxisSize: MainAxisSize.min,
                                           crossAxisAlignment:
@@ -2885,10 +2961,73 @@ class _ReaderScreenState extends ConsumerState<ReaderScreen> {
                                               curve: Curves.easeOutCubic,
                                               child: _buildVibeCheckSlot(seq),
                                             ),
+                                            if (hasNextCard)
+                                              Padding(
+                                                padding: const EdgeInsets.only(top: 10.0, bottom: 4.0),
+                                                child: Center(
+                                                  child: InkWell(
+                                                    onTap: () => _nextCard(feedItems.length),
+                                                    borderRadius: BorderRadius.circular(20),
+                                                    child: Container(
+                                                      padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 7),
+                                                      decoration: BoxDecoration(
+                                                        color: theme.isDark ? const Color(0xFF1E2620) : const Color(0xFFE8F5E9),
+                                                        borderRadius: BorderRadius.circular(20),
+                                                        border: Border.all(
+                                                          color: theme.isDark
+                                                              ? const Color(0xFF2DD4BF).withValues(alpha: 0.45)
+                                                              : const Color(0xFF2D6A4F).withValues(alpha: 0.35),
+                                                          width: 1.0,
+                                                        ),
+                                                        boxShadow: [
+                                                          BoxShadow(
+                                                            color: (theme.isDark
+                                                                    ? const Color(0xFF2DD4BF)
+                                                                    : const Color(0xFF2D6A4F))
+                                                                .withValues(alpha: 0.12),
+                                                            blurRadius: 8,
+                                                            offset: const Offset(0, 2),
+                                                          ),
+                                                        ],
+                                                      ),
+                                                      child: Row(
+                                                        mainAxisSize: MainAxisSize.min,
+                                                        children: [
+                                                          Icon(
+                                                            Icons.arrow_upward_rounded,
+                                                            size: 14,
+                                                            color: theme.isDark
+                                                                ? const Color(0xFF2DD4BF)
+                                                                : const Color(0xFF2D6A4F),
+                                                          ),
+                                                          const SizedBox(width: 6),
+                                                          ConstrainedBox(
+                                                            constraints: const BoxConstraints(maxWidth: 240),
+                                                            child: Text(
+                                                              '↑ Swipe up for AI Marginalia: $nextCardTitle',
+                                                              maxLines: 1,
+                                                              overflow: TextOverflow.ellipsis,
+                                                              style: TextStyle(
+                                                                fontFamily: AppTheme.fontUI,
+                                                                fontSize: 12,
+                                                                fontWeight: FontWeight.w700,
+                                                                color: theme.isDark
+                                                                    ? const Color(0xFF2DD4BF)
+                                                                    : const Color(0xFF2D6A4F),
+                                                              ),
+                                                            ),
+                                                          ),
+                                                        ],
+                                                      ),
+                                                    ),
+                                                  ),
+                                                ),
+                                              ),
                                           ],
                                         ),
                                       ),
-                                    );
+                                    ),
+                                  );
                                   } else if (item.isContextCard) {
                                     return RepaintBoundary(
                                       child: ContextCardWidget(
@@ -3091,6 +3230,18 @@ class _ReaderScreenState extends ConsumerState<ReaderScreen> {
                     onPressed: () =>
                         ref.invalidate(readerDataProvider(widget.documentId)),
                     child: const Text('Retry'),
+                  ),
+                  const SizedBox(height: 8),
+                  OutlinedButton.icon(
+                    icon: const Icon(Icons.settings_ethernet_rounded, size: 16),
+                    label: const Text('Configure Server URL'),
+                    onPressed: () => BYOKSettingsSheet.show(
+                      context,
+                      apiClient: apiClient,
+                      initialExpandServer: true,
+                      onConfigSaved: () =>
+                          ref.invalidate(readerDataProvider(widget.documentId)),
+                    ),
                   ),
                   const SizedBox(height: 10),
                   TextButton(

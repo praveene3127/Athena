@@ -224,6 +224,7 @@ class ReaderData {
   final int? currentChunkIndex;
   final String? readingMode;
   final List<ReaderItem> items;
+  final List<ReaderItem> cards;
 
   const ReaderData({
     required this.docId,
@@ -238,6 +239,7 @@ class ReaderData {
     this.currentChunkIndex,
     this.readingMode,
     required this.items,
+    this.cards = const [],
   });
 
   factory ReaderData.fromJson(Map<String, dynamic> json) {
@@ -248,6 +250,7 @@ class ReaderData {
         ? (doc['integrity'] as Map).map((k, v) => MapEntry(k.toString(), v))
         : <String, dynamic>{};
     final rawItems = json['items'] as List? ?? [];
+    final rawCards = json['cards'] as List? ?? [];
 
     return ReaderData(
       docId: doc['id']?.toString() ?? '',
@@ -262,6 +265,11 @@ class ReaderData {
       currentChunkIndex: (doc['current_chunk_index'] as num?)?.toInt(),
       readingMode: doc['reading_mode']?.toString(),
       items: rawItems
+          .whereType<Map>()
+          .map((e) =>
+              ReaderItem.fromJson(e.map((k, v) => MapEntry(k.toString(), v))))
+          .toList(),
+      cards: rawCards
           .whereType<Map>()
           .map((e) =>
               ReaderItem.fromJson(e.map((k, v) => MapEntry(k.toString(), v))))

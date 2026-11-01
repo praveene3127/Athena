@@ -895,7 +895,7 @@ class _LibraryScreenState extends ConsumerState<LibraryScreen>
       final file = result.files.first;
 
       List<int>? fileBytes = file.bytes;
-      final filePath = file.path;
+      final filePath = kIsWeb ? null : file.path;
 
       if (fileBytes == null && filePath != null && filePath.isNotEmpty && !kIsWeb) {
         try {
@@ -1771,12 +1771,123 @@ class _LibraryScreenState extends ConsumerState<LibraryScreen>
                         ),
                       ),
                     ),
-                    error: (err, _) => _buildMinimalistDropZone(),
+                    error: (err, _) => _buildErrorOrDropZone(err),
                   ),
                 ],
               ),
             ),
           ),
+        ),
+      ),
+    );
+  }
+
+  Widget _buildErrorOrDropZone(Object err) {
+    final isDark = Theme.of(context).brightness == Brightness.dark;
+    final message = err is AppError ? err.message : err.toString();
+    final isNetwork = (err is AppError && err.code == 'NETWORK_ERROR') ||
+        message.toLowerCase().contains('socket') ||
+        message.toLowerCase().contains('connection') ||
+        message.toLowerCase().contains('reach') ||
+        message.toLowerCase().contains('refused') ||
+        message.toLowerCase().contains('failed host lookup');
+
+    if (!isNetwork) {
+      return _buildMinimalistDropZone();
+    }
+
+    final currentUrl = AppConfig.apiBaseUrl;
+
+    return Container(
+      width: double.infinity,
+      padding: const EdgeInsets.all(4),
+      decoration: BoxDecoration(
+        color: isDark ? const Color(0xFF1E1B18) : const Color(0xFFFFF9F2),
+        borderRadius: BorderRadius.circular(24),
+        border: Border.all(
+          color: isDark ? const Color(0xFF4A3420) : const Color(0xFFFFD8A8),
+          width: 1.0,
+        ),
+      ),
+      child: Container(
+        padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 36),
+        decoration: BoxDecoration(
+          color: isDark ? const Color(0xFF24201A) : Colors.white,
+          borderRadius: BorderRadius.circular(20),
+        ),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Container(
+              padding: const EdgeInsets.all(14),
+              decoration: BoxDecoration(
+                color: (isDark ? const Color(0xFFF59E0B) : const Color(0xFFD97706)).withValues(alpha: 0.15),
+                shape: BoxShape.circle,
+              ),
+              child: Icon(
+                Icons.wifi_off_rounded,
+                color: isDark ? const Color(0xFFF59E0B) : const Color(0xFFD97706),
+                size: 32,
+              ),
+            ),
+            const SizedBox(height: 16),
+            Text(
+              'Cannot Reach Athena Backend',
+              style: TextStyle(
+                fontFamily: AppTheme.fontDisplay,
+                fontSize: 20,
+                color: isDark ? const Color(0xFFF3F3F3) : AppTheme.ink,
+                fontWeight: FontWeight.w600,
+              ),
+            ),
+            const SizedBox(height: 8),
+            Text(
+              'Currently attempting to connect to:\n$currentUrl\n\nIf using a phone, make sure your phone and laptop are on the same Wi-Fi, or enter your Cloudflare Tunnel URL.',
+              textAlign: TextAlign.center,
+              style: TextStyle(
+                fontFamily: AppTheme.fontReading,
+                fontSize: 13,
+                color: isDark ? const Color(0xFFB0B0B0) : AppTheme.textMuted,
+                height: 1.45,
+              ),
+            ),
+            const SizedBox(height: 22),
+            Wrap(
+              spacing: 10,
+              runSpacing: 10,
+              alignment: WrapAlignment.center,
+              children: [
+                ElevatedButton.icon(
+                  icon: const Icon(Icons.settings_ethernet_rounded, size: 16),
+                  label: const Text('Configure Server URL'),
+                  style: ElevatedButton.styleFrom(
+                    backgroundColor: isDark ? const Color(0xFF2DD4BF) : const Color(0xFF2D6A4F),
+                    foregroundColor: isDark ? Colors.black : Colors.white,
+                    padding: const EdgeInsets.symmetric(horizontal: 18, vertical: 12),
+                    shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
+                  ),
+                  onPressed: () => BYOKSettingsSheet.show(
+                    context,
+                    apiClient: ref.read(apiClientProvider),
+                    initialExpandServer: true,
+                    onConfigSaved: () {
+                      ref.invalidate(documentsProvider);
+                      _checkAIConfiguration();
+                    },
+                  ),
+                ),
+                OutlinedButton.icon(
+                  icon: const Icon(Icons.refresh_rounded, size: 16),
+                  label: const Text('Retry'),
+                  style: OutlinedButton.styleFrom(
+                    padding: const EdgeInsets.symmetric(horizontal: 18, vertical: 12),
+                    shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
+                  ),
+                  onPressed: () => ref.invalidate(documentsProvider),
+                ),
+              ],
+            ),
+          ],
         ),
       ),
     );

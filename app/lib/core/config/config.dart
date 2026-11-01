@@ -24,7 +24,8 @@ class AppConfig {
     try {
       final prefs = await SharedPreferences.getInstance();
       final saved = prefs.getString('custom_server_url') ??
-          prefs.getString('athena_backend_url');
+          prefs.getString('athena_backend_url') ??
+          prefs.getString('athena_server_url');
       if (saved != null && saved.trim().isNotEmpty) {
         _runtimeBaseUrl = saved.trim().replaceAll(RegExp(r'/+$'), '');
       }
@@ -40,9 +41,11 @@ class AppConfig {
       if (sanitized.isEmpty) {
         await prefs.remove('custom_server_url');
         await prefs.remove('athena_backend_url');
+        await prefs.remove('athena_server_url');
       } else {
         await prefs.setString('custom_server_url', sanitized);
         await prefs.setString('athena_backend_url', sanitized);
+        await prefs.setString('athena_server_url', sanitized);
       }
     } catch (_) {}
   }

@@ -935,9 +935,11 @@ class _ContextCardWidgetState extends State<ContextCardWidget> {
 
     if (widget.isFeedMode) {
       return SizedBox.expand(
-        child: SingleChildScrollView(
-          physics: const BouncingScrollPhysics(),
-          child: cardContainer,
+        child: Center(
+          child: SingleChildScrollView(
+            physics: const NeverScrollableScrollPhysics(),
+            child: cardContainer,
+          ),
         ),
       );
     }

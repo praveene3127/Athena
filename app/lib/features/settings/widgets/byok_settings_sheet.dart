@@ -15,17 +15,20 @@ import 'package:athena/core/widgets/athena_avatar.dart';
 class BYOKSettingsSheet extends StatefulWidget {
   final ApiClient? apiClient;
   final VoidCallback? onConfigSaved;
+  final bool initialExpandServer;
 
   const BYOKSettingsSheet({
     super.key,
     this.apiClient,
     this.onConfigSaved,
+    this.initialExpandServer = false,
   });
 
   static Future<void> show(
     BuildContext context, {
     ApiClient? apiClient,
     VoidCallback? onConfigSaved,
+    bool initialExpandServer = false,
   }) {
     return showModalBottomSheet(
       context: context,
@@ -35,6 +38,7 @@ class BYOKSettingsSheet extends StatefulWidget {
       builder: (ctx) => BYOKSettingsSheet(
         apiClient: apiClient,
         onConfigSaved: onConfigSaved,
+        initialExpandServer: initialExpandServer,
       ),
     );
   }
@@ -1169,6 +1173,7 @@ class _BYOKSettingsSheetState extends State<BYOKSettingsSheet> {
       child: Theme(
         data: Theme.of(context).copyWith(dividerColor: Colors.transparent),
         child: ExpansionTile(
+          initiallyExpanded: widget.initialExpandServer,
           tilePadding: const EdgeInsets.symmetric(horizontal: 14, vertical: 0),
           leading: Icon(
             Icons.dns_rounded,

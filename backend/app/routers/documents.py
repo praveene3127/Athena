@@ -462,12 +462,13 @@ def delete_document(id: str, session: Session = Depends(get_session)) -> Dict[st
 @router.get("/{id}/reader")
 def get_reader(
     id: str,
+    request: Request = None,
     session: Session = Depends(get_session),
 ) -> Dict[str, Any]:
     """
     Returns the full reader payload (§10 in CLAUDE.md):
     document metadata with integrity proof + ordered items
-    (reading chunks interleaved with context cards, once Phase 5 is wired).
+    (reading chunks interleaved with context cards, with top-level cards array).
     """
     doc = session.get(Document, id)
     if not doc:
@@ -496,9 +497,52 @@ def get_reader(
         .where(ContextCard.document_id == id, ContextCard.dismissed == False)
     ).all()
 
-    cards_by_chunk: Dict[str, List[ContextCard]] = {}
+    all_cards: List[Dict[str, Any]] = []
+    cards_by_chunk: Dict[str, List[Dict[str, Any]]] = {}
     for card in cards:
-        cards_by_chunk.setdefault(card.source_chunk_id, []).append(card)
+        citations = []
+        if card.citations_json:
+            try:
+                citations = json.loads(card.citations_json)
+            except Exception:
+                citations = []
+        seq_num = None
+        if card.source_chunk_id:
+            m = re.search(r"-c(\d+)$", card.source_chunk_id)
+            if m:
+                seq_num = int(m.group(1))
+
+        serialized_card = {
+            "type": "context_card",
+            "id": card.id,
+            "document_id": card.document_id,
+            "source_chunk_id": card.source_chunk_id,
+            "insert_after": card.source_chunk_id,
+            "seq_num": seq_num,
+            "sequence": seq_num,
+            "card_type": card.card_type,
+            "title": card.title,
+            "body": card.body,
+            "why_here": card.why_here,
+            "exact_quote": card.exact_quote,
+            "support_status": getattr(card, "support_status", "fully_supported"),
+            "generation_mode": card.generation_mode,
+            "saved": card.saved,
+            "citations": citations,
+        }
+        all_cards.append(serialized_card)
+        cards_by_chunk.setdefault(card.source_chunk_id, []).append(serialized_card)
+
+    # Trigger read-ahead for early chunks if fewer than 3 cards exist
+    if request:
+        try:
+            pipeline = getattr(request.app.state, "pipeline", None)
+            if pipeline:
+                early_card_count = sum(len(cards_by_chunk.get(c.id, [])) for c in chunks[:5])
+                if early_card_count < 3:
+                    asyncio.create_task(pipeline.update_viewport(id, 1))
+        except Exception as e:
+            logger.warning("Error triggering initial pipeline viewport: %s", e)
 
     # Build items list: reading chunks interleaved with context cards (§10 in CLAUDE.md)
     items: List[Dict[str, Any]] = []
@@ -511,6 +555,7 @@ def get_reader(
         else:
             page_ref = "Page 1"
 
+        chunk_cards = cards_by_chunk.get(chunk.id, [])
         items.append({
             "type": "reading_chunk",
             "id": chunk.id,
@@ -519,29 +564,9 @@ def get_reader(
             "page_reference": page_ref,
             "section_title": chunk.section_title,
             "boundary_method": getattr(chunk, "boundary_method", "paragraph"),
+            "cards": chunk_cards,
         })
-
-        for card in cards_by_chunk.get(chunk.id, []):
-            citations = []
-            if card.citations_json:
-                try:
-                    citations = json.loads(card.citations_json)
-                except Exception:
-                    pass
-            items.append({
-                "type": "context_card",
-                "id": card.id,
-                "insert_after": card.source_chunk_id,
-                "card_type": card.card_type,
-                "title": card.title,
-                "body": card.body,
-                "why_here": card.why_here,
-                "exact_quote": card.exact_quote,
-                "support_status": getattr(card, "support_status", "fully_supported"),
-                "generation_mode": card.generation_mode,
-                "saved": card.saved,
-                "citations": citations,
-            })
+        items.extend(chunk_cards)
 
     reading_state = session.get(ReadingState, id)
     saved_chunk_index = reading_state.current_chunk_index if reading_state else None
@@ -559,6 +584,7 @@ def get_reader(
             "reading_mode": saved_reading_mode,
         },
         "items": items,
+        "cards": all_cards,
     }
 
 
@@ -668,18 +694,19 @@ async def sync_reading_progress(
     1. Saves exact reading position to SQLite WAL (syncs Web <-> Android).
     2. Triggers the Read-Ahead Priority Pipeline for [chunk_index, chunk_index + 16].
     """
+    effective_chunk_index = max(1, payload.chunk_index)
     try:
         state = session.get(ReadingState, id)
         if not state:
             state = ReadingState(
                 doc_id=id,
-                current_chunk_index=payload.chunk_index,
+                current_chunk_index=effective_chunk_index,
                 reading_mode=payload.reading_mode,
                 updated_at=utc_now(),
             )
             session.add(state)
         else:
-            state.current_chunk_index = payload.chunk_index
+            state.current_chunk_index = effective_chunk_index
             state.reading_mode = payload.reading_mode
             state.updated_at = utc_now()
             session.add(state)
@@ -690,7 +717,7 @@ async def sync_reading_progress(
     try:
         pipeline = getattr(request.app.state, "pipeline", None)
         if pipeline:
-            asyncio.create_task(pipeline.update_viewport(id, payload.chunk_index))
+            asyncio.create_task(pipeline.update_viewport(id, effective_chunk_index))
     except Exception as err:
         logger.warning("Error updating pipeline viewport: %s", err)
 
@@ -958,16 +985,17 @@ async def get_chunk_vibe_check(
     if not doc:
         raise AppException("NOT_FOUND", status_code=404, message="Document not found")
 
+    target_seq = max(1, payload.chunk_index)
     target_chunk = session.exec(
         select(ReadingChunk).where(
             ReadingChunk.document_id == id,
-            ReadingChunk.sequence == payload.chunk_index,
+            ReadingChunk.sequence == target_seq,
         )
     ).first()
 
     if not target_chunk:
         # Fallback to closest available chunk for edge case indices (e.g. 0 or 99999)
-        if payload.chunk_index <= 1:
+        if target_seq <= 1:
             target_chunk = session.exec(
                 select(ReadingChunk)
                 .where(ReadingChunk.document_id == id)
