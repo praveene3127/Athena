@@ -379,12 +379,10 @@ def reset_and_requeue_document(doc_id: str) -> None:
             raise AppException("CONFLICT", "Document is currently processing", status_code=409)
 
         # Clean existing derived items
-        for chunk in session.exec(select(ReadingChunk).where(ReadingChunk.document_id == doc_id)).all():
-            session.delete(chunk)
-        for concept in session.exec(select(Concept).where(Concept.document_id == doc_id)).all():
-            session.delete(concept)
-        for card in session.exec(select(ContextCard).where(ContextCard.document_id == doc_id)).all():
-            session.delete(card)
+        session.exec(delete(ReadingChunk).where(ReadingChunk.document_id == doc_id))
+        session.exec(delete(Concept).where(Concept.document_id == doc_id))
+        session.exec(delete(ContextCard).where(ContextCard.document_id == doc_id))
+        session.exec(delete(DocumentChapter).where(DocumentChapter.doc_id == doc_id))
 
         # Reset document status
         doc.status = "queued"
@@ -414,12 +412,10 @@ def force_requeue_document(doc_id: str) -> None:
             raise AppException("NOT_FOUND", status_code=404)
 
         # Clean existing derived items
-        for chunk in session.exec(select(ReadingChunk).where(ReadingChunk.document_id == doc_id)).all():
-            session.delete(chunk)
-        for concept in session.exec(select(Concept).where(Concept.document_id == doc_id)).all():
-            session.delete(concept)
-        for card in session.exec(select(ContextCard).where(ContextCard.document_id == doc_id)).all():
-            session.delete(card)
+        session.exec(delete(ReadingChunk).where(ReadingChunk.document_id == doc_id))
+        session.exec(delete(Concept).where(Concept.document_id == doc_id))
+        session.exec(delete(ContextCard).where(ContextCard.document_id == doc_id))
+        session.exec(delete(DocumentChapter).where(DocumentChapter.doc_id == doc_id))
 
         # Reset document status with FORCE_ACCEPTED marker
         doc.status = "queued"

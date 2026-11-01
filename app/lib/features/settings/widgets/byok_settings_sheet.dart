@@ -132,9 +132,7 @@ class _BYOKSettingsSheetState extends State<BYOKSettingsSheet> {
             ? config.primaryModel
             : (savedLocalPrimaryModel ?? '');
         _primaryModelController.text = loadedModel;
-        if (loadedModel.isNotEmpty) {
-          _primaryDiscoveredModels = [loadedModel];
-        }
+        _primaryDiscoveredModels = [];
 
         _primaryBaseUrlController.text =
             config.primaryBaseUrl ?? (savedLocalPrimaryBaseUrl ?? '');
@@ -154,9 +152,7 @@ class _BYOKSettingsSheetState extends State<BYOKSettingsSheet> {
           final loadedFallback =
               config.fallbackModel ?? (savedLocalFallbackModel ?? '');
           _fallbackModelController.text = loadedFallback;
-          if (loadedFallback.isNotEmpty) {
-            _fallbackDiscoveredModels = [loadedFallback];
-          }
+          _fallbackDiscoveredModels = [];
           _fallbackBaseUrlController.text =
               config.fallbackBaseUrl ?? (savedLocalFallbackBaseUrl ?? '');
           if (savedLocalFallbackKey != null &&
@@ -334,7 +330,7 @@ class _BYOKSettingsSheetState extends State<BYOKSettingsSheet> {
       primaryProvider: _primaryProvider,
       primaryModel: _primaryModelController.text.trim().isNotEmpty
           ? _primaryModelController.text.trim()
-          : 'gemini-2.5-flash',
+          : null,
       primaryApiKey: keyToSend,
       primaryBaseUrl: _primaryBaseUrlController.text.trim().isNotEmpty
           ? _primaryBaseUrlController.text.trim()
@@ -652,7 +648,7 @@ class _BYOKSettingsSheetState extends State<BYOKSettingsSheet> {
       children: [
         _buildSectionLabel('AI MODEL'),
         const SizedBox(height: 6),
-        if (discoveredModels.isEmpty && currentVal.isEmpty) ...[
+        if (discoveredModels.isEmpty) ...[
           Container(
             width: double.infinity,
             padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
@@ -686,10 +682,7 @@ class _BYOKSettingsSheetState extends State<BYOKSettingsSheet> {
           ),
         ] else ...[
           Builder(builder: (context) {
-            final options = {
-              ...discoveredModels,
-              if (currentVal.isNotEmpty) currentVal,
-            }.toList();
+            final options = discoveredModels.toSet().toList();
             final effectiveValue =
                 options.contains(currentVal) ? currentVal : options.first;
 

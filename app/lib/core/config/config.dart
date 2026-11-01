@@ -5,8 +5,11 @@ class AppConfig {
   static String? _runtimeBaseUrl;
 
   static const String _configured = String.fromEnvironment(
-    'API_BASE_URL',
-    defaultValue: '',
+    'ATHENA_DEFAULT_SERVER_URL',
+    defaultValue: String.fromEnvironment(
+      'API_BASE_URL',
+      defaultValue: '',
+    ),
   );
 
   static const String nativeFallback = 'http://127.0.0.1:8000';

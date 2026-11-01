@@ -1,7 +1,8 @@
 import os
 import re
 from pathlib import Path
-from fastapi import APIRouter, Query
+import urllib.parse
+from fastapi import APIRouter, Query, Request, Response
 from fastapi.responses import FileResponse, RedirectResponse
 
 router = APIRouter(tags=["updates"])
@@ -18,6 +19,7 @@ def parse_semver(v: str) -> tuple:
 
 @router.get("/api/app-update")
 def get_app_update(
+    request: Request,
     current_version: str = Query("1.1.0", description="Current client app version"),
     platform: str = Query("unknown", description="Client device platform (android, ios, desktop)"),
 ):
@@ -35,8 +37,10 @@ def get_app_update(
     )
     published_at = "2026-11-01"
 
-    android_gh = f"https://github.com/{github_repo}/raw/main/releases/athena-release.apk"
-    ios_gh = f"https://github.com/{github_repo}/raw/main/releases/athena-ios-release.ipa"
+    android_gh = f"https://github.com/{github_repo}/releases/latest/download/Athena-Android.apk"
+    ios_gh = f"https://github.com/{github_repo}/releases/latest/download/Athena-iOS.ipa"
+    android_raw = f"https://github.com/{github_repo}/raw/main/releases/athena-release.apk"
+    ios_raw = f"https://github.com/{github_repo}/raw/main/releases/athena-ios-release.ipa"
 
     return {
         "version": latest_version,
@@ -91,11 +95,11 @@ def download_android_apk():
         )
 
     github_repo = os.environ.get("GITHUB_REPO", GITHUB_REPO_DEFAULT)
-    gh_url = f"https://github.com/{github_repo}/raw/main/releases/athena-release.apk"
+    gh_url = f"https://github.com/{github_repo}/releases/latest/download/Athena-Android.apk"
     return RedirectResponse(
         url=gh_url,
         status_code=302,
-        headers={"Content-Disposition": 'attachment; filename="athena-release.apk"'},
+        headers={"Content-Disposition": 'attachment; filename="Athena-Android.apk"'},
     )
 
 
@@ -119,9 +123,52 @@ def download_ios_ipa():
         )
 
     github_repo = os.environ.get("GITHUB_REPO", GITHUB_REPO_DEFAULT)
-    gh_url = f"https://github.com/{github_repo}/raw/main/releases/athena-ios-release.ipa"
+    gh_url = f"https://github.com/{github_repo}/releases/latest/download/Athena-iOS.ipa"
     return RedirectResponse(
         url=gh_url,
         status_code=302,
         headers={"Content-Disposition": 'attachment; filename="Athena-iOS.ipa"'},
+    )
+
+
+@router.get("/api/updates/ios-manifest.plist")
+def get_ios_ota_manifest():
+    """Generates Apple OTA itms-services manifest.plist pointing to latest unsigned IPA."""
+    github_repo = os.environ.get("GITHUB_REPO", GITHUB_REPO_DEFAULT)
+    ipa_url = f"https://github.com/{github_repo}/releases/latest/download/Athena-iOS.ipa"
+    xml = f"""<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>items</key>
+    <array>
+        <dict>
+            <key>assets</key>
+            <array>
+                <dict>
+                    <key>kind</key>
+                    <string>software-package</string>
+                    <key>url</key>
+                    <string>{ipa_url}</string>
+                </dict>
+            </array>
+            <key>metadata</key>
+            <dict>
+                <key>bundle-identifier</key>
+                <string>com.athena.reader</string>
+                <key>bundle-version</key>
+                <string>1.1.0</string>
+                <key>kind</key>
+                <string>software</string>
+                <key>title</key>
+                <string>Athena</string>
+            </dict>
+        </dict>
+    </array>
+</dict>
+</plist>"""
+    return Response(
+        content=xml,
+        media_type="application/xml",
+        headers={"Cache-Control": "no-cache, no-store, must-revalidate"},
     )

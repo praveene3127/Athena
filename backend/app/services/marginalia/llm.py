@@ -191,11 +191,18 @@ class LLMService:
         self._active_client_index = 0
         self._gemini_clients = []
         self._openai_clients = []
+        self._endpoints: list[dict[str, Any]] = []
 
         if client is not None:
             self._clients = [client]
             self._openai_clients = [client]
             self.model = model or LLM_MODEL or "gpt-4o-mini"
+            self._endpoints = [{
+                "type": "openai",
+                "provider": "custom",
+                "client": client,
+                "model": self.model,
+            }]
             return
 
         if api_key:
@@ -208,8 +215,15 @@ class LLMService:
             }
             if provider_base_url:
                 kwargs["base_url"] = provider_base_url
-            self._openai_clients = [openai.OpenAI(**kwargs)]
+            c = openai.OpenAI(**kwargs)
+            self._openai_clients = [c]
             self._clients = self._openai_clients
+            self._endpoints = [{
+                "type": "openai",
+                "provider": "custom",
+                "client": c,
+                "model": self.model,
+            }]
             return
 
         active_settings = settings
@@ -226,40 +240,70 @@ class LLMService:
         if active_settings and (active_settings.primary_api_key or active_settings.primary_provider == "custom"):
             p_prov = (active_settings.primary_provider or "openrouter").lower()
             p_key = active_settings.primary_api_key or ""
-            p_model = active_settings.primary_model
+            p_model = model or active_settings.primary_model or (
+                "gemini-2.5-flash" if p_prov == "gemini" else "gpt-4o-mini"
+            )
             p_url = active_settings.primary_base_url
 
-            self.model = model or p_model or "gpt-4o-mini"
+            self.model = p_model
 
             if p_prov == "gemini":
-                self._gemini_clients.append(
-                    genai.Client(
-                        api_key=p_key,
-                        http_options=genai_types.HttpOptions(
-                            timeout=LLM_TIMEOUT_S * 1000,
-                            retry_options=genai_types.HttpRetryOptions(attempts=1),
-                        ),
-                    )
+                p_client = genai.Client(
+                    api_key=p_key,
+                    http_options=genai_types.HttpOptions(
+                        timeout=LLM_TIMEOUT_S * 1000,
+                        retry_options=genai_types.HttpRetryOptions(attempts=1),
+                    ),
                 )
+                self._gemini_clients.append(p_client)
+                self._endpoints.append({
+                    "type": "gemini",
+                    "provider": p_prov,
+                    "client": p_client,
+                    "model": p_model,
+                })
             else:
-                self._openai_clients.append(create_provider_client(p_prov, p_key, p_url))
+                p_client = create_provider_client(p_prov, p_key, p_url)
+                self._openai_clients.append(p_client)
+                self._endpoints.append({
+                    "type": "openai",
+                    "provider": p_prov,
+                    "client": p_client,
+                    "model": p_model,
+                })
 
             if active_settings.fallback_provider and (active_settings.fallback_api_key or active_settings.fallback_provider == "custom"):
                 f_prov = active_settings.fallback_provider.lower()
                 f_key = active_settings.fallback_api_key or ""
                 f_url = active_settings.fallback_base_url
+                f_model = active_settings.fallback_model or (
+                    "gemini-2.5-flash" if f_prov == "gemini" else "gpt-4o-mini"
+                )
+
                 if f_prov == "gemini":
-                    self._gemini_clients.append(
-                        genai.Client(
-                            api_key=f_key,
-                            http_options=genai_types.HttpOptions(
-                                timeout=LLM_TIMEOUT_S * 1000,
-                                retry_options=genai_types.HttpRetryOptions(attempts=1),
-                            ),
-                        )
+                    f_client = genai.Client(
+                        api_key=f_key,
+                        http_options=genai_types.HttpOptions(
+                            timeout=LLM_TIMEOUT_S * 1000,
+                            retry_options=genai_types.HttpRetryOptions(attempts=1),
+                        ),
                     )
+                    self._gemini_clients.append(f_client)
+                    self._endpoints.append({
+                        "type": "gemini",
+                        "provider": f_prov,
+                        "client": f_client,
+                        "model": f_model,
+                    })
                 else:
-                    self._openai_clients.append(create_provider_client(f_prov, f_key, f_url))
+                    f_client = create_provider_client(f_prov, f_key, f_url)
+                    self._openai_clients.append(f_client)
+                    self._endpoints.append({
+                        "type": "openai",
+                        "provider": f_prov,
+                        "client": f_client,
+                        "model": f_model,
+                    })
 
             self._clients = self._gemini_clients or self._openai_clients
             return
@@ -271,16 +315,21 @@ class LLMService:
         ]
         self.model = model or (GEMINI_MODEL if gemini_keys and not api_key else None) or LLM_MODEL or "gpt-4o-mini"
         if gemini_keys and not api_key:
-            self._gemini_clients = [
-                genai.Client(
+            for key in gemini_keys:
+                c = genai.Client(
                     api_key=key,
                     http_options=genai_types.HttpOptions(
                         timeout=LLM_TIMEOUT_S * 1000,
                         retry_options=genai_types.HttpRetryOptions(attempts=1),
                     ),
                 )
-                for key in gemini_keys
-            ]
+                self._gemini_clients.append(c)
+                self._endpoints.append({
+                    "type": "gemini",
+                    "provider": "gemini",
+                    "client": c,
+                    "model": self.model,
+                })
         elif LLM_API_KEY and LLM_API_KEY.strip():
             kwargs = {
                 "api_key": LLM_API_KEY.strip(),
@@ -289,18 +338,75 @@ class LLMService:
             }
             if base_url or LLM_BASE_URL:
                 kwargs["base_url"] = base_url or LLM_BASE_URL
-            self._openai_clients = [openai.OpenAI(**kwargs)]
+            c = openai.OpenAI(**kwargs)
+            self._openai_clients = [c]
+            self._endpoints.append({
+                "type": "openai",
+                "provider": "openai",
+                "client": c,
+                "model": self.model,
+            })
 
         self._clients = self._gemini_clients or self._openai_clients
 
 
     @property
     def is_configured(self) -> bool:
-        return bool(self._gemini_clients or self._openai_clients)
+        return bool(self._endpoints or self._gemini_clients or self._openai_clients)
 
     @property
     def is_gemini_configured(self) -> bool:
-        return bool(self._gemini_clients)
+        return any(ep.get("type") == "gemini" for ep in self._get_effective_endpoints())
+
+    def _get_effective_endpoints(self) -> list[dict[str, Any]]:
+        """Returns the active provider endpoints in priority order (Primary -> Fallback)."""
+        if self._endpoints:
+            eps = []
+            for ep in self._endpoints:
+                if ep["type"] == "gemini" and ep["client"] in self._gemini_clients:
+                    eps.append(ep)
+                elif ep["type"] == "openai" and ep["client"] in self._openai_clients:
+                    eps.append(ep)
+            if eps:
+                return eps
+
+        eps = []
+        for c in self._gemini_clients:
+            eps.append({
+                "type": "gemini",
+                "provider": "gemini",
+                "client": c,
+                "model": self.model or "gemini-2.5-flash",
+            })
+        for c in self._openai_clients:
+            eps.append({
+                "type": "openai",
+                "provider": "openai",
+                "client": c,
+                "model": self.model or "gpt-4o-mini",
+            })
+        return eps
+
+    @staticmethod
+    def _should_fail_over_generic(error: Exception) -> bool:
+        """Determines if an error from Gemini, OpenAI, or network is retryable on failover."""
+        if isinstance(error, genai_errors.APIError):
+            return error.code in {401, 403, 404, 408, 429, 500, 502, 503, 504}
+        if isinstance(error, (
+            openai.RateLimitError,
+            openai.AuthenticationError,
+            openai.PermissionDeniedError,
+            openai.APIConnectionError,
+            openai.APITimeoutError,
+            openai.InternalServerError,
+            openai.NotFoundError,
+        )):
+            return True
+        if isinstance(error, openai.APIStatusError):
+            return error.status_code in {401, 403, 404, 408, 429, 500, 502, 503, 504}
+        if isinstance(error, (httpx.TimeoutException, httpx.TransportError, TimeoutError, ConnectionError)):
+            return True
+        return False
 
     def _call_with_key_failover(self, request):
         """Run once per account; rotate keys on auth, quota, timeout or 5xx errors."""
@@ -341,7 +447,6 @@ class LLMService:
                     raise
                 with self._client_lock:
                     self._active_client_index = (index + 1) % len(self._gemini_clients)
-                # Never log provider exception text; it can contain request details.
                 status = getattr(error, "code", None) or getattr(error, "status", None) or type(error).__name__
                 logger.warning(
                     "Gemini account %s failed (%s); trying the configured fallback account",
@@ -353,7 +458,6 @@ class LLMService:
     @staticmethod
     def _should_fail_over_gemini(error: Exception) -> bool:
         if isinstance(error, genai_errors.APIError):
-            # Rotates keys on auth (401/403), model missing/deprecated for account (404), timeout (408), quota/rate-limits (429), or 5xx server errors
             return error.code in {401, 403, 404, 408, 429, 500, 502, 503, 504}
         return isinstance(error, (httpx.TimeoutException, httpx.TransportError, TimeoutError))
 
@@ -405,38 +509,59 @@ class LLMService:
             f"<extract>\n{extract_text}\n</extract>"
         )
 
-        try:
-            if self._gemini_clients:
-                response = self._gemini_json_response(
-                    CARD_SYSTEM_PROMPT,
-                    prompt,
-                    {"supported": {"type": "BOOLEAN"}, "body": {"type": "STRING"}},
-                )
-                raw_content = response.text or ""
-            else:
-                response = self._call_with_key_failover(lambda active_client: active_client.chat.completions.create(
-                    model=self.model,
-                    messages=[
-                        {"role": "system", "content": CARD_SYSTEM_PROMPT},
-                        {"role": "user", "content": prompt},
-                    ],
-                    response_format={"type": "json_object"},
-                    temperature=0.2,
-                ))
-                raw_content = response.choices[0].message.content or ""
-            data = tolerant_json_parse(raw_content)
-            if not data or not data.get("supported", False):
-                return None
+        endpoints = self._get_effective_endpoints()
+        for idx, ep in enumerate(endpoints):
+            client = ep["client"]
+            ep_type = ep["type"]
+            ep_model = ep.get("model") or self.model or "gpt-4o-mini"
+            try:
+                if ep_type == "gemini":
+                    response = client.models.generate_content(
+                        model=ep_model,
+                        contents=prompt,
+                        config=genai_types.GenerateContentConfig(
+                            system_instruction=CARD_SYSTEM_PROMPT,
+                            response_mime_type="application/json",
+                            response_schema=self._gemini_json_schema(
+                                {"supported": {"type": "BOOLEAN"}, "body": {"type": "STRING"}}
+                            ),
+                        ),
+                    )
+                    raw_content = response.text or ""
+                else:
+                    response = client.chat.completions.create(
+                        model=ep_model,
+                        messages=[
+                            {"role": "system", "content": CARD_SYSTEM_PROMPT},
+                            {"role": "user", "content": prompt},
+                        ],
+                        response_format={"type": "json_object"},
+                        temperature=0.2,
+                    )
+                    raw_content = response.choices[0].message.content or ""
 
-            body = data.get("body", "").strip()
-            if not body or len(body.split()) > 80:
-                return None
-            if not verify_grounding(body, extract_text):
-                return None
-            return body
-        except Exception as error:
-            logger.warning("LLM card generation failed (%s); falling back to extractive", type(error).__name__)
-            return None
+                data = tolerant_json_parse(raw_content)
+                if not data or not data.get("supported", False):
+                    return None
+
+                body = data.get("body", "").strip()
+                if not body or len(body.split()) > 80:
+                    return None
+                if not verify_grounding(body, extract_text):
+                    return None
+                return body
+            except Exception as error:
+                logger.warning(
+                    "Endpoint %d (%s/%s) card generation failed (%s)",
+                    idx + 1,
+                    ep.get("provider", ep_type),
+                    ep_model,
+                    type(error).__name__,
+                )
+                if not self._should_fail_over_generic(error) or idx + 1 >= len(endpoints):
+                    return None
+                continue
+        return None
 
     def generate_grounded_context(
         self,
@@ -541,58 +666,100 @@ class LLMService:
             f"<nearby_text>\n{neighbors_text}\n</nearby_text>"
         )
 
-        models_to_try = [self.model]
-        raw_text = None
-        gemini_response = None
-        if self._gemini_clients:
-            models_to_try = [self.model]
-            if "gemini-2.5-flash" not in models_to_try:
-                models_to_try.insert(0, "gemini-2.5-flash")
-            if "gemini-2.0-flash" not in models_to_try:
-                models_to_try.append("gemini-2.0-flash")
+        endpoints = self._get_effective_endpoints()
+        for idx, ep in enumerate(endpoints):
+            client = ep["client"]
+            ep_type = ep["type"]
+            ep_model = ep.get("model") or self.model or "gpt-4o-mini"
+            raw_text = None
+            gemini_response = None
 
-            for candidate_model in models_to_try:
-                try:
-                    gemini_response = self._call_gemini_with_key_failover(
-                        lambda active_client: active_client.models.generate_content(
-                            model=candidate_model,
-                            contents=prompt,
-                            config=genai_types.GenerateContentConfig(
-                                tools=[genai_types.Tool(google_search=genai_types.GoogleSearch())],
-                            ),
-                        )
-                    )
-                    if gemini_response and gemini_response.text:
-                        raw_text = (gemini_response.text or "").strip()
-                        break
-                except Exception as error:
-                    logger.warning(
-                        "Gemini grounded context failed on %s (%s); trying fallback model if available",
-                        candidate_model,
-                        type(error).__name__,
-                    )
-                    continue
-        elif self._openai_clients:
             try:
-                resp = self._call_with_key_failover(
-                    lambda active_client: active_client.chat.completions.create(
-                        model=self.model,
+                if ep_type == "gemini":
+                    models_to_try = [ep_model]
+                    if "gemini-2.5-flash" not in models_to_try:
+                        models_to_try.insert(0, "gemini-2.5-flash")
+                    if "gemini-2.0-flash" not in models_to_try:
+                        models_to_try.append("gemini-2.0-flash")
+
+                    last_err = None
+                    for candidate_model in models_to_try:
+                        try:
+                            gemini_response = client.models.generate_content(
+                                model=candidate_model,
+                                contents=prompt,
+                                config=genai_types.GenerateContentConfig(
+                                    tools=[genai_types.Tool(google_search=genai_types.GoogleSearch())],
+                                ),
+                            )
+                            if gemini_response and gemini_response.text:
+                                raw_text = (gemini_response.text or "").strip()
+                                break
+                        except Exception as error:
+                            last_err = error
+                            logger.warning(
+                                "Gemini grounded context failed on %s (%s); trying fallback model if available",
+                                candidate_model,
+                                type(error).__name__,
+                            )
+                            continue
+                    if not raw_text and last_err:
+                        raise last_err
+                else:
+                    resp = client.chat.completions.create(
+                        model=ep_model,
                         messages=[
                             {"role": "system", "content": "You curate active reading Context Cards for books. Strictly adhere to the requested Archetype format."},
                             {"role": "user", "content": prompt},
                         ],
                         temperature=0.3,
                     )
+                    raw_text = (resp.choices[0].message.content or "").strip()
+
+                if not raw_text:
+                    if idx + 1 < len(endpoints):
+                        continue
+                    return None
+
+                card_data = self._build_grounded_context_card(
+                    raw_text=raw_text,
+                    concept_name=concept_name,
+                    passage_text=passage_text,
+                    forced_slot=forced_slot,
+                    archetype_names=archetype_names,
+                    gemini_response=gemini_response,
+                    reference_citations=reference_citations,
                 )
-                raw_text = (resp.choices[0].message.content or "").strip()
-            except Exception as error:
-                logger.warning("Provider grounded context failed (%s)", type(error).__name__)
+                if card_data is not None:
+                    return card_data
+                if idx + 1 < len(endpoints):
+                    continue
                 return None
 
-        if not raw_text:
-            return None
+            except Exception as error:
+                logger.warning(
+                    "Endpoint %d (%s/%s) grounded context failed (%s)",
+                    idx + 1,
+                    ep.get("provider", ep_type),
+                    ep_model,
+                    type(error).__name__,
+                )
+                if not self._should_fail_over_generic(error) or idx + 1 >= len(endpoints):
+                    return None
+                continue
 
+        return None
 
+    def _build_grounded_context_card(
+        self,
+        raw_text: str,
+        concept_name: str,
+        passage_text: str,
+        forced_slot: Optional[int],
+        archetype_names: list[str],
+        gemini_response: Any,
+        reference_citations: Optional[list[dict[str, str]]],
+    ) -> Optional[dict[str, Any]]:
         try:
             # Parse optional TITLE: header
             card_title = concept_name
@@ -749,7 +916,7 @@ class LLMService:
                     except Exception:
                         pass
 
-            # 3. Always merge verified reference_citations (Wikipedia + Stanford Encyclopedia)
+            # 3. Always merge verified reference_citations
             if reference_citations:
                 for ref_cite in reference_citations:
                     u = ref_cite.get("url")
@@ -767,7 +934,7 @@ class LLMService:
                 "why_here": "Grounded context from primary philosophical and empirical sources.",
             }
         except Exception as error:
-            logger.warning("Gemini grounded context parsing failed (%s)", type(error).__name__)
+            logger.warning("Grounded context card building failed (%s)", type(error).__name__)
             return None
 
     def answer_question(
@@ -788,54 +955,75 @@ class LLMService:
             f"Reader's Question: {question}"
         )
 
-        try:
-            if self._gemini_clients:
-                response = self._gemini_json_response(
-                    ASK_SYSTEM_PROMPT,
-                    prompt,
-                    {"supported": {"type": "BOOLEAN"}, "answer": {"type": "STRING"}},
+        endpoints = self._get_effective_endpoints()
+        for idx, ep in enumerate(endpoints):
+            client = ep["client"]
+            ep_type = ep["type"]
+            ep_model = ep.get("model") or self.model or "gpt-4o-mini"
+            try:
+                if ep_type == "gemini":
+                    response = client.models.generate_content(
+                        model=ep_model,
+                        contents=prompt,
+                        config=genai_types.GenerateContentConfig(
+                            system_instruction=ASK_SYSTEM_PROMPT,
+                            response_mime_type="application/json",
+                            response_schema=self._gemini_json_schema(
+                                {"supported": {"type": "BOOLEAN"}, "answer": {"type": "STRING"}}
+                            ),
+                        ),
+                    )
+                    raw_content = response.text or ""
+                else:
+                    response = client.chat.completions.create(
+                        model=ep_model,
+                        messages=[
+                            {"role": "system", "content": ASK_SYSTEM_PROMPT},
+                            {"role": "user", "content": prompt},
+                        ],
+                        response_format={"type": "json_object"},
+                        temperature=0.2,
+                    )
+                    raw_content = response.choices[0].message.content or ""
+
+                data = tolerant_json_parse(raw_content)
+                if not data:
+                    return "unverified", None
+
+                if not data.get("supported", False):
+                    return "unverified", None
+
+                answer = data.get("answer", "").strip()
+                if not answer:
+                    return "unverified", None
+
+                if len(answer.split()) > 120:
+                    sentences = re.split(r"(?<=[.!?])\s+", answer)
+                    trimmed_sentences = []
+                    cur_words = 0
+                    for s in sentences:
+                        sw = len(s.split())
+                        if cur_words + sw <= 120:
+                            trimmed_sentences.append(s)
+                            cur_words += sw
+                        else:
+                            break
+                    answer = " ".join(trimmed_sentences) or answer
+
+                return "ok", answer
+            except Exception as e:
+                logger.warning(
+                    "Endpoint %d (%s/%s) ask call failed (%s)",
+                    idx + 1,
+                    ep.get("provider", ep_type),
+                    ep_model,
+                    type(e).__name__,
                 )
-                raw_content = response.text or ""
-            else:
-                response = self._call_with_key_failover(lambda active_client: active_client.chat.completions.create(
-                    model=self.model,
-                    messages=[
-                        {"role": "system", "content": ASK_SYSTEM_PROMPT},
-                        {"role": "user", "content": prompt},
-                    ],
-                    response_format={"type": "json_object"},
-                    temperature=0.2,
-                ))
-                raw_content = response.choices[0].message.content or ""
-            data = tolerant_json_parse(raw_content)
-            if not data:
-                return "unverified", None
+                if not self._should_fail_over_generic(e) or idx + 1 >= len(endpoints):
+                    return "unavailable", None
+                continue
 
-            if not data.get("supported", False):
-                return "unverified", None
-
-            answer = data.get("answer", "").strip()
-            if not answer:
-                return "unverified", None
-
-            if len(answer.split()) > 120:
-                # Trim at last sentence <= 120 words
-                sentences = re.split(r"(?<=[.!?])\s+", answer)
-                trimmed_sentences = []
-                cur_words = 0
-                for s in sentences:
-                    sw = len(s.split())
-                    if cur_words + sw <= 120:
-                        trimmed_sentences.append(s)
-                        cur_words += sw
-                    else:
-                        break
-                answer = " ".join(trimmed_sentences) or answer
-
-            return "ok", answer
-        except Exception as e:
-            logger.warning("LLM ask call failed (%s)", type(e).__name__)
-            return "unavailable", None
+        return "unavailable", None
 
     def generate_vibe_check(
         self,
@@ -886,38 +1074,58 @@ class LLMService:
             f"<passage>\n{passage}\n</passage>"
         )
 
-        try:
-            if self._gemini_clients:
-                response = self._gemini_json_response(
-                    system_prompt,
-                    prompt,
-                    {"plain_take": {"type": "STRING"}, "analogy": {"type": "STRING"}},
-                )
-                raw_content = response.text or ""
-            else:
-                response = self._call_with_key_failover(lambda active_client: active_client.chat.completions.create(
-                    model=self.model,
-                    messages=[
-                        {"role": "system", "content": system_prompt},
-                        {"role": "user", "content": prompt},
-                    ],
-                    response_format={"type": "json_object"},
-                    temperature=0.3,
-                ))
-                raw_content = response.choices[0].message.content or ""
+        endpoints = self._get_effective_endpoints()
+        for idx, ep in enumerate(endpoints):
+            client = ep["client"]
+            ep_type = ep["type"]
+            ep_model = ep.get("model") or self.model or "gpt-4o-mini"
+            try:
+                if ep_type == "gemini":
+                    response = client.models.generate_content(
+                        model=ep_model,
+                        contents=prompt,
+                        config=genai_types.GenerateContentConfig(
+                            system_instruction=system_prompt,
+                            response_mime_type="application/json",
+                            response_schema=self._gemini_json_schema(
+                                {"plain_take": {"type": "STRING"}, "analogy": {"type": "STRING"}}
+                            ),
+                        ),
+                    )
+                    raw_content = response.text or ""
+                else:
+                    response = client.chat.completions.create(
+                        model=ep_model,
+                        messages=[
+                            {"role": "system", "content": system_prompt},
+                            {"role": "user", "content": prompt},
+                        ],
+                        response_format={"type": "json_object"},
+                        temperature=0.3,
+                    )
+                    raw_content = response.choices[0].message.content or ""
 
-            data = tolerant_json_parse(raw_content)
-            if data and data.get("plain_take") and data.get("analogy"):
-                take = str(data["plain_take"]).strip()
-                analogy = str(data["analogy"]).strip()
-                if not analogy.lower().startswith("think of it like"):
-                    analogy = f"Think of it like {analogy[0].lower() + analogy[1:] if len(analogy) > 1 else analogy}"
-                return {
-                    "plain_take": take,
-                    "analogy": analogy,
-                    "fallback": False,
-                }
-            return _local_fallback()
-        except Exception as err:
-            logger.warning("Vibe check LLM failed (%s); using deterministic fallback", type(err).__name__)
-            return _local_fallback()
+                data = tolerant_json_parse(raw_content)
+                if data and data.get("plain_take") and data.get("analogy"):
+                    take = str(data["plain_take"]).strip()
+                    analogy = str(data["analogy"]).strip()
+                    if not analogy.lower().startswith("think of it like"):
+                        analogy = f"Think of it like {analogy[0].lower() + analogy[1:] if len(analogy) > 1 else analogy}"
+                    return {
+                        "plain_take": take,
+                        "analogy": analogy,
+                        "fallback": False,
+                    }
+            except Exception as err:
+                logger.warning(
+                    "Endpoint %d (%s/%s) vibe check failed (%s)",
+                    idx + 1,
+                    ep.get("provider", ep_type),
+                    ep_model,
+                    type(err).__name__,
+                )
+                if not self._should_fail_over_generic(err) or idx + 1 >= len(endpoints):
+                    break
+                continue
+
+        return _local_fallback()

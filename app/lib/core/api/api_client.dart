@@ -845,7 +845,7 @@ class ApiClient {
       final provider =
           prefs.getString('athena_ai_primary_provider') ?? 'gemini';
       final model =
-          prefs.getString('athena_ai_primary_model') ?? 'gemini-2.5-flash';
+          prefs.getString('athena_ai_primary_model') ?? '';
 
       if (key.isNotEmpty && provider == 'gemini') {
         final prompt =
@@ -909,7 +909,7 @@ class ApiClient {
     final pKey = prefs.getString('athena_ai_primary_api_key');
     final pProv = prefs.getString('athena_ai_primary_provider') ?? 'gemini';
     final pModel =
-        prefs.getString('athena_ai_primary_model') ?? 'gemini-2.5-flash';
+        prefs.getString('athena_ai_primary_model') ?? '';
     final pBase = prefs.getString('athena_ai_primary_base_url');
     final fKey = prefs.getString('athena_ai_fallback_api_key');
     final fProv = prefs.getString('athena_ai_fallback_provider');
@@ -1049,24 +1049,8 @@ class ApiClient {
       }).toList();
     }
 
-    // 3. Fallbacks if offline / empty
-    final pKey = provider.toLowerCase();
-    if (pKey == 'gemini') {
-      return const [
-        AIModelOption(id: 'gemini-2.5-flash', name: 'Gemini 2.5 Flash'),
-        AIModelOption(id: 'gemini-2.5-pro', name: 'Gemini 2.5 Pro'),
-        AIModelOption(id: 'gemini-2.0-flash', name: 'Gemini 2.0 Flash'),
-      ];
-    } else if (pKey == 'groq') {
-      return const [
-        AIModelOption(
-            id: 'llama-3.3-70b-versatile',
-            name: 'Llama 3.3 70B (Versatile)'),
-        AIModelOption(
-            id: 'llama-3.1-8b-instant', name: 'Llama 3.1 8B (Instant)'),
-      ];
-    }
-    return [AIModelOption(id: '$pKey-default', name: '$provider default')];
+    // 3. Never return static hardcoded models without API key verification
+    return const [];
   }
 
   static Future<Map<String, dynamic>> directTestProvider({
@@ -1100,73 +1084,52 @@ class ApiClient {
 
     try {
       if (pKey == 'gemini') {
-        final effectiveModel =
-            (model != null && model.isNotEmpty) ? model : 'gemini-2.5-flash';
-        final testUrl =
-            'https://generativelanguage.googleapis.com/v1beta/models/$effectiveModel:generateContent?key=$cleanKey';
-
-        // Direct test generation call
-        final testResp = await client.post(
-          testUrl,
-          data: {
-            'contents': [
-              {
-                'parts': [
-                  {'text': 'Say OK'}
-                ]
-              }
-            ]
-          },
-          options: Options(headers: {'Content-Type': 'application/json'}),
-        );
-
+        // Query Google Gemini API directly to recognize all valid models for this API key
+        final modelsUrl =
+            'https://generativelanguage.googleapis.com/v1beta/models?key=$cleanKey';
+        final mResp = await client.get(modelsUrl);
         sw.stop();
-        if (testResp.statusCode == 200) {
-          // Discover models
-          List<Map<String, dynamic>> models = [];
-          try {
-            final modelsUrl =
-                'https://generativelanguage.googleapis.com/v1beta/models?key=$cleanKey';
-            final mResp = await client.get(modelsUrl);
-            if (mResp.statusCode == 200 && mResp.data is Map) {
-              final rawModels =
-                  (mResp.data as Map)['models'] as List? ?? [];
-              for (final item in rawModels) {
-                if (item is! Map) continue;
-                final mName = item['name']?.toString() ?? '';
-                final slug = mName.startsWith('models/')
-                    ? mName.substring(7)
-                    : mName;
-                final methods =
-                    (item['supportedGenerationMethods'] as List?)
-                            ?.cast<String>() ??
-                        [];
-                if (methods.isNotEmpty &&
-                    !methods.contains('generateContent')) {
-                  continue;
-                }
-                final low = slug.toLowerCase();
-                if (low.contains('embedding') ||
-                    low.contains('tts') ||
-                    low.contains('whisper') ||
-                    low.contains('aqa') ||
-                    low.contains('imagen')) {
-                  continue;
-                }
-                models.add({
-                  'id': slug,
-                  'name': item['displayName'] ?? slug,
-                });
-              }
+        if (mResp.statusCode == 200 && mResp.data is Map) {
+          final rawModels =
+              (mResp.data as Map)['models'] as List? ?? [];
+          final List<Map<String, dynamic>> models = [];
+          for (final item in rawModels) {
+            if (item is! Map) continue;
+            final mName = item['name']?.toString() ?? '';
+            final slug = mName.startsWith('models/')
+                ? mName.substring(7)
+                : mName;
+            final methods =
+                (item['supportedGenerationMethods'] as List?)
+                        ?.cast<String>() ??
+                    [];
+            if (methods.isNotEmpty &&
+                !methods.contains('generateContent')) {
+              continue;
             }
-          } catch (_) {}
+            final low = slug.toLowerCase();
+            if (low.contains('embedding') ||
+                low.contains('tts') ||
+                low.contains('whisper') ||
+                low.contains('aqa') ||
+                low.contains('imagen')) {
+              continue;
+            }
+            models.add({
+              'id': slug,
+              'name': item['displayName'] ?? slug,
+            });
+          }
 
           if (models.isEmpty) {
-            models = [
-              {'id': 'gemini-2.5-flash', 'name': 'Gemini 2.5 Flash'},
-              {'id': 'gemini-2.5-pro', 'name': 'Gemini 2.5 Pro'},
-              {'id': 'gemini-2.0-flash', 'name': 'Gemini 2.0 Flash'},
-            ];
+            return {
+              'ok': false,
+              'valid': false,
+              'status': 'error',
+              'latency_ms': sw.elapsedMilliseconds,
+              'message': 'No text generation models found for this API key.',
+              'models': [],
+            };
           }
 
           return {
@@ -1174,7 +1137,7 @@ class ApiClient {
             'valid': true,
             'status': 'success',
             'latency_ms': sw.elapsedMilliseconds,
-            'message': 'Connected to Google Gemini! (${models.length} models available)',
+            'message': 'Connected to Google Gemini! Recognized ${models.length} models.',
             'models': models,
           };
         } else {
@@ -1183,7 +1146,7 @@ class ApiClient {
             'valid': false,
             'status': 'error',
             'latency_ms': sw.elapsedMilliseconds,
-            'message': 'Gemini returned HTTP ${testResp.statusCode}',
+            'message': 'Gemini returned HTTP ${mResp.statusCode}',
             'models': [],
           };
         }

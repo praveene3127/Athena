@@ -126,8 +126,7 @@ xtool/.xtool-tmp/
 athena-brand-kit-v3/
 
 # --- Official App Releases ---
-!releases/
-!releases/*.apk
-!releases/*.ipa
+releases/*.apk
+releases/*.ipa
 
 

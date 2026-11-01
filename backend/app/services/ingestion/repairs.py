@@ -103,21 +103,24 @@ class RepairLedger:
         # Since entries were recorded sequentially during text pass:
         result_parts: List[str] = []
         last_idx = 0
+        text_len = len(raw_text)
         for entry in self.entries:
-            if entry.offset < last_idx:
+            if entry.offset < last_idx or entry.offset > text_len:
                 continue
             result_parts.append(raw_text[last_idx:entry.offset])
             # Check original matches
             orig_len = len(entry.original)
-            actual_orig = raw_text[entry.offset:entry.offset + orig_len]
+            end_idx = min(entry.offset + orig_len, text_len)
+            actual_orig = raw_text[entry.offset:end_idx]
             if actual_orig == entry.original:
                 result_parts.append(entry.replacement)
-                last_idx = entry.offset + orig_len
+                last_idx = end_idx
             else:
                 # Fallback if raw_text offset shifted
                 result_parts.append(actual_orig)
-                last_idx = entry.offset + orig_len
-        result_parts.append(raw_text[last_idx:])
+                last_idx = end_idx
+        if last_idx < text_len:
+            result_parts.append(raw_text[last_idx:])
         return "".join(result_parts)
 
 

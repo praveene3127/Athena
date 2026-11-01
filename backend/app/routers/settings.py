@@ -26,9 +26,11 @@ router = APIRouter(prefix="/api/settings", tags=["settings"])
 
 
 def _mask_key(key: Optional[str]) -> Optional[str]:
-    if not key or len(key.strip()) < 8:
+    if not key or not key.strip():
         return None
     k = key.strip()
+    if len(k) < 8:
+        return "••••••••"
     return f"{k[:6]}...{k[-4:]}"
 
 
@@ -137,13 +139,13 @@ async def get_ai_config(session: Session = Depends(get_session)):
     is_configured = env_gemini or env_llm
 
     primary_prov = "gemini" if env_gemini else ("openai" if env_llm else "gemini")
-    primary_model = GEMINI_MODEL if env_gemini else (LLM_MODEL or "gemini-2.5-flash")
+    primary_model = GEMINI_MODEL if env_gemini else (LLM_MODEL or "")
     masked_key = _mask_key(GEMINI_API_KEY_PRIMARY) if env_gemini else _mask_key(LLM_API_KEY)
 
     return {
         "is_configured": is_configured,
         "primary_provider": primary_prov,
-        "primary_model": primary_model if is_configured else "gemini-2.5-flash",
+        "primary_model": primary_model if is_configured else "",
         "primary_api_key_masked": masked_key,
         "primary_base_url": LLM_BASE_URL if env_llm else None,
         "fallback_provider": "gemini" if (env_gemini and GEMINI_API_KEY_SECONDARY) else None,
@@ -167,14 +169,14 @@ async def save_ai_config(
 
     # Primary provider & key update
     saved.primary_provider = payload.primary_provider
-    if payload.primary_api_key and "..." not in payload.primary_api_key:
+    if payload.primary_api_key and "..." not in payload.primary_api_key and "••••" not in payload.primary_api_key:
         saved.primary_api_key = payload.primary_api_key.strip()
     saved.primary_model = payload.primary_model or ""
     saved.primary_base_url = payload.primary_base_url
 
     # Fallback provider & key update
     saved.fallback_provider = payload.fallback_provider
-    if payload.fallback_api_key and "..." not in payload.fallback_api_key:
+    if payload.fallback_api_key and "..." not in payload.fallback_api_key and "••••" not in payload.fallback_api_key:
         saved.fallback_api_key = payload.fallback_api_key.strip()
     elif not payload.fallback_provider:
         saved.fallback_api_key = None

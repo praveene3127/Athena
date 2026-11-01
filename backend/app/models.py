@@ -127,7 +127,7 @@ class AISettings(SQLModel, table=True):
     id: str = Field(default="global", primary_key=True)
     primary_provider: str = Field(default="gemini")
     primary_api_key: Optional[str] = Field(default=None)
-    primary_model: Optional[str] = Field(default="gemini-2.5-flash")
+    primary_model: Optional[str] = Field(default=None)
     primary_base_url: Optional[str] = Field(default=None)
 
     fallback_provider: Optional[str] = Field(default=None)

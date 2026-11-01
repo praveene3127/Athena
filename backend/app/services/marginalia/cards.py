@@ -112,6 +112,43 @@ def verify_and_anchor_quote(passage: str, candidate: str) -> Optional[str]:
     return passage[orig_start:orig_end]
 
 
+def _ensure_verbatim_quote(chunk_text: str, candidate_quote: str, concept_label: str) -> str:
+    """Guarantee that the returned quote is an exact verbatim substring of chunk_text."""
+    if not chunk_text:
+        return ""
+    cleaned_candidate = (candidate_quote or "").strip().strip('"“”\'`')
+    if cleaned_candidate and len(cleaned_candidate) >= 15 and cleaned_candidate in chunk_text:
+        return cleaned_candidate
+
+    # Split chunk_text into spans while preserving exact character offsets
+    sentences = [m.group(0).strip() for m in re.finditer(r"[^.!?\n]+[.!?]?", chunk_text) if m.group(0).strip()]
+
+    # 1. Exact sentence containing concept_label
+    if concept_label:
+        low_label = concept_label.lower()
+        for sent in sentences:
+            if low_label in sent.lower() and len(sent) >= 20 and sent in chunk_text:
+                return sent[:280].strip() if sent[:280].strip() in chunk_text else sent
+
+    # 2. Highest token overlap with candidate_quote
+    if cleaned_candidate:
+        cand_tokens = set(re.findall(r"\w{4,}", cleaned_candidate.lower()))
+        if cand_tokens:
+            best_sent = max(
+                sentences,
+                key=lambda s: len(cand_tokens & set(re.findall(r"\w{4,}", s.lower()))),
+                default="",
+            )
+            if best_sent and len(best_sent) >= 20 and best_sent in chunk_text:
+                return best_sent
+
+    # 3. Fallback to first substantive verbatim slice of chunk_text
+    for sent in sentences:
+        if len(sent) >= 25 and sent in chunk_text:
+            return sent
+    return chunk_text[: min(len(chunk_text), 160)].strip()
+
+
 def find_exact_quote(passage: str, term: str) -> Optional[str]:
     """
     Finds the exact contiguous sentence in passage containing the term.
@@ -293,12 +330,16 @@ def generate_context_cards(
         active_slot = (len(existing_bodies) + len(cards)) % 4
         active_archetype = archetype_names[active_slot]
 
-        # Check ConceptCache first (Tier 1)
+        # Check ConceptCache first (Tier 1) - Slot aware
         cached_entry = None
         if slug:
             try:
                 with Session(engine) as db_sess:
-                    cached_entry = db_sess.get(ConceptCache, slug)
+                    cached_entry = db_sess.get(ConceptCache, f"{slug}__slot{active_slot}")
+                    if not cached_entry:
+                        base_cached = db_sess.get(ConceptCache, slug)
+                        if base_cached and base_cached.title.startswith(active_archetype):
+                            cached_entry = base_cached
             except Exception:
                 cached_entry = None
 
@@ -335,18 +376,20 @@ def generate_context_cards(
                 concept.status = "refused_low_relevance"
                 continue
 
-            # Build dual verified citations (Wikipedia + primary academic reference)
+            # Build verified citation (Wikipedia, plus philosophical reference if applicable)
             citations = [citation]
             term_title = wiki_title or concept.name
             safe_query = urllib.parse.quote(term_title)
-            citations.append({
-                "title": f"Stanford Encyclopedia of Philosophy Reference: {term_title}",
-                "publisher": "plato.stanford.edu",
-                "url": f"https://plato.stanford.edu/search/searcher.py?query={safe_query}",
-            })
+            if any(term in term_title.lower() for term in ["paradox", "fallacy", "theory", "ethics", "philosophy", "dualism", "logic"]):
+                citations.append({
+                    "title": f"Stanford Encyclopedia of Philosophy Reference: {term_title}",
+                    "publisher": "plato.stanford.edu",
+                    "url": f"https://plato.stanford.edu/search/searcher.py?query={safe_query}",
+                })
 
         # Extract supporting quote from the canonical passage
-        exact_quote = find_exact_quote(chunk.raw_text, concept.name)
+        raw_quote = find_exact_quote(chunk.raw_text, concept.name)
+        exact_quote = _ensure_verbatim_quote(chunk.raw_text, raw_quote or "", concept.name)
         if not exact_quote:
             concept.status = "no_quote_span"
             continue
@@ -402,7 +445,7 @@ def generate_context_cards(
                         with Session(engine) as db_sess:
                             db_sess.add(
                                 ConceptCache(
-                                    concept_slug=slug,
+                                    concept_slug=f"{slug}__slot{active_slot}",
                                     title=card_title,
                                     body=body,
                                     citations_json=json.dumps(card_citations),

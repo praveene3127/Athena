@@ -11,12 +11,16 @@ from app.models import ContextCard, Document, ReadingChunk
 router = APIRouter(tags=["cards"])
 
 
+import uuid
+
 class UserQuoteRequest(BaseModel):
-    id: str
+    id: Optional[str] = None
     document_id: str
-    source_chunk_id: Optional[str] = ""
+    source_chunk_id: Optional[str] = None
+    chunk_id: Optional[str] = None
     title: Optional[str] = "Saved Passage"
-    body: str
+    body: Optional[str] = None
+    quote_text: Optional[str] = None
     exact_quote: Optional[str] = None
 
 
@@ -25,18 +29,23 @@ def create_or_save_user_quote(
     req: UserQuoteRequest, session: Session = Depends(get_session)
 ) -> Dict[str, Any]:
     """Saves or updates an authentic user passage quote into the SQLite ContextCard vault."""
-    card = session.get(ContextCard, req.id)
+    card_id = req.id or f"quote_{uuid.uuid4().hex[:12]}"
+    effective_chunk_id = req.source_chunk_id or req.chunk_id or ""
+    effective_body = req.body or req.quote_text or ""
+    effective_exact = req.exact_quote or req.quote_text or (effective_body[:280] if len(effective_body) > 280 else effective_body)
+
+    card = session.get(ContextCard, card_id)
     if not card:
         card = ContextCard(
-            id=req.id,
+            id=card_id,
             document_id=req.document_id,
-            source_chunk_id=req.source_chunk_id or "",
+            source_chunk_id=effective_chunk_id,
             concept_name="Saved Passage",
             card_type="user_highlight",
             title=req.title or "Saved Passage",
-            body=req.body,
+            body=effective_body,
             why_here="Saved directly by reader",
-            exact_quote=req.exact_quote or (req.body[:280] if len(req.body) > 280 else req.body),
+            exact_quote=effective_exact,
             saved=True,
             dismissed=False,
             citations_json="[]",
@@ -49,10 +58,12 @@ def create_or_save_user_quote(
         card.dismissed = False
         if req.title:
             card.title = req.title
-        if req.body:
-            card.body = req.body
-        if req.exact_quote:
-            card.exact_quote = req.exact_quote
+        if effective_body:
+            card.body = effective_body
+        if effective_exact:
+            card.exact_quote = effective_exact
+        if effective_chunk_id:
+            card.source_chunk_id = effective_chunk_id
 
     session.add(card)
     session.commit()
@@ -147,6 +158,8 @@ def get_saved_cards(session: Session = Depends(get_session)) -> List[Dict[str, A
             "title": card.title,
             "body": card.body,
             "why_here": card.why_here,
+            "exact_quote": card.exact_quote,
+            "support_status": getattr(card, "support_status", "fully_supported"),
             "citations": citations,
             "saved": True,
         })

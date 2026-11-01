@@ -111,7 +111,64 @@ async def upload_document(
     # 5. Dispatch background extraction
     queue_document_job(doc_id)
 
-    return {"document_id": doc_id}
+    return {"id": doc_id, "document_id": doc_id, "status": "queued"}
+
+
+def _extract_first_page_index(source_pages_raw: Any, fallback_seq: int = 1) -> int:
+    """Return 0-based page/chunk index safely from JSON string or list."""
+    if isinstance(source_pages_raw, list) and source_pages_raw:
+        try:
+            return max(0, int(source_pages_raw[0]) - 1)
+        except Exception:
+            pass
+    if isinstance(source_pages_raw, str) and source_pages_raw.strip():
+        try:
+            parsed = json.loads(source_pages_raw)
+            if isinstance(parsed, list) and parsed:
+                return max(0, int(parsed[0]) - 1)
+        except Exception:
+            pass
+    return max(0, fallback_seq - 1)
+
+
+def _validate_url_ssrf(url_str: str) -> str:
+    """Rigorous SSRF check: validates scheme, host, DNS resolutions, and private/cloud IP ranges."""
+    import socket
+    parsed = urllib.parse.urlparse(url_str)
+    if parsed.scheme not in ("http", "https"):
+        raise AppException("INVALID_URL", "URL must start with http:// or https://", status_code=400)
+    hostname = (parsed.hostname or "").lower().strip()
+    if not hostname:
+        raise AppException("INVALID_URL", "Invalid host in URL", status_code=400)
+    if (
+        hostname in ("localhost", "metadata.google.internal")
+        or hostname.endswith(".internal")
+        or hostname.endswith(".local")
+        or hostname.endswith(".localhost")
+    ):
+        raise AppException("SSRF_BLOCKED", "Requests to local or metadata addresses are forbidden", status_code=403)
+
+    try:
+        addr_infos = socket.getaddrinfo(hostname, None)
+    except socket.gaierror as e:
+        raise AppException("INVALID_URL", f"Could not resolve host: {hostname}", status_code=400) from e
+
+    for _, _, _, _, sockaddr in addr_infos:
+        ip_str = sockaddr[0]
+        try:
+            ip = ipaddress.ip_address(ip_str)
+            if (
+                ip.is_private
+                or ip.is_loopback
+                or ip.is_link_local
+                or ip.is_multicast
+                or ip.is_reserved
+                or ip.is_unspecified
+            ):
+                raise AppException("SSRF_BLOCKED", "Requests to private or local network addresses are forbidden", status_code=403)
+        except ValueError:
+            continue
+    return hostname
 
 
 class UploadUrlRequest(BaseModel):
@@ -123,26 +180,11 @@ def upload_document_from_url(
     req: UploadUrlRequest,
     session: Session = Depends(get_session),
 ) -> Dict[str, str]:
-    """Downloads a direct PDF or EPUB link from a URL and queues it into the pipeline."""
+    """Downloads a direct PDF or EPUB link from a URL with SSRF guards and queues it."""
     url = req.url.strip()
-    if not url.startswith("http://") and not url.startswith("https://"):
-        raise AppException("INVALID_URL", "URL must start with http:// or https://", status_code=400)
+    _validate_url_ssrf(url)
 
     parsed = urllib.parse.urlparse(url)
-    hostname = (parsed.hostname or "").lower().strip()
-    if not hostname:
-        raise AppException("INVALID_URL", "Invalid host in URL", status_code=400)
-
-    # SSRF guard: reject cloud metadata, loopback, and reserved addresses
-    if hostname in ("localhost", "metadata.google.internal") or hostname.endswith(".internal"):
-        raise AppException("SSRF_BLOCKED", "Requests to local or metadata addresses are forbidden", status_code=403)
-    try:
-        ip = ipaddress.ip_address(hostname)
-        if ip.is_loopback or ip.is_link_local or ip.is_multicast or ip.is_reserved:
-            raise AppException("SSRF_BLOCKED", "Requests to local or metadata addresses are forbidden", status_code=403)
-    except ValueError:
-        pass
-
     url_path = Path(parsed.path)
     ext = url_path.suffix.lower()
     if ext not in (".pdf", ".epub"):
@@ -156,16 +198,38 @@ def upload_document_from_url(
     target_path = UPLOADS_DIR / f"{doc_id}{ext}"
 
     total_bytes = 0
+    current_url = url
+    downloaded = False
     try:
-        with httpx.stream("GET", url, follow_redirects=True, timeout=30.0) as resp:
-            if resp.status_code >= 400:
-                raise AppException("DOWNLOAD_FAILED", f"Remote server returned HTTP {resp.status_code}", status_code=400)
-            with open(target_path, "wb") as f:
-                for chunk in resp.iter_bytes(chunk_size=64 * 1024):
-                    total_bytes += len(chunk)
-                    if total_bytes > MAX_UPLOAD_SIZE:
-                        raise AppException("RESOURCE_LIMIT", "Downloaded file exceeds 500MB limit", status_code=413)
-                    f.write(chunk)
+        with httpx.Client(timeout=30.0) as http_client:
+            for _ in range(5):
+                _validate_url_ssrf(current_url)
+                request_obj = http_client.build_request("GET", current_url)
+                resp = http_client.send(request_obj, stream=True, follow_redirects=False)
+                if resp.status_code in (301, 302, 303, 307, 308):
+                    loc = resp.headers.get("location")
+                    resp.close()
+                    if not loc:
+                        break
+                    current_url = urllib.parse.urljoin(current_url, loc)
+                    continue
+                if resp.status_code >= 400:
+                    resp.close()
+                    raise AppException("DOWNLOAD_FAILED", f"Remote server returned HTTP {resp.status_code}", status_code=400)
+
+                with open(target_path, "wb") as f:
+                    for chunk in resp.iter_bytes(chunk_size=64 * 1024):
+                        total_bytes += len(chunk)
+                        if total_bytes > MAX_UPLOAD_SIZE:
+                            resp.close()
+                            raise AppException("RESOURCE_LIMIT", "Downloaded file exceeds 500MB limit", status_code=413)
+                        f.write(chunk)
+                resp.close()
+                downloaded = True
+                break
+
+        if not downloaded:
+            raise AppException("DOWNLOAD_FAILED", "Failed to retrieve book from URL (too many redirects)", status_code=400)
     except AppException:
         if target_path.exists():
             target_path.unlink()
@@ -197,7 +261,55 @@ def upload_document_from_url(
     session.commit()
 
     queue_document_job(doc_id)
-    return {"document_id": doc_id}
+    return {"id": doc_id, "document_id": doc_id, "status": "queued"}
+
+
+@router.post("/sample")
+def create_sample_document(session: Session = Depends(get_session)) -> Dict[str, Any]:
+    """Generates or retrieves starter sample book for instant reading (§CLAUDE.md & README)."""
+    existing = session.exec(
+        select(Document).where(Document.filename == "sample.pdf", Document.status == "ready")
+    ).first()
+    if existing:
+        return {"id": existing.id, "document_id": existing.id, "status": existing.status}
+
+    sample_source = Path(BASE_DIR) / "samples" / "sample.pdf"
+    if not sample_source.exists():
+        sample_source = Path("backend/samples/sample.pdf")
+
+    doc_id = f"doc_sample_{uuid.uuid4().hex[:8]}"
+    target_path = UPLOADS_DIR / f"{doc_id}.pdf"
+
+    if sample_source.exists():
+        shutil.copyfile(sample_source, target_path)
+    else:
+        doc_pdf = pymupdf.open()
+        page = doc_pdf.new_page()
+        page.insert_text(
+            (50, 72),
+            "Athena Sample Book\n\nChapter 1: The Active Reader\n\n"
+            + "Reading actively transforms comprehension. " * 30,
+        )
+        doc_pdf.save(target_path)
+        doc_pdf.close()
+
+    page_count = validate_pdf_file(target_path)
+    doc = Document(
+        id=doc_id,
+        filename="sample.pdf",
+        title="Marcus Aurelius Meditations (Sample)",
+        status="queued",
+        stage="validating",
+        percent=5,
+        page_count=page_count,
+        created_at=utc_now(),
+        updated_at=utc_now(),
+    )
+    session.add(doc)
+    session.commit()
+
+    queue_document_job(doc_id)
+    return {"id": doc_id, "document_id": doc_id, "status": "queued"}
 
 
 @router.get("")
@@ -207,17 +319,7 @@ def list_documents(session: Session = Depends(get_session)) -> List[Dict[str, An
     docs = session.exec(statement).all()
     results = []
     for d in docs:
-        effective_status = d.status
-        if effective_status != "ready" and effective_status != "failed":
-            chunk_exists = session.exec(select(ReadingChunk.id).where(ReadingChunk.document_id == d.id)).first()
-            if chunk_exists:
-                effective_status = "ready"
-                d.status = "ready"
-                session.add(d)
-                try:
-                    session.commit()
-                except Exception:
-                    session.rollback()
+        effective_status = "ready" if (d.status == "ready" or (d.stage == "done" and d.percent == 100)) else d.status
         results.append({
             "id": d.id,
             "title": d.title or d.filename,
@@ -243,16 +345,7 @@ def get_document(id: str, session: Session = Depends(get_session)) -> Dict[str, 
     doc = session.get(Document, id)
     if not doc:
         raise AppException("NOT_FOUND", status_code=404)
-    effective_status = doc.status
-    if effective_status != "ready" and effective_status != "failed":
-        if session.exec(select(ReadingChunk.id).where(ReadingChunk.document_id == doc.id)).first():
-            effective_status = "ready"
-            doc.status = "ready"
-            session.add(doc)
-            try:
-                session.commit()
-            except Exception:
-                session.rollback()
+    effective_status = "ready" if (doc.status == "ready" or (doc.stage == "done" and doc.percent == 100)) else doc.status
     return {
         "id": doc.id,
         "title": doc.title,
@@ -275,16 +368,7 @@ def get_document_status(id: str, session: Session = Depends(get_session)) -> Dic
     if not doc:
         raise AppException("NOT_FOUND", status_code=404)
 
-    effective_status = doc.status
-    if effective_status not in {"ready", "failed", "unsupported"}:
-        if session.exec(select(ReadingChunk.id).where(ReadingChunk.document_id == doc.id)).first():
-            effective_status = "ready"
-            doc.status = "ready"
-            session.add(doc)
-            try:
-                session.commit()
-            except Exception:
-                session.rollback()
+    effective_status = "ready" if (doc.status == "ready" or (doc.stage == "done" and doc.percent == 100)) else doc.status
 
     error_obj = None
     if doc.error_code:
@@ -366,6 +450,9 @@ def delete_document(id: str, session: Session = Depends(get_session)) -> Dict[st
     raw_path = RAW_DIR / f"{id}.txt"
     if raw_path.exists():
         raw_path.unlink()
+    ledger_path = RAW_DIR / f"{id}_ledger.json"
+    if ledger_path.exists():
+        ledger_path.unlink()
 
     return {"status": "deleted", "document_id": id}
 
@@ -738,8 +825,13 @@ def get_document_chapters(
         if m:
             clean_title = m.group(0).lstrip("#").strip()
             page = 1
-            if chunk.source_pages_json and isinstance(chunk.source_pages_json, list) and chunk.source_pages_json:
-                page = chunk.source_pages_json[0]
+            if chunk.source_pages_json:
+                try:
+                    pages = json.loads(chunk.source_pages_json) if isinstance(chunk.source_pages_json, str) else chunk.source_pages_json
+                    if isinstance(pages, list) and pages:
+                        page = pages[0]
+                except Exception:
+                    pass
             detected.append({
                 "id": chunk.id,
                 "level": 1,
@@ -757,8 +849,13 @@ def get_document_chapters(
         for i in range(0, len(chunks), step):
             chunk = chunks[i]
             page = 1
-            if chunk.source_pages_json and isinstance(chunk.source_pages_json, list) and chunk.source_pages_json:
-                page = chunk.source_pages_json[0]
+            if chunk.source_pages_json:
+                try:
+                    pages = json.loads(chunk.source_pages_json) if isinstance(chunk.source_pages_json, str) else chunk.source_pages_json
+                    if isinstance(pages, list) and pages:
+                        page = pages[0]
+                except Exception:
+                    pass
             detected.append({
                 "id": f"sec-{chunk.sequence}",
                 "level": 1,
@@ -870,26 +967,34 @@ async def get_chunk_vibe_check(
 
     if not target_chunk:
         # Fallback to closest available chunk for edge case indices (e.g. 0 or 99999)
-        target_chunk = session.exec(
-            select(ReadingChunk)
-            .where(ReadingChunk.document_id == id)
-            .order_by(ReadingChunk.sequence.desc())
-        ).first()
+        if payload.chunk_index <= 1:
+            target_chunk = session.exec(
+                select(ReadingChunk)
+                .where(ReadingChunk.document_id == id)
+                .order_by(ReadingChunk.sequence.asc())
+            ).first()
+        else:
+            target_chunk = session.exec(
+                select(ReadingChunk)
+                .where(ReadingChunk.document_id == id)
+                .order_by(ReadingChunk.sequence.desc())
+            ).first()
 
     if not target_chunk:
         return {
             "chunk_index": payload.chunk_index,
             "plain_take": "Keep reading to discover key insights from this book.",
+            "simplified": "Keep reading to discover key insights from this book.",
             "analogy": None,
             "fallback": True,
         }
 
     prev_chunk = None
-    if payload.chunk_index > 0:
+    if target_chunk.sequence > 1:
         prev_chunk = session.exec(
             select(ReadingChunk).where(
                 ReadingChunk.document_id == id,
-                ReadingChunk.sequence == payload.chunk_index - 1,
+                ReadingChunk.sequence == target_chunk.sequence - 1,
             )
         ).first()
 
@@ -897,7 +1002,7 @@ async def get_chunk_vibe_check(
         select(DocumentChapter)
         .where(
             DocumentChapter.doc_id == id,
-            DocumentChapter.start_chunk_index <= payload.chunk_index,
+            DocumentChapter.start_chunk_index <= target_chunk.sequence,
         )
         .order_by(DocumentChapter.start_chunk_index.desc())
     ).first()
@@ -925,9 +1030,11 @@ async def get_chunk_vibe_check(
             "fallback": True,
         }
 
+    take = result.get("plain_take", "A core theme from this passage.")
     return {
         "chunk_index": payload.chunk_index,
-        "plain_take": result.get("plain_take", "A core theme from this passage."),
+        "plain_take": take,
+        "simplified": take,
         "analogy": result.get("analogy"),
         "fallback": result.get("fallback", False),
     }
