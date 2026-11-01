@@ -1,4 +1,4 @@
-class AppError {
+class AppError implements Exception {
   final String code;
   final String message;
 
@@ -16,7 +16,14 @@ class AppError {
     'INTERRUPTED': 'Processing was interrupted. Tap retry.',
     'NOT_FOUND': 'That item no longer exists.',
     'INTERNAL': 'Something went wrong. Please try again.',
+    'NETWORK_ERROR':
+        "Can't reach Athena backend. Ensure your companion engine is running or set your Server URL in Settings.",
+    'BACKEND_DISCONNECTED':
+        'Athena companion backend unreachable. Please set your Server URL in Settings.',
   };
+
+  @override
+  String toString() => message.isNotEmpty ? message : getDisplayMessage(code);
 
   static String getDisplayMessage(String code, [String? fallback]) {
     return userMessages[code] ??

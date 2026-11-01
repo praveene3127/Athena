@@ -14,6 +14,7 @@ dependencies:
   go_router: ^18.1.1
   dio: ^5.4.3+1
   file_picker: ^8.1.7
+  cross_file: ^0.3.5
   url_launcher: ^6.3.0
   shared_preferences: ^2.2.3
   scrollable_positioned_list: ^0.3.8
@@ -23,6 +24,7 @@ dependencies:
   path: ^1.9.1
   crypto: ^3.0.7
   flutter_secure_storage: ^10.3.4
+  syncfusion_flutter_pdf: ^35.1.42
 
 dev_dependencies:
   flutter_test:
@@ -66,5 +68,3 @@ flutter:
           weight: 600
         - asset: assets/fonts/geist-700-normal.ttf
           weight: 700
-
-

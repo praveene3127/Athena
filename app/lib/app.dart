@@ -1,6 +1,5 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
-import 'package:athena/core/widgets/internet_access_gate.dart';
 import 'package:athena/core/theme/theme.dart';
 import 'package:athena/core/router.dart';
 
@@ -18,9 +17,6 @@ class AthenaApp extends ConsumerWidget {
       darkTheme: AppTheme.darkTheme,
       themeMode: themeMode,
       routerConfig: appRouter,
-      builder: (context, child) => InternetAccessGate(
-        child: child ?? const SizedBox.shrink(),
-      ),
     );
   }
 }

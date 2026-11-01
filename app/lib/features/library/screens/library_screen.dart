@@ -11,6 +11,7 @@ import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import 'package:file_picker/file_picker.dart';
+import 'package:cross_file/cross_file.dart';
 
 import 'package:go_router/go_router.dart';
 
@@ -40,7 +41,6 @@ import 'package:athena/core/widgets/athena_logo.dart';
 
 import 'package:athena/features/settings/widgets/byok_settings_sheet.dart';
 
-import 'package:athena/features/settings/screens/connection_setup_screen.dart';
 
 final apiClientProvider = Provider<ApiClient>((ref) => createAppApiClient());
 
@@ -883,211 +883,51 @@ class _LibraryScreenState extends ConsumerState<LibraryScreen>
   }
 
   Future<void> _pickAndUpload() async {
-    final result = await FilePicker.platform.pickFiles(
-      type: FileType.custom,
-      allowedExtensions: ['pdf', 'epub'],
-      withData: true,
-    );
+    try {
+      final result = await FilePicker.platform.pickFiles(
+        type: FileType.custom,
+        allowedExtensions: ['pdf', 'epub'],
+        withData: true,
+      );
 
-    if (result == null || result.files.isEmpty) return;
+      if (result == null || result.files.isEmpty) return;
 
-    final file = result.files.first;
+      final file = result.files.first;
 
-    Stream<List<int>>? fileStream;
+      List<int>? fileBytes = file.bytes;
+      final filePath = file.path;
 
-    int fileSize = file.size;
-
-    if (file.bytes != null) {
-      fileStream = Stream.value(file.bytes!);
-
-      fileSize = file.bytes!.length;
-    } else if (file.readStream != null) {
-      fileStream = file.readStream;
-
-      fileSize = file.size;
-    }
-
-    if (fileStream == null) {
-      if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(
-            content:
-                Text('Could not read the selected file. Please try again.'),
-            backgroundColor: Colors.redAccent,
-          ),
-        );
+      if (fileBytes == null && filePath != null && filePath.isNotEmpty && !kIsWeb) {
+        try {
+          final xf = XFile(filePath);
+          fileBytes = await xf.readAsBytes();
+        } catch (_) {}
       }
 
-      return;
-    }
+      if (fileBytes == null && (filePath == null || filePath.isEmpty)) {
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(
+              content:
+                  Text('Could not access the selected file. Please try again.'),
+              backgroundColor: Colors.redAccent,
+            ),
+          );
+        }
+        return;
+      }
 
-    setState(() => _uploading = true);
+      setState(() => _uploading = true);
 
-    try {
       final client = ref.read(apiClientProvider);
 
       final docId = await client.uploadDocument(
-        fileStream,
-        fileSize,
+        fileBytes != null ? Stream.value(fileBytes) : null,
+        fileBytes?.length ?? file.size,
         file.name,
+        filePath: filePath,
+        fileBytes: fileBytes,
       );
-
-      ref.invalidate(documentsProvider);
-
-      if (mounted) context.push('/processing/$docId');
-    } on AppError catch (e) {
-      if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(
-            content: Text(AppError.getDisplayMessage(e.code, e.message)),
-            backgroundColor: Colors.redAccent,
-          ),
-        );
-      }
-    } finally {
-      if (mounted) setState(() => _uploading = false);
-    }
-  }
-
-  Future<void> _showUrlImportDialog() async {
-    final controller = TextEditingController();
-
-    final isDark = Theme.of(context).brightness == Brightness.dark;
-
-    final url = await showDialog<String>(
-      context: context,
-      builder: (ctx) => Dialog(
-        backgroundColor: Colors.transparent,
-        insetPadding: const EdgeInsets.symmetric(horizontal: 20, vertical: 24),
-        child: Container(
-          width: 480,
-          padding: const EdgeInsets.all(20),
-          decoration: BoxDecoration(
-            color: AppTheme.bgOf(ctx),
-            borderRadius: BorderRadius.circular(12),
-            border: Border.all(color: AppTheme.borderOf(ctx)),
-          ),
-          child: SingleChildScrollView(
-            child: Column(
-              mainAxisSize: MainAxisSize.min,
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Text(
-                  'Import from URL',
-                  style: TextStyle(
-                    fontFamily: AppTheme.fontDisplay,
-                    fontSize: 20,
-                    fontWeight: FontWeight.bold,
-                    color: AppTheme.textPrimaryOf(ctx),
-                  ),
-                ),
-                const SizedBox(height: 8),
-                Text(
-                  'Enter direct public URL to a PDF or EPUB document.',
-                  style: TextStyle(
-                    fontSize: 13,
-                    color: AppTheme.textMutedOf(ctx),
-                  ),
-                ),
-                const SizedBox(height: 16),
-                TextField(
-                  controller: controller,
-                  autofocus: true,
-                  keyboardType: TextInputType.url,
-                  style: TextStyle(
-                    fontSize: 14,
-                    color: AppTheme.textPrimaryOf(ctx),
-                  ),
-                  decoration: InputDecoration(
-                    hintText: 'https://example.com/book.pdf',
-                    hintStyle: TextStyle(
-                      fontSize: 13,
-                      color: isDark
-                          ? AppTheme.darkTextMuted
-                          : const Color(0xFF999999),
-                    ),
-                    filled: true,
-                    fillColor: AppTheme.surfaceOf(ctx),
-                    contentPadding:
-                        const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
-                    suffixIcon: IconButton(
-                      icon: const Icon(Icons.content_paste_rounded, size: 18),
-                      tooltip: 'Paste from clipboard',
-                      onPressed: () async {
-                        final data = await Clipboard.getData(Clipboard.kTextPlain);
-                        if (data?.text != null && data!.text!.trim().isNotEmpty) {
-                          controller.text = data.text!.trim();
-                        }
-                      },
-                    ),
-                    border: OutlineInputBorder(
-                      borderRadius: BorderRadius.circular(6),
-                      borderSide: BorderSide(color: AppTheme.borderOf(ctx)),
-                    ),
-                    enabledBorder: OutlineInputBorder(
-                      borderRadius: BorderRadius.circular(6),
-                      borderSide: BorderSide(color: AppTheme.borderOf(ctx)),
-                    ),
-                    focusedBorder: OutlineInputBorder(
-                      borderRadius: BorderRadius.circular(6),
-                      borderSide:
-                          const BorderSide(color: Color(0xFF2D6A4F), width: 1.5),
-                    ),
-                  ),
-                ),
-                const SizedBox(height: 20),
-                Row(
-                  mainAxisAlignment: MainAxisAlignment.end,
-                  children: [
-                    TextButton(
-                      onPressed: () => Navigator.of(ctx).pop(null),
-                      style: TextButton.styleFrom(
-                        foregroundColor: AppTheme.textMutedOf(ctx),
-                      ),
-                      child: const Text('Cancel'),
-                    ),
-                    const SizedBox(width: 8),
-                    ElevatedButton(
-                      onPressed: () {
-                        final text = controller.text.trim();
-
-                        if (text.isNotEmpty) {
-                          Navigator.of(ctx).pop(text);
-                        }
-                      },
-                      style: ElevatedButton.styleFrom(
-                        backgroundColor: const Color(0xFF2D6A4F),
-                        foregroundColor: Colors.white,
-                        elevation: 0,
-                        shape: RoundedRectangleBorder(
-                          borderRadius: BorderRadius.circular(6),
-                        ),
-                        padding: const EdgeInsets.symmetric(
-                            horizontal: 16, vertical: 10),
-                      ),
-                      child: const Text('Import Book'),
-                    ),
-                  ],
-                ),
-              ],
-            ),
-          ),
-        ),
-      ),
-    );
-
-    if (url != null && url.isNotEmpty) {
-      await _importFromUrl(url);
-    }
-  }
-
-  Future<void> _importFromUrl(String url) async {
-    setState(() => _uploading = true);
-
-    try {
-      final client = ref.read(apiClientProvider);
-
-      final docId = await client.uploadDocumentFromUrl(url);
 
       ref.invalidate(documentsProvider);
 
@@ -1105,7 +945,7 @@ class _LibraryScreenState extends ConsumerState<LibraryScreen>
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(
-            content: Text('Failed to import: $e'),
+            content: Text('Could not open book: $e'),
             backgroundColor: Colors.redAccent,
           ),
         );
@@ -1114,6 +954,7 @@ class _LibraryScreenState extends ConsumerState<LibraryScreen>
       if (mounted) setState(() => _uploading = false);
     }
   }
+
 
 
   Future<void> _deleteDocument(Document doc) async {
@@ -1733,13 +1574,6 @@ class _LibraryScreenState extends ConsumerState<LibraryScreen>
                               isLoading: _uploading,
                               onPressed: _uploading ? null : _pickAndUpload,
                             ),
-                            _EditorialPillButton(
-                              label: 'PASTE URL',
-                              icon: Icons.link_rounded,
-                              isLoading: false,
-                              onPressed:
-                                  _uploading ? null : _showUrlImportDialog,
-                            ),
 
                           ],
                         ),
@@ -1937,9 +1771,7 @@ class _LibraryScreenState extends ConsumerState<LibraryScreen>
                         ),
                       ),
                     ),
-                    error: (err, _) => _ConnectionCard(
-                      onRetry: () => ref.invalidate(documentsProvider),
-                    ),
+                    error: (err, _) => _buildMinimalistDropZone(),
                   ),
                 ],
               ),
@@ -2020,12 +1852,6 @@ class _LibraryScreenState extends ConsumerState<LibraryScreen>
                   icon: Icons.upload_file_rounded,
                   isLoading: _uploading,
                   onPressed: _uploading ? null : _pickAndUpload,
-                ),
-                _EditorialPillButton(
-                  label: 'Paste URL',
-                  icon: Icons.link_rounded,
-                  isLoading: false,
-                  onPressed: _uploading ? null : _showUrlImportDialog,
                 ),
 
               ],
@@ -2203,120 +2029,6 @@ String _humanizeTitle(String raw) {
   return title;
 }
 
-class _ConnectionCard extends StatelessWidget {
-  final VoidCallback onRetry;
-
-  const _ConnectionCard({required this.onRetry});
-
-  @override
-  Widget build(BuildContext context) {
-    final isDark = Theme.of(context).brightness == Brightness.dark;
-
-    return Container(
-      padding: const EdgeInsets.all(4),
-      decoration: BoxDecoration(
-        color: isDark ? const Color(0xFF181818) : const Color(0xFFF7F6F2),
-        borderRadius: BorderRadius.circular(20),
-        border: Border.all(
-            color: isDark ? const Color(0xFF282828) : const Color(0xFFE5E7DC)),
-      ),
-      child: Container(
-        padding: const EdgeInsets.all(18),
-        decoration: BoxDecoration(
-          color: isDark ? const Color(0xFF202020) : Colors.white,
-          borderRadius: BorderRadius.circular(16),
-        ),
-        child: Row(
-          children: [
-            const AthenaAnimatedMascot(
-              size: 38,
-              isPulsing: true,
-              style: AthenaTileStyle.blackPrimary,
-            ),
-            const SizedBox(width: 14),
-            Expanded(
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Text(
-                    "Athena Daemon Offline",
-                    style: TextStyle(
-                      fontFamily: AppTheme.fontUI,
-                      color: isDark
-                          ? const Color(0xFFF3F3F3)
-                          : AppTheme.textPrimary,
-                      fontWeight: FontWeight.w600,
-                      fontSize: 13,
-                    ),
-                  ),
-                  const SizedBox(height: 2),
-                  Text(
-                    "Ensure backend daemon is running",
-                    style: TextStyle(
-                      fontFamily: AppTheme.fontUI,
-                      color:
-                          isDark ? const Color(0xFF9E9E9E) : AppTheme.textMuted,
-                      fontSize: 12,
-                    ),
-                  ),
-                ],
-              ),
-            ),
-            Row(
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                OutlinedButton(
-                  onPressed: () async {
-                    final nav = Navigator.of(context);
-
-                    final changed = await nav.push<bool>(
-                      MaterialPageRoute<bool>(
-                        builder: (_) => const ConnectionSetupScreen(),
-                      ),
-                    );
-
-                    if (changed == true) onRetry();
-                  },
-                  style: OutlinedButton.styleFrom(
-                    foregroundColor: isDark ? Colors.white : AppTheme.ink,
-                    side: BorderSide(
-                      color: isDark ? const Color(0xFF444444) : AppTheme.border,
-                    ),
-                    minimumSize: const Size(58, 34),
-                    shape: RoundedRectangleBorder(
-                      borderRadius: BorderRadius.circular(18),
-                    ),
-                    padding: const EdgeInsets.symmetric(horizontal: 10),
-                  ),
-                  child: const Text('Setup',
-                      style:
-                          TextStyle(fontSize: 11, fontWeight: FontWeight.w600)),
-                ),
-                const SizedBox(width: 8),
-                ElevatedButton(
-                  onPressed: onRetry,
-                  style: ElevatedButton.styleFrom(
-                    backgroundColor: isDark ? Colors.white : AppTheme.ink,
-                    foregroundColor:
-                        isDark ? const Color(0xFF141714) : Colors.white,
-                    minimumSize: const Size(58, 34),
-                    shape: RoundedRectangleBorder(
-                      borderRadius: BorderRadius.circular(18),
-                    ),
-                    padding: const EdgeInsets.symmetric(horizontal: 10),
-                  ),
-                  child: const Text('Retry',
-                      style:
-                          TextStyle(fontSize: 11, fontWeight: FontWeight.w600)),
-                ),
-              ],
-            ),
-          ],
-        ),
-      ),
-    );
-  }
-}
 
 class _DocumentTile extends StatefulWidget {
   final Document doc;

@@ -1,10 +1,8 @@
 import 'package:dio/dio.dart';
-import 'package:flutter/foundation.dart' show kIsWeb, defaultTargetPlatform;
+import 'package:athena/core/config/config.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:shared_preferences/shared_preferences.dart';
-import 'package:athena/core/config/config.dart';
-import 'package:athena/core/config/update_service.dart';
 import 'package:athena/core/theme/theme.dart';
 import 'package:athena/models/ai_provider.dart';
 import 'package:athena/core/api/api_client.dart';
@@ -47,7 +45,12 @@ class BYOKSettingsSheet extends StatefulWidget {
 
 class _BYOKSettingsSheetState extends State<BYOKSettingsSheet> {
   late final ApiClient _api;
-  int _activeSegment = 0; // 0 = AI Key, 1 = Server Host
+  // Server Host State (Optional Collapsible)
+  final _serverUrlController = TextEditingController();
+  bool _testingServer = false;
+  String? _serverTestMessage;
+  bool? _serverTestOk;
+
 
   bool _loading = true;
   bool _saving = false;
@@ -75,81 +78,12 @@ class _BYOKSettingsSheetState extends State<BYOKSettingsSheet> {
   String? _fallbackTestMessage;
   bool? _fallbackTestOk;
 
-  // Server Host State
-  final _serverUrlController = TextEditingController();
-  bool _testingServer = false;
-  String? _serverTestMessage;
-  bool? _serverTestOk;
 
-  // App Updates State
-  bool _checkingUpdates = false;
-  UpdateInfo? _settingsUpdateInfo;
-  String? _updateStatusMessage;
-
-  UpdateInfo get _fallbackSettingsUpdateInfo => UpdateInfo(
-        updateAvailable: false,
-        currentVersion: kAthenaAppVersion,
-        latestVersion: kAthenaAppVersion,
-        releaseNotes:
-            'Lossless Non-Fiction Reader with Grounded Edge AI and Gemini 2.5 Flash default.',
-        publishedAt: '2026-11-01',
-        android: const UpdatePlatformArtifact(
-          filename: 'athena-release.apk',
-          downloadUrl: '/api/download/android',
-          githubReleaseUrl:
-              'https://github.com/praveene3127/Athena/raw/main/releases/athena-release.apk',
-        ),
-        ios: const UpdatePlatformArtifact(
-          filename: 'athena-ios-release.ipa',
-          downloadUrl: '/api/download/ios',
-          githubReleaseUrl:
-              'https://github.com/praveene3127/Athena/raw/main/releases/athena-ios-release.ipa',
-        ),
-      );
-
-  Future<void> _checkSettingsUpdates() async {
-    setState(() {
-      _checkingUpdates = true;
-      _updateStatusMessage = null;
-    });
-
-    try {
-      final info = await UpdateService.checkForUpdates(
-        clientVersion: kAthenaAppVersion,
-      );
-      if (!mounted) return;
-      if (info != null) {
-        setState(() {
-          _settingsUpdateInfo = info;
-          _checkingUpdates = false;
-          _updateStatusMessage = info.updateAvailable
-              ? 'New version available: v${info.latestVersion}'
-              : 'Athena is up to date (v$kAthenaAppVersion).';
-        });
-      } else {
-        setState(() {
-          _settingsUpdateInfo = _fallbackSettingsUpdateInfo;
-          _checkingUpdates = false;
-          _updateStatusMessage =
-              'Could not connect to update feed. Current version: v$kAthenaAppVersion.';
-        });
-      }
-    } catch (_) {
-      if (!mounted) return;
-      setState(() {
-        _settingsUpdateInfo = _fallbackSettingsUpdateInfo;
-        _checkingUpdates = false;
-        _updateStatusMessage =
-            'Running $kAthenaAppVersion (could not query remote update feed).';
-      });
-    }
-  }
 
   @override
   void initState() {
     super.initState();
     _api = widget.apiClient ?? ApiClient();
-    _serverUrlController.text = AppConfig.apiBaseUrl;
     _loadCurrentConfig();
   }
 
@@ -189,6 +123,7 @@ class _BYOKSettingsSheetState extends State<BYOKSettingsSheet> {
           prefs.getString('athena_ai_fallback_base_url');
 
       setState(() {
+        _serverUrlController.text = AppConfig.runtimeBaseUrl ?? '';
         _primaryProvider = config.primaryProvider.isNotEmpty
             ? config.primaryProvider
             : (savedLocalPrimaryProvider ?? 'gemini');
@@ -352,62 +287,6 @@ class _BYOKSettingsSheetState extends State<BYOKSettingsSheet> {
     }
   }
 
-  Future<void> _testServerConnection() async {
-    final raw = _serverUrlController.text.trim();
-    final sanitized = raw.isEmpty ? AppConfig.apiBaseUrl : raw;
-
-    setState(() {
-      _testingServer = true;
-      _serverTestMessage = null;
-      _serverTestOk = null;
-    });
-
-    final sw = Stopwatch()..start();
-    try {
-      final dio = Dio(
-        BaseOptions(
-          connectTimeout: const Duration(seconds: 4),
-          receiveTimeout: const Duration(seconds: 4),
-          headers: {'Accept': 'application/json'},
-        ),
-      );
-
-      final targetUrl = sanitized.endsWith('/')
-          ? '${sanitized}api/health'
-          : '$sanitized/api/health';
-
-      final response = await dio.get(targetUrl);
-      sw.stop();
-
-      if (!mounted) return;
-
-      if (response.statusCode == 200) {
-        setState(() {
-          _testingServer = false;
-          _serverTestOk = true;
-          _serverTestMessage =
-              'Connected (${sw.elapsedMilliseconds}ms) — Server live at $sanitized';
-        });
-        widget.onConfigSaved?.call();
-      } else {
-        setState(() {
-          _testingServer = false;
-          _serverTestOk = false;
-          _serverTestMessage =
-              'Server responded with HTTP ${response.statusCode}. Expected 200 OK.';
-        });
-      }
-    } catch (e) {
-      sw.stop();
-      if (!mounted) return;
-      setState(() {
-        _testingServer = false;
-        _serverTestOk = false;
-        _serverTestMessage =
-            "Connection failed. Ensure Athena is running and reachable on your phone's network.";
-      });
-    }
-  }
 
   Future<void> _persistToLocalStorageAndBackend() async {
     final prefs = await SharedPreferences.getInstance();
@@ -476,10 +355,11 @@ class _BYOKSettingsSheetState extends State<BYOKSettingsSheet> {
   Future<void> _saveConfig() async {
     setState(() => _saving = true);
     try {
-      final serverUrl = _serverUrlController.text.trim();
-      if (serverUrl.isNotEmpty) {
-        await AppConfig.setBaseUrl(serverUrl);
+      final sUrl = _serverUrlController.text.trim();
+      if (sUrl.isNotEmpty) {
+        await AppConfig.setBaseUrl(sUrl);
       }
+
 
       await _persistToLocalStorageAndBackend();
 
@@ -565,7 +445,6 @@ class _BYOKSettingsSheetState extends State<BYOKSettingsSheet> {
                     height: 1,
                     color: isDark ? const Color(0xFF282828) : AppTheme.hairline,
                   ),
-                  _buildSegmentedToggle(isDark),
                   Flexible(
                     child: SingleChildScrollView(
                       keyboardDismissBehavior:
@@ -576,9 +455,7 @@ class _BYOKSettingsSheetState extends State<BYOKSettingsSheet> {
                         16,
                         bottomInset > 0 ? bottomInset + 16 : 24,
                       ),
-                      child: _activeSegment == 0
-                          ? _buildAIKeyTab(isDark)
-                          : _buildServerTab(isDark),
+                      child: _buildAIKeyTab(isDark),
                     ),
                   ),
                 ],
@@ -601,7 +478,7 @@ class _BYOKSettingsSheetState extends State<BYOKSettingsSheet> {
           const SizedBox(width: 10),
           Expanded(
             child: Text(
-              'AI & Server Settings',
+              'AI Configuration',
               style: TextStyle(
                 fontFamily: AppTheme.fontDisplay,
                 fontSize: 16,
@@ -621,95 +498,6 @@ class _BYOKSettingsSheetState extends State<BYOKSettingsSheet> {
             constraints: const BoxConstraints(minWidth: 32, minHeight: 32),
           ),
         ],
-      ),
-    );
-  }
-
-  Widget _buildSegmentedToggle(bool isDark) {
-    return Padding(
-      padding: const EdgeInsets.fromLTRB(16, 6, 16, 8),
-      child: Container(
-        height: 38,
-        padding: const EdgeInsets.all(3),
-        decoration: BoxDecoration(
-          color: isDark ? const Color(0xFF222222) : const Color(0xFFEEEEEE),
-          borderRadius: BorderRadius.circular(8),
-        ),
-        child: Row(
-          children: [
-            Expanded(
-              child: _buildSegmentButton(
-                index: 0,
-                label: 'AI Key',
-                icon: Icons.key_rounded,
-                isDark: isDark,
-              ),
-            ),
-            const SizedBox(width: 4),
-            Expanded(
-              child: _buildSegmentButton(
-                index: 1,
-                label: 'Server Host',
-                icon: Icons.dns_rounded,
-                isDark: isDark,
-              ),
-            ),
-          ],
-        ),
-      ),
-    );
-  }
-
-  Widget _buildSegmentButton({
-    required int index,
-    required String label,
-    required IconData icon,
-    required bool isDark,
-  }) {
-    final isSelected = _activeSegment == index;
-    return GestureDetector(
-      onTap: () => setState(() => _activeSegment = index),
-      behavior: HitTestBehavior.opaque,
-      child: Container(
-        decoration: BoxDecoration(
-          color: isSelected
-              ? (isDark ? const Color(0xFF383838) : Colors.white)
-              : Colors.transparent,
-          borderRadius: BorderRadius.circular(6),
-          boxShadow: isSelected
-              ? [
-                  BoxShadow(
-                    color: Colors.black.withValues(alpha: 0.08),
-                    blurRadius: 4,
-                    offset: const Offset(0, 1),
-                  ),
-                ]
-              : null,
-        ),
-        child: Row(
-          mainAxisAlignment: MainAxisAlignment.center,
-          children: [
-            Icon(
-              icon,
-              size: 15,
-              color: isSelected
-                  ? (isDark ? Colors.white : AppTheme.ink)
-                  : (isDark ? AppTheme.darkTextMuted : AppTheme.textMuted),
-            ),
-            const SizedBox(width: 6),
-            Text(
-              label,
-              style: TextStyle(
-                fontFamily: AppTheme.fontUI,
-                fontSize: 12,
-                fontWeight: isSelected ? FontWeight.w700 : FontWeight.w500,
-                color: isSelected
-                    ? (isDark ? Colors.white : AppTheme.ink)
-                    : (isDark ? AppTheme.darkTextMuted : AppTheme.textMuted),
-              ),
-            ),
-          ],
-        ),
       ),
     );
   }
@@ -788,6 +576,8 @@ class _BYOKSettingsSheetState extends State<BYOKSettingsSheet> {
         const SizedBox(height: 16),
         _buildFailoverAccordion(isDark),
         const SizedBox(height: 20),
+        _buildServerAccordion(isDark),
+        const SizedBox(height: 18),
         _buildActionButtons(isDark),
       ],
     );
@@ -1329,449 +1119,195 @@ class _BYOKSettingsSheetState extends State<BYOKSettingsSheet> {
     );
   }
 
-  Widget _buildServerTab(bool isDark) {
-    final currentResolved = AppConfig.apiBaseUrl;
 
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.start,
-      children: [
-        _buildSectionLabel('BACKEND SERVER URL'),
-        const SizedBox(height: 6),
-        Text(
-          kIsWeb
-              ? 'Web defaults to this page origin ($currentResolved). Change only if backend is on a separate machine.'
-              : 'Native APK/IPA: laptop Wi-Fi IP (http://192.168.x.x:8000) or Cloudflare Tunnel URL.',
-          style: TextStyle(
-            fontFamily: AppTheme.fontUI,
-            fontSize: 12,
-            height: 1.4,
-            color: isDark ? AppTheme.darkTextMuted : AppTheme.textMuted,
-          ),
-        ),
-        const SizedBox(height: 12),
-        Container(
-          decoration: BoxDecoration(
-            color: isDark ? const Color(0xFF222222) : AppTheme.surfaceWarm,
-            borderRadius: BorderRadius.circular(6),
-            border: Border.all(
-              color: isDark ? const Color(0xFF333333) : AppTheme.border,
-            ),
-          ),
-          child: TextField(
-            controller: _serverUrlController,
-            keyboardType: TextInputType.url,
-            autocorrect: false,
-            style: TextStyle(
-              fontFamily: 'monospace',
-              fontSize: 13,
-              color: isDark ? Colors.white : AppTheme.ink,
-            ),
-            decoration: InputDecoration(
-              hintText: 'http://192.168.1.5:8000',
-              hintStyle: TextStyle(
-                fontFamily: 'monospace',
-                fontSize: 13,
-                color: isDark ? AppTheme.darkTextMuted : AppTheme.textMuted,
-              ),
-              border: InputBorder.none,
-              contentPadding:
-                  const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
-              suffixIcon: Row(
-                mainAxisSize: MainAxisSize.min,
-                children: [
-                  IconButton(
-                    icon: const Icon(Icons.content_paste_rounded, size: 18),
-                    tooltip: 'Paste from clipboard',
-                    onPressed: () async {
-                      final data =
-                          await Clipboard.getData(Clipboard.kTextPlain);
-                      if (data?.text != null &&
-                          data!.text!.trim().isNotEmpty) {
-                        _serverUrlController.text = data.text!.trim();
-                      }
-                    },
-                  ),
-                  IconButton(
-                    icon: const Icon(Icons.clear, size: 18),
-                    onPressed: () => _serverUrlController.clear(),
-                  ),
-                ],
-              ),
-            ),
-          ),
-        ),
-        const SizedBox(height: 12),
-        _buildSectionLabel('QUICK PRESETS'),
-        const SizedBox(height: 8),
-        Wrap(
-          spacing: 8,
-          runSpacing: 8,
-          children: [
-            if (kIsWeb)
-              _buildPresetChip('Web Origin', Uri.base.origin, isDark)
-            else if (defaultTargetPlatform == TargetPlatform.android ||
-                defaultTargetPlatform == TargetPlatform.iOS) ...[
-              _buildPresetChip('Wi-Fi (:8000)', 'http://192.168.1.', isDark),
-              _buildPresetChip(
-                  'Android Emulator', 'http://10.0.2.2:8000', isDark),
-              _buildPresetChip(
-                  'USB Tether (:8000)', 'http://127.0.0.1:8000', isDark),
-            ] else ...[
-              _buildPresetChip(
-                  'Localhost (:8000)', 'http://127.0.0.1:8000', isDark),
-              _buildPresetChip(
-                  'Alt Port (:8080)', 'http://127.0.0.1:8080', isDark),
-            ],
-          ],
-        ),
-        const SizedBox(height: 16),
-        Row(
-          children: [
-            Expanded(
-              child: OutlinedButton.icon(
-                onPressed: _testingServer ? null : _testServerConnection,
-                icon: _testingServer
-                    ? SizedBox(
-                        width: 14,
-                        height: 14,
-                        child: CircularProgressIndicator(
-                          strokeWidth: 2,
-                          color: isDark ? Colors.white : AppTheme.ink,
-                        ),
-                      )
-                    : const Icon(Icons.sensors_rounded, size: 16),
-                label: Text(_testingServer ? 'Pinging...' : 'Test Connection'),
-                style: OutlinedButton.styleFrom(
-                  foregroundColor: isDark ? Colors.white : AppTheme.ink,
-                  side: BorderSide(
-                    color: isDark ? const Color(0xFF444444) : AppTheme.border,
-                  ),
-                  shape: RoundedRectangleBorder(
-                    borderRadius: BorderRadius.circular(6),
-                  ),
-                  padding:
-                      const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
-                ),
-              ),
-            ),
-          ],
-        ),
-        if (_serverTestMessage != null) ...[
-          const SizedBox(height: 10),
-          Container(
-            padding: const EdgeInsets.all(10),
-            decoration: BoxDecoration(
-              color: _serverTestOk == true
-                  ? const Color(0x15007A3D)
-                  : const Color(0x15C84B31),
-              borderRadius: BorderRadius.circular(6),
-              border: Border.all(
-                color: _serverTestOk == true
-                    ? const Color(0xFF007A3D)
-                    : const Color(0xFFC84B31),
-              ),
-            ),
-            child: Row(
-              children: [
-                if (_serverTestOk == true)
-                  const AthenaAvatar(
-                    expression: AthenaExpression.happy,
-                    size: 20,
-                  )
-                else
-                  const AthenaAvatar(
-                    expression: AthenaExpression.surprised,
-                    size: 20,
-                  ),
-                const SizedBox(width: 8),
-                Expanded(
-                  child: Text(
-                    _serverTestMessage!,
-                    style: TextStyle(
-                      fontFamily: AppTheme.fontUI,
-                      fontSize: 12,
-                      fontWeight: FontWeight.w600,
-                      color: _serverTestOk == true
-                          ? const Color(0xFF007A3D)
-                          : const Color(0xFFC84B31),
-                    ),
-                  ),
-                ),
-              ],
-            ),
-          ),
-        ],
-        const SizedBox(height: 16),
-        _buildAppVersionAndDownloadsCard(isDark),
-        const SizedBox(height: 16),
-        _buildMobileGuideCard(isDark),
-      ],
-    );
-  }
 
-  Widget _buildPresetChip(String label, String value, bool isDark) {
-    return ActionChip(
-      label: Text(
-        label,
-        style: TextStyle(
-          fontFamily: AppTheme.fontUI,
-          fontSize: 11,
-          color: isDark ? Colors.white70 : AppTheme.ink,
+  
+  Future<void> _testServerConnection() async {
+    final raw = _serverUrlController.text.trim();
+    if (raw.isEmpty) return;
+
+    setState(() {
+      _testingServer = true;
+      _serverTestMessage = null;
+      _serverTestOk = null;
+    });
+
+    try {
+      final sanitized = raw.replaceAll(RegExp(r'/+$'), '');
+      final dioClient = Dio(
+        BaseOptions(
+          connectTimeout: const Duration(seconds: 3),
+          receiveTimeout: const Duration(seconds: 3),
         ),
-      ),
-      backgroundColor: isDark ? const Color(0xFF282828) : AppTheme.surfaceWarm,
-      shape: RoundedRectangleBorder(
-        borderRadius: BorderRadius.circular(6),
-        side: BorderSide(
-          color: isDark ? const Color(0xFF383838) : AppTheme.border,
-        ),
-      ),
-      onPressed: () {
+      );
+      final res = await dioClient.get('$sanitized/api/health');
+      if (res.statusCode == 200) {
         setState(() {
-          _serverUrlController.text = value;
-          _serverTestMessage = null;
-          _serverTestOk = null;
+          _testingServer = false;
+          _serverTestOk = true;
+          _serverTestMessage = 'Server link active (HTTP 200 OK)';
         });
-      },
-    );
+      } else {
+        setState(() {
+          _testingServer = false;
+          _serverTestOk = false;
+          _serverTestMessage = 'Server responded with HTTP ${res.statusCode}';
+        });
+      }
+    } catch (e) {
+      setState(() {
+        _testingServer = false;
+        _serverTestOk = false;
+        _serverTestMessage = 'Cannot connect: $e';
+      });
+    }
   }
 
-  Widget _buildAppVersionAndDownloadsCard(bool isDark) {
-    final currentPlatform = detectDevicePlatform();
-    final effectiveInfo = _settingsUpdateInfo ?? _fallbackSettingsUpdateInfo;
-
+  Widget _buildServerAccordion(bool isDark) {
     return Container(
-      padding: const EdgeInsets.all(14),
+      margin: const EdgeInsets.only(top: 14),
       decoration: BoxDecoration(
-        color: isDark ? const Color(0xFF1F1F1F) : const Color(0xFFF9F9F7),
-        borderRadius: BorderRadius.circular(6),
+        color: isDark ? const Color(0xFF1E1E1E) : const Color(0xFFF9F9F7),
+        borderRadius: BorderRadius.circular(8),
         border: Border.all(
-          color: isDark ? const Color(0xFF2E2E2E) : AppTheme.border,
+          color: isDark ? const Color(0xFF2C2C2C) : AppTheme.border,
         ),
       ),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Row(
-            children: [
-              Icon(
-                Icons.system_update_rounded,
-                size: 16,
-                color: isDark ? Colors.white70 : AppTheme.ink,
-              ),
-              const SizedBox(width: 8),
-              Expanded(
-                child: Text(
-                  'Athena App Version: v$kAthenaAppVersion',
-                  style: TextStyle(
-                    fontFamily: AppTheme.fontUI,
-                    fontSize: 12.5,
-                    fontWeight: FontWeight.w700,
-                    color: isDark ? Colors.white : AppTheme.ink,
-                  ),
-                ),
-              ),
-            ],
+      child: Theme(
+        data: Theme.of(context).copyWith(dividerColor: Colors.transparent),
+        child: ExpansionTile(
+          tilePadding: const EdgeInsets.symmetric(horizontal: 14, vertical: 0),
+          leading: Icon(
+            Icons.dns_rounded,
+            size: 18,
+            color: isDark ? Colors.white70 : AppTheme.ink,
           ),
-          const SizedBox(height: 10),
-          SizedBox(
-            width: double.infinity,
-            child: OutlinedButton.icon(
-              onPressed: _checkingUpdates ? null : _checkSettingsUpdates,
-              icon: _checkingUpdates
-                  ? const SizedBox(
-                      width: 12,
-                      height: 12,
-                      child: CircularProgressIndicator(strokeWidth: 1.5),
-                    )
-                  : const Icon(Icons.sync_rounded, size: 14),
-              label: Text(
-                _checkingUpdates ? 'Checking...' : 'Check for Updates',
-                style: const TextStyle(fontSize: 11),
-              ),
-              style: OutlinedButton.styleFrom(
-                foregroundColor: isDark ? Colors.white : AppTheme.ink,
-                shape: RoundedRectangleBorder(
-                  borderRadius: BorderRadius.circular(6),
-                ),
-                padding: const EdgeInsets.symmetric(vertical: 10),
-              ),
-            ),
-          ),
-          if (_updateStatusMessage != null) ...[
-            const SizedBox(height: 10),
-            Container(
-              width: double.infinity,
-              padding: const EdgeInsets.all(10),
-              decoration: BoxDecoration(
-                color: _settingsUpdateInfo?.updateAvailable == true
-                    ? const Color(0x15C84B31)
-                    : (isDark
-                        ? const Color(0xFF282828)
-                        : const Color(0xFFEAE7E0)),
-                borderRadius: BorderRadius.circular(6),
-                border: Border.all(
-                  color: _settingsUpdateInfo?.updateAvailable == true
-                      ? const Color(0xFFC84B31)
-                      : (isDark
-                          ? const Color(0xFF383838)
-                          : const Color(0xFFDDD8CE)),
-                ),
-              ),
-              child: Text(
-                _updateStatusMessage!,
-                style: TextStyle(
-                  fontFamily: AppTheme.fontUI,
-                  fontSize: 11.5,
-                  fontWeight: FontWeight.w600,
-                  color: _settingsUpdateInfo?.updateAvailable == true
-                      ? const Color(0xFFC84B31)
-                      : (isDark ? Colors.white70 : AppTheme.ink),
-                ),
-              ),
-            ),
-          ],
-          const SizedBox(height: 14),
-          _buildSectionLabel('OFFLINE BINARY DOWNLOADS'),
-          const SizedBox(height: 8),
-          Row(
-            children: [
-              Expanded(
-                child: OutlinedButton.icon(
-                  onPressed: () {
-                    UpdateService.downloadPlatformUpdate(
-                      updateInfo: effectiveInfo,
-                      platform: 'android',
-                    );
-                  },
-                  icon: const Icon(Icons.android_rounded, size: 15),
-                  label: const Text(
-                    'Android (.APK)',
-                    style: TextStyle(fontSize: 11.5),
-                  ),
-                  style: OutlinedButton.styleFrom(
-                    foregroundColor: isDark ? Colors.white : AppTheme.ink,
-                    side: BorderSide(
-                      color: isDark
-                          ? const Color(0xFF444444)
-                          : const Color(0xFFCCCCCC),
-                    ),
-                    shape: RoundedRectangleBorder(
-                      borderRadius: BorderRadius.circular(6),
-                    ),
-                    padding: const EdgeInsets.symmetric(vertical: 12),
-                  ),
-                ),
-              ),
-              const SizedBox(width: 8),
-              Expanded(
-                child: OutlinedButton.icon(
-                  onPressed: () {
-                    UpdateService.downloadPlatformUpdate(
-                      updateInfo: effectiveInfo,
-                      platform: 'ios',
-                    );
-                  },
-                  icon: const Icon(Icons.apple_rounded, size: 15),
-                  label: const Text(
-                    'iOS (.IPA)',
-                    style: TextStyle(fontSize: 11.5),
-                  ),
-                  style: OutlinedButton.styleFrom(
-                    foregroundColor: isDark ? Colors.white : AppTheme.ink,
-                    side: BorderSide(
-                      color: isDark
-                          ? const Color(0xFF444444)
-                          : const Color(0xFFCCCCCC),
-                    ),
-                    shape: RoundedRectangleBorder(
-                      borderRadius: BorderRadius.circular(6),
-                    ),
-                    padding: const EdgeInsets.symmetric(vertical: 12),
-                  ),
-                ),
-              ),
-            ],
-          ),
-          if (currentPlatform == 'ios') ...[
-            const SizedBox(height: 8),
-            SizedBox(
-              width: double.infinity,
-              child: OutlinedButton.icon(
-                onPressed: () {
-                  UpdateService.downloadPlatformUpdate(
-                    updateInfo: effectiveInfo,
-                    platform: 'ios',
-                    useAltStore: true,
-                  );
-                },
-                icon: const Icon(Icons.install_mobile_rounded, size: 15),
-                label: const Text(
-                  'Open in AltStore / SideStore (1-Tap Install)',
-                  style: TextStyle(fontSize: 11, fontWeight: FontWeight.w600),
-                ),
-                style: OutlinedButton.styleFrom(
-                  foregroundColor: const Color(0xFFC84B31),
-                  side: const BorderSide(color: Color(0xFFC84B31)),
-                  shape: RoundedRectangleBorder(
-                    borderRadius: BorderRadius.circular(6),
-                  ),
-                  padding: const EdgeInsets.symmetric(vertical: 10),
-                ),
-              ),
-            ),
-          ],
-        ],
-      ),
-    );
-  }
-
-  Widget _buildMobileGuideCard(bool isDark) {
-    return Container(
-      padding: const EdgeInsets.all(14),
-      decoration: BoxDecoration(
-        color: isDark ? const Color(0xFF1F1F1F) : const Color(0xFFF9F9F7),
-        borderRadius: BorderRadius.circular(6),
-        border: Border.all(
-          color: isDark ? const Color(0xFF2E2E2E) : AppTheme.border,
-        ),
-      ),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Row(
-            children: [
-              Icon(
-                Icons.phone_iphone_rounded,
-                size: 16,
-                color: isDark ? Colors.white70 : AppTheme.ink,
-              ),
-              const SizedBox(width: 8),
-              Text(
-                'Connecting your phone to Athena',
-                style: TextStyle(
-                  fontFamily: AppTheme.fontUI,
-                  fontSize: 12,
-                  fontWeight: FontWeight.w700,
-                  color: isDark ? Colors.white : AppTheme.ink,
-                ),
-              ),
-            ],
-          ),
-          const SizedBox(height: 8),
-          Text(
-            '1. Ensure phone & Windows laptop are on the same Wi-Fi.\n'
-            '2. Run "ipconfig" in PowerShell to find your IPv4 (e.g. 192.168.1.15).\n'
-            '3. Set Server URL to http://<your-ipv4>:8000 and tap "Test Connection".\n'
-            '4. Alternatively, use Cloudflare Tunnel (https://xxx.trycloudflare.com) to read anywhere over mobile 5G.',
+          title: Text(
+            'Optional: Companion Server URL',
             style: TextStyle(
               fontFamily: AppTheme.fontUI,
-              fontSize: 11.5,
-              height: 1.45,
+              fontSize: 13,
+              fontWeight: FontWeight.w600,
+              color: isDark ? Colors.white : AppTheme.ink,
+            ),
+          ),
+          subtitle: Text(
+            'Connect phone to laptop daemon on Wi-Fi',
+            style: TextStyle(
+              fontFamily: AppTheme.fontUI,
+              fontSize: 11,
               color: isDark ? AppTheme.darkTextMuted : AppTheme.textMuted,
             ),
           ),
-        ],
+          children: [
+            Padding(
+              padding: const EdgeInsets.fromLTRB(14, 0, 14, 14),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Container(
+                    decoration: BoxDecoration(
+                      color: isDark
+                          ? const Color(0xFF252525)
+                          : Colors.white,
+                      borderRadius: BorderRadius.circular(6),
+                      border: Border.all(
+                        color: isDark
+                            ? const Color(0xFF383838)
+                            : AppTheme.border,
+                      ),
+                    ),
+                    child: TextField(
+                      controller: _serverUrlController,
+                      style: TextStyle(
+                        fontFamily: 'monospace',
+                        fontSize: 12.5,
+                        color: isDark ? Colors.white : AppTheme.ink,
+                      ),
+                      decoration: InputDecoration(
+                        hintText: 'http://192.168.1.5:8000',
+                        hintStyle: TextStyle(
+                          fontFamily: 'monospace',
+                          fontSize: 12,
+                          color: isDark
+                              ? AppTheme.darkTextMuted
+                              : AppTheme.textMuted,
+                        ),
+                        border: InputBorder.none,
+                        contentPadding: const EdgeInsets.symmetric(
+                            horizontal: 12, vertical: 10),
+                        suffixIcon: IconButton(
+                          icon: const Icon(Icons.content_paste_rounded,
+                              size: 16),
+                          tooltip: 'Paste',
+                          onPressed: () async {
+                            final data = await Clipboard.getData(
+                                Clipboard.kTextPlain);
+                            if (data?.text != null &&
+                                data!.text!.trim().isNotEmpty) {
+                              _serverUrlController.text =
+                                  data.text!.trim();
+                            }
+                          },
+                        ),
+                      ),
+                    ),
+                  ),
+                  const SizedBox(height: 10),
+                  SizedBox(
+                    width: double.infinity,
+                    child: OutlinedButton.icon(
+                      onPressed: _testingServer ? null : _testServerConnection,
+                      icon: _testingServer
+                          ? const SizedBox(
+                              width: 12,
+                              height: 12,
+                              child: CircularProgressIndicator(
+                                strokeWidth: 1.5,
+                              ),
+                            )
+                          : const Icon(Icons.sensors_rounded, size: 14),
+                      label: Text(
+                        _testingServer ? 'Pinging...' : 'Test Server Link',
+                        style: const TextStyle(fontSize: 12),
+                      ),
+                      style: OutlinedButton.styleFrom(
+                        foregroundColor:
+                            isDark ? Colors.white : AppTheme.ink,
+                        shape: RoundedRectangleBorder(
+                          borderRadius: BorderRadius.circular(6),
+                        ),
+                        padding: const EdgeInsets.symmetric(vertical: 8),
+                      ),
+                    ),
+                  ),
+                  if (_serverTestMessage != null) ...[
+                    const SizedBox(height: 8),
+                    Container(
+                      padding: const EdgeInsets.all(8),
+                      decoration: BoxDecoration(
+                        color: _serverTestOk == true
+                            ? const Color(0x15007A3D)
+                            : const Color(0x15C84B31),
+                        borderRadius: BorderRadius.circular(6),
+                      ),
+                      child: Text(
+                        _serverTestMessage!,
+                        style: TextStyle(
+                          fontSize: 11.5,
+                          fontWeight: FontWeight.w600,
+                          color: _serverTestOk == true
+                              ? const Color(0xFF007A3D)
+                              : const Color(0xFFC84B31),
+                        ),
+                      ),
+                    ),
+                  ],
+                ],
+              ),
+            ),
+          ],
+        ),
       ),
     );
   }
