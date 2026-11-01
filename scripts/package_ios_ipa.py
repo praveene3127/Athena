@@ -100,7 +100,7 @@ def build_info_plist() -> bytes:
         "CFBundleInfoDictionaryVersion": "6.0",
         "CFBundleName": "athena",
         "CFBundlePackageType": "APPL",
-        "CFBundleShortVersionString": "0.1.1",
+        "CFBundleShortVersionString": "1.1.0",
         "CFBundleSignature": "????",
         "CFBundleVersion": "2",
         "LSRequiresIPhoneOS": True,
