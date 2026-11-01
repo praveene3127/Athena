@@ -660,6 +660,7 @@ class ApiClient {
     required String title,
     required String quoteText,
     String? exactQuote,
+    String? documentTitle,
   }) async {
     final noteMap = {
       'id': id,
@@ -669,7 +670,7 @@ class ApiClient {
       'card_type': 'user_highlight',
       'title': title,
       'body': quoteText,
-      'why_here': 'Saved directly by reader',
+      'why_here': (documentTitle != null && documentTitle.isNotEmpty) ? 'From: $documentTitle' : 'Saved directly by reader',
       'exact_quote': exactQuote ??
           (quoteText.length > 280
               ? '${quoteText.substring(0, 280)}…'
@@ -695,6 +696,7 @@ class ApiClient {
           'title': title,
           'body': quoteText,
           'exact_quote': exactQuote ?? quoteText,
+          if (documentTitle != null) 'document_title': documentTitle,
         });
       } catch (_) {}
     }

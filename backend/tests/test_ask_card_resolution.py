@@ -6,18 +6,30 @@ from app.routers.ask import AskRequest
 
 
 def test_is_llm_configured_recognizes_ai_settings():
+    orig_key = None
+    orig_provider = "gemini"
     with Session(engine) as session:
         saved = session.exec(select(AISettings).where(AISettings.id == "global")).first()
-        if not saved:
-            saved = AISettings(id="global", primary_provider="gemini", primary_api_key="AIzaSyTestKey12345")
-            session.add(saved)
-            session.commit()
-        else:
+        if saved:
+            orig_key = saved.primary_api_key
+            orig_provider = saved.primary_provider
             saved.primary_api_key = "AIzaSyTestKey12345"
             session.add(saved)
             session.commit()
-
-    assert is_llm_configured() is True
+        else:
+            saved = AISettings(id="global", primary_provider="gemini", primary_api_key="AIzaSyTestKey12345")
+            session.add(saved)
+            session.commit()
+    try:
+        assert is_llm_configured() is True
+    finally:
+        with Session(engine) as session:
+            saved = session.exec(select(AISettings).where(AISettings.id == "global")).first()
+            if saved:
+                saved.primary_api_key = orig_key
+                saved.primary_provider = orig_provider
+                session.add(saved)
+                session.commit()
 
 
 def test_ask_request_allows_rich_queries():

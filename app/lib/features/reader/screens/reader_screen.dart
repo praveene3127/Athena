@@ -463,6 +463,9 @@ class _ReaderScreenState extends ConsumerState<ReaderScreen> {
   Future<void> _saveUserQuote(ReaderItem chunk) async {
     final noteId = 'user_quote_${DateTime.now().millisecondsSinceEpoch}';
     final quoteText = chunk.rawText;
+    final docTitle =
+        ref.read(readerDataProvider(widget.documentId)).value?.title ??
+            'Document';
     final newCard = {
       'id': noteId,
       'title': 'Saved Passage · ${chunk.pageReference ?? 'P. ?'}',
@@ -472,6 +475,8 @@ class _ReaderScreenState extends ConsumerState<ReaderScreen> {
       'body': quoteText,
       'cardType': 'user_highlight',
       'savedAt': DateTime.now().toIso8601String(),
+      'docTitle': docTitle,
+      'docId': widget.documentId,
     };
     setState(() {
       _brainDeckCards.insert(0, newCard);
@@ -488,6 +493,7 @@ class _ReaderScreenState extends ConsumerState<ReaderScreen> {
           title: newCard['title']?.toString() ?? 'Saved Passage',
           quoteText: quoteText,
           exactQuote: newCard['exactQuote']?.toString(),
+          documentTitle: docTitle,
         )
         .catchError((_) {});
     ref.invalidate(savedCardsProvider);
@@ -824,51 +830,6 @@ class _ReaderScreenState extends ConsumerState<ReaderScreen> {
     });
   }
 
-  Future<void> _fetchAndUnlockVibeCheck(int seq) async {
-    if (_loadingVibeSeqs.contains(seq)) return;
-
-    setState(() {
-      _loadingVibeSeqs.add(seq);
-    });
-
-    HapticFeedback.lightImpact();
-
-    try {
-      final client = ref.read(apiClientProvider);
-
-      final res = await client.fetchVibeCheck(widget.documentId, seq);
-
-      if (mounted) {
-        setState(() {
-          _loadingVibeSeqs.remove(seq);
-
-          _stalledChunkSeqs.remove(seq);
-
-          _vibeChecksBySeq[seq] = {
-            'plain_take': res['plain_take']?.toString() ?? '',
-            'analogy': res['analogy']?.toString() ?? '',
-          };
-        });
-
-        HapticFeedback.mediumImpact();
-      }
-    } catch (_) {
-      if (mounted) {
-        setState(() {
-          _loadingVibeSeqs.remove(seq);
-
-          _stalledChunkSeqs.remove(seq);
-
-          _vibeChecksBySeq[seq] = {
-            'plain_take':
-                'Unable to connect to AI service. Tap retry when connected.',
-            'analogy': '',
-          };
-        });
-      }
-    }
-  }
-
   Widget _buildVibeCheckSlot(int seq) {
     if (_vibeChecksBySeq.containsKey(seq)) {
       final data = _vibeChecksBySeq[seq]!;
@@ -998,46 +959,7 @@ class _ReaderScreenState extends ConsumerState<ReaderScreen> {
       );
     }
 
-    if (_stalledChunkSeqs.contains(seq) || _loadingVibeSeqs.contains(seq)) {
-      final isLoading = _loadingVibeSeqs.contains(seq);
-
-      return Container(
-        margin: const EdgeInsets.symmetric(horizontal: 14, vertical: 8),
-        width: double.infinity,
-        child: OutlinedButton.icon(
-          onPressed: isLoading ? null : () => _fetchAndUnlockVibeCheck(seq),
-          icon: isLoading
-              ? const SizedBox(
-                  width: 14,
-                  height: 14,
-                  child: CircularProgressIndicator(
-                      strokeWidth: 2, color: Color(0xFF2D6A4F)),
-                )
-              : const Icon(Icons.short_text_rounded,
-                  size: 16, color: Color(0xFF2D6A4F)),
-          label: Text(
-            isLoading ? 'Synthesizing passage...' : 'Simplify this passage',
-            style: const TextStyle(
-              color: Color(0xFF2D6A4F),
-              fontSize: 12.5,
-              fontWeight: FontWeight.bold,
-              letterSpacing: 0.3,
-            ),
-          ),
-          style: OutlinedButton.styleFrom(
-            backgroundColor: Color(0xFF2D6A4F).withValues(alpha: 0.08),
-            side: BorderSide(
-              color: Color(0xFF2D6A4F).withValues(alpha: 0.40),
-              width: 1.2,
-            ),
-            padding: const EdgeInsets.symmetric(vertical: 10, horizontal: 14),
-            shape: RoundedRectangleBorder(
-              borderRadius: BorderRadius.circular(20),
-            ),
-          ),
-        ),
-      );
-    }
+    if (_stalledChunkSeqs.contains(seq) || _loadingVibeSeqs.contains(seq)) { return const SizedBox.shrink(); }
 
     return const SizedBox.shrink();
   }
@@ -2650,7 +2572,6 @@ class _ReaderScreenState extends ConsumerState<ReaderScreen> {
                                 }
                                 final item = feedItems[index];
                                 if (item.isReadingChunk) {
-                                  final seq = item.sequence ?? (index + 1);
                                   return Container(
                                     margin: EdgeInsets.symmetric(
                                       horizontal: isMobile ? 12 : 24,
@@ -2677,8 +2598,6 @@ class _ReaderScreenState extends ConsumerState<ReaderScreen> {
                                         );
                                       },
                                       onAsk: () => _openAskSheet(item),
-                                      onSimplify: () =>
-                                          _fetchAndUnlockVibeCheck(seq),
                                       onSaveQuote: () => _saveUserQuote(item),
                                     ),
                                   );
@@ -2948,9 +2867,6 @@ class _ReaderScreenState extends ConsumerState<ReaderScreen> {
                                                 },
                                                 onAsk: () =>
                                                     _openAskSheet(item),
-                                                onSimplify: () =>
-                                                    _fetchAndUnlockVibeCheck(
-                                                        seq),
                                                 onSaveQuote: () =>
                                                     _saveUserQuote(item),
                                               ),

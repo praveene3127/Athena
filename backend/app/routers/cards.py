@@ -22,6 +22,7 @@ class UserQuoteRequest(BaseModel):
     body: Optional[str] = None
     quote_text: Optional[str] = None
     exact_quote: Optional[str] = None
+    document_title: Optional[str] = None
 
 
 @router.post("/api/cards/quote")
@@ -127,7 +128,8 @@ def get_saved_cards(session: Session = Depends(get_session)) -> List[Dict[str, A
         doc = session.get(Document, card.document_id)
         chunk = session.get(ReadingChunk, card.source_chunk_id) if card.source_chunk_id else None
 
-        doc_title = doc.title if doc else "Document"
+        fallback_title = card.why_here.replace("From: ", "").strip() if (card.why_here and card.why_here.startswith("From: ")) else "Document"
+        doc_title = (doc.title if (doc and doc.title) else fallback_title)
         seq = chunk.sequence if chunk else 1
         page_ref = "Page 1"
         if chunk and chunk.source_pages_json:

@@ -315,7 +315,7 @@ def create_sample_document(session: Session = Depends(get_session)) -> Dict[str,
 @router.get("")
 def list_documents(session: Session = Depends(get_session)) -> List[Dict[str, Any]]:
     """Returns list of all documents, newest first (§10 in CLAUDE.md)."""
-    statement = select(Document).order_by(Document.created_at.desc())
+    statement = select(Document).where(Document.status != 'deleted').order_by(Document.created_at.desc())
     docs = session.exec(statement).all()
     results = []
     for d in docs:
@@ -425,12 +425,13 @@ def delete_document(id: str, session: Session = Depends(get_session)) -> Dict[st
             status_code=409,
         )
 
-    # Delete related database items
+    # Delete related database items while preserving saved user quotes and cards
     for chunk in session.exec(select(ReadingChunk).where(ReadingChunk.document_id == id)).all():
         session.delete(chunk)
     for concept in session.exec(select(Concept).where(Concept.document_id == id)).all():
         session.delete(concept)
-    for card in session.exec(select(ContextCard).where(ContextCard.document_id == id)).all():
+    # Only delete un-saved cards; saved cards/quotes must survive book deletion!
+    for card in session.exec(select(ContextCard).where(ContextCard.document_id == id, ContextCard.saved == False)).all():
         session.delete(card)
     for chapter in session.exec(select(DocumentChapter).where(DocumentChapter.doc_id == id)).all():
         session.delete(chapter)
@@ -438,7 +439,15 @@ def delete_document(id: str, session: Session = Depends(get_session)) -> Dict[st
     if state:
         session.delete(state)
 
-    session.delete(doc)
+    saved_cards = session.exec(select(ContextCard).where(ContextCard.document_id == id, ContextCard.saved == True)).all()
+    if saved_cards:
+        # Preserve tombstone record so saved cards satisfy foreign key and keep authentic book title
+        doc.status = "deleted"
+        doc.file_path = None
+        doc.canonical_text = None
+        session.add(doc)
+    else:
+        session.delete(doc)
     session.commit()
 
 

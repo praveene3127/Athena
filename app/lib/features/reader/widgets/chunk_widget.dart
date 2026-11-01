@@ -13,7 +13,6 @@ class ChunkWidget extends StatelessWidget {
   final double fontSize;
   final VoidCallback onViewOriginalPage;
   final VoidCallback onAsk;
-  final VoidCallback? onSimplify;
   final VoidCallback? onSaveQuote;
   final bool isFeedMode;
   final bool bionicFocusEnabled;
@@ -28,7 +27,6 @@ class ChunkWidget extends StatelessWidget {
     required this.fontSize,
     required this.onViewOriginalPage,
     required this.onAsk,
-    this.onSimplify,
     this.onSaveQuote,
     this.isFeedMode = true,
     this.bionicFocusEnabled = false,
@@ -370,49 +368,6 @@ class ChunkWidget extends StatelessWidget {
       child: Row(
         mainAxisAlignment: MainAxisAlignment.end,
         children: [
-          if (onSimplify != null) ...[
-            InkWell(
-              borderRadius: BorderRadius.circular(20),
-              onTap: () {
-                HapticFeedback.selectionClick();
-                onSimplify!();
-              },
-              child: Container(
-                constraints: const BoxConstraints(minHeight: 36),
-                padding:
-                    const EdgeInsets.symmetric(horizontal: 12, vertical: 7),
-                decoration: BoxDecoration(
-                  color: theme.pillBackground,
-                  borderRadius: BorderRadius.circular(20),
-                  border: Border.all(
-                    color: theme.borderColor,
-                    width: 1,
-                  ),
-                ),
-                child: Row(
-                  mainAxisSize: MainAxisSize.min,
-                  children: [
-                    Icon(
-                      Icons.short_text_rounded,
-                      size: 15,
-                      color: theme.accentColor,
-                    ),
-                    const SizedBox(width: 5),
-                    Text(
-                      'Simplify',
-                      style: TextStyle(
-                        fontFamily: AppTheme.fontUI,
-                        fontSize: 11.5,
-                        fontWeight: FontWeight.w600,
-                        color: theme.textColor,
-                      ),
-                    ),
-                  ],
-                ),
-              ),
-            ),
-            const SizedBox(width: 8),
-          ],
           InkWell(
             borderRadius: BorderRadius.circular(20),
             onTap: () {

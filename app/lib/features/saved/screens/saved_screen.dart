@@ -61,26 +61,9 @@ final savedCardsProvider =
   final client = ref.watch(apiClientProvider);
   final List<SavedItem> result = [];
 
-  // Query valid document IDs so we can prune orphaned cards from deleted books
-  Set<String> validDocIds = {};
-  bool checkedDocs = false;
-  try {
-    final docs = await client.listDocuments();
-    validDocIds = docs
-        .map((d) => d['id']?.toString() ?? '')
-        .where((id) => id.isNotEmpty)
-        .toSet();
-    checkedDocs = true;
-  } catch (_) {}
-
   try {
     final list = await client.getSavedCards();
     for (final item in list) {
-      final docId = item['document_id']?.toString() ?? '';
-      // If we checked documents and the document was deleted, prune it
-      if (checkedDocs && !validDocIds.contains(docId)) {
-        continue;
-      }
       result.add(SavedItem.fromJson(item));
     }
   } catch (_) {}
@@ -106,16 +89,11 @@ final savedCardsProvider =
         final List<dynamic> retainedLocals = [];
         for (final item in decoded) {
           if (item is Map) {
-            final docId = item['docId']?.toString() ?? '';
-            // If books checked and doc was deleted, prune it
-            if (checkedDocs && !validDocIds.contains(docId)) {
-              continue;
-            }
             retainedLocals.add(item);
             if (!existingIds.contains(item['id'])) {
               result.add(SavedItem(
                 id: item['id']?.toString() ?? '',
-                documentId: docId,
+                documentId: item['docId']?.toString() ?? '',
                 documentTitle: item['docTitle']?.toString() ?? 'Document',
                 chunkId: '',
                 sequence: (item['chunkSeq'] as num?)?.toInt() ?? 1,

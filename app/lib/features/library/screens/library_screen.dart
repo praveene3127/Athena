@@ -895,7 +895,14 @@ class _LibraryScreenState extends ConsumerState<LibraryScreen>
       final file = result.files.first;
 
       List<int>? fileBytes = file.bytes;
-      final filePath = kIsWeb ? null : file.path;
+      String? filePath;
+      if (!kIsWeb) {
+        try {
+          filePath = file.path;
+        } catch (_) {
+          filePath = null;
+        }
+      }
 
       if (fileBytes == null && filePath != null && filePath.isNotEmpty && !kIsWeb) {
         try {

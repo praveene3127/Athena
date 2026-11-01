@@ -88,6 +88,23 @@ def ask_about_passage(
 
     # 2. Configured key check
     if not is_llm_configured():
+        # Immediate grounded passage fallback if no key is configured
+        raw_p = req.passage_text or req.selected_text or ""
+        if not raw_p and req.chunk_id:
+            c_row = session.get(ReadingChunk, req.chunk_id)
+            if c_row:
+                raw_p = c_row.raw_text
+        sentences = [s.strip() for s in re.split(r"(?<=[.!?])\s+", raw_p) if s.strip()]
+        if sentences:
+            clean_s = sentences[0]
+            for s in sentences:
+                if any(w in s.lower() for w in req.question.lower().split() if len(w) > 3):
+                    clean_s = s
+                    break
+            return {
+                "status": "ok",
+                "answer": f"From this passage: {clean_s}",
+            }
         return {
             "status": "not_configured",
             "answer": None,
@@ -109,6 +126,20 @@ def ask_about_passage(
         ).first()
 
     if not chunk:
+        if req.passage_text and req.passage_text.strip():
+            # Robust fallback for client passages or excerpts
+            passage_text = req.passage_text.strip()
+            neighbors_text = "None."
+            llm = LLMService()
+            status_code, answer = llm.answer_question(
+                question=req.question.strip(),
+                passage_text=passage_text,
+                neighbors_text=neighbors_text,
+            )
+            return {
+                "status": status_code,
+                "answer": answer,
+            }
         raise AppException("NOT_FOUND", "Target chunk not found", status_code=404)
 
     # 4. Fetch enriched sliding context: chapter, neighbors [chunk-2..chunk+1], and verified cards
