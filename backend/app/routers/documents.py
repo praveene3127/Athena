@@ -411,6 +411,123 @@ def force_ingest_document(id: str, session: Session = Depends(get_session)) -> D
     return {"status": "queued", "document_id": id}
 
 
+class GenerateCardRequest(BaseModel):
+    chunk_index: int = 1
+    force_new: bool = False
+
+
+@router.post("/{id}/cards/generate")
+def generate_card_for_chunk_endpoint(
+    id: str,
+    payload: GenerateCardRequest,
+    session: Session = Depends(get_session),
+) -> Dict[str, Any]:
+    """Generates an on-demand fact-check or context card for a specific chunk/slide."""
+    from app.services.marginalia.cards import generate_context_cards
+    from app.services.marginalia.concepts import extract_concepts
+
+    doc = session.get(Document, id)
+    if not doc:
+        raise AppException("NOT_FOUND", f"Document {id} not found", status_code=404)
+
+    chunk_idx = max(1, payload.chunk_index)
+
+    chunk = session.exec(
+        select(ReadingChunk).where(
+            ReadingChunk.document_id == id,
+            ReadingChunk.sequence == chunk_idx,
+        )
+    ).first()
+    if not chunk:
+        raise AppException("NOT_FOUND", f"Chunk at sequence {chunk_idx} not found", status_code=404)
+
+    if not payload.force_new:
+        existing = session.exec(
+            select(ContextCard).where(
+                ContextCard.document_id == id,
+                ContextCard.source_chunk_id == chunk.id,
+                ContextCard.dismissed == False,
+            )
+        ).first()
+        if existing:
+            citations = []
+            if existing.citations_json:
+                try:
+                    citations = json.loads(existing.citations_json)
+                except Exception:
+                    citations = []
+            return {
+                "type": "context_card",
+                "id": existing.id,
+                "document_id": existing.document_id,
+                "source_chunk_id": existing.source_chunk_id,
+                "insert_after": existing.source_chunk_id,
+                "sequence": chunk_idx,
+                "card_type": existing.card_type,
+                "title": existing.title,
+                "body": existing.body,
+                "why_here": existing.why_here,
+                "exact_quote": existing.exact_quote,
+                "support_status": getattr(existing, "support_status", "fully_supported"),
+                "generation_mode": existing.generation_mode,
+                "saved": existing.saved,
+                "citations": citations,
+            }
+
+    generated = generate_context_cards(session, id, chunk_idx)
+    target_card = generated[0] if generated else None
+
+    if not target_card:
+        concepts = extract_concepts(chunk.raw_text, chunk.sequence)
+        if concepts:
+            c = concepts[0]
+            existing_c = session.get(Concept, c["id"])
+            if not existing_c:
+                session.add(
+                    Concept(
+                        id=c["id"],
+                        document_id=id,
+                        name=c["name"],
+                        salience=c["salience"],
+                        chunk_id=chunk.id,
+                    )
+                )
+                session.commit()
+            new_cards = generate_context_cards(session, id, chunk_idx)
+            if new_cards:
+                target_card = new_cards[0]
+
+    if target_card:
+        citations = []
+        if target_card.citations_json:
+            try:
+                citations = json.loads(target_card.citations_json)
+            except Exception:
+                citations = []
+        return {
+            "type": "context_card",
+            "id": target_card.id,
+            "document_id": target_card.document_id,
+            "source_chunk_id": target_card.source_chunk_id,
+            "insert_after": target_card.source_chunk_id,
+            "sequence": chunk_idx,
+            "card_type": target_card.card_type,
+            "title": target_card.title,
+            "body": target_card.body,
+            "why_here": target_card.why_here,
+            "exact_quote": target_card.exact_quote,
+            "support_status": getattr(target_card, "support_status", "fully_supported"),
+            "generation_mode": target_card.generation_mode,
+            "saved": target_card.saved,
+            "citations": citations,
+        }
+
+    return {
+        "status": "error",
+        "message": "Could not generate card for this passage.",
+    }
+
+
 
 @router.delete("/{id}")
 def delete_document(id: str, session: Session = Depends(get_session)) -> Dict[str, str]:
@@ -443,7 +560,6 @@ def delete_document(id: str, session: Session = Depends(get_session)) -> Dict[st
     if saved_cards:
         # Preserve tombstone record so saved cards satisfy foreign key and keep authentic book title
         doc.status = "deleted"
-        doc.file_path = None
         doc.canonical_text = None
         session.add(doc)
     else:

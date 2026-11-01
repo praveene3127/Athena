@@ -22,6 +22,7 @@ import 'package:url_launcher/url_launcher.dart';
 import 'package:athena/core/widgets/app_bottom_nav.dart';
 
 import 'package:athena/core/config/config.dart';
+import 'package:athena/core/api/lan_discovery.dart';
 
 import 'package:athena/core/config/update_service.dart';
 
@@ -89,6 +90,8 @@ class _LibraryScreenState extends ConsumerState<LibraryScreen>
 
     WidgetsBinding.instance.addObserver(this);
 
+    _checkServerConnectionAndAutoDiscover();
+
     _checkAIConfiguration();
 
     _checkForUpdates();
@@ -99,6 +102,35 @@ class _LibraryScreenState extends ConsumerState<LibraryScreen>
           _checkForUpdates();
         }
       });
+    } catch (_) {}
+  }
+
+  Future<void> _checkServerConnectionAndAutoDiscover() async {
+    if (kIsWeb) return;
+    try {
+      final client = ref.read(apiClientProvider);
+      final health = await client.checkHealth();
+      if (health['status'] == 'ok') return;
+    } catch (_) {}
+
+    try {
+      final found = await LanDiscovery.discoverServer(timeoutMs: 600);
+      if (found != null && found.isNotEmpty && mounted) {
+        await AppConfig.setBaseUrl(found);
+        ref.invalidate(documentsProvider);
+        _checkAIConfiguration();
+        _checkForUpdates();
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(
+              content: Text('Connected to Athena server at $found'),
+              backgroundColor: const Color(0xFF2D6A4F),
+              duration: const Duration(seconds: 2),
+              behavior: SnackBarBehavior.floating,
+            ),
+          );
+        }
+      }
     } catch (_) {}
   }
 
@@ -2005,42 +2037,59 @@ class _EditorialPillButton extends StatefulWidget {
 
 class _EditorialPillButtonState extends State<_EditorialPillButton> {
   bool _isPressed = false;
+  bool _isHovered = false;
 
   @override
   Widget build(BuildContext context) {
     final isDark = Theme.of(context).brightness == Brightness.dark;
 
-    return GestureDetector(
-      onTapDown: widget.onPressed != null
-          ? (_) => setState(() => _isPressed = true)
-          : null,
-      onTapUp: widget.onPressed != null
-          ? (_) {
-              setState(() => _isPressed = false);
+    return MouseRegion(
+      cursor: widget.onPressed != null ? SystemMouseCursors.click : SystemMouseCursors.basic,
+      onEnter: (_) => setState(() => _isHovered = true),
+      onExit: (_) => setState(() => _isHovered = false),
+      child: GestureDetector(
+        onTapDown: widget.onPressed != null
+            ? (_) => setState(() => _isPressed = true)
+            : null,
+        onTapUp: widget.onPressed != null
+            ? (_) {
+                setState(() => _isPressed = false);
 
-              HapticFeedback.selectionClick();
+                HapticFeedback.selectionClick();
 
-              widget.onPressed!();
-            }
-          : null,
-      onTapCancel: () => setState(() => _isPressed = false),
-      child: AnimatedScale(
-        scale: _isPressed ? 0.97 : 1.0,
-        duration: const Duration(milliseconds: 100),
-        curve: Curves.easeOutCubic,
-        child: Container(
-          padding: const EdgeInsets.symmetric(horizontal: 18, vertical: 12),
-          decoration: BoxDecoration(
-            color: widget.onPressed != null
-                ? (isDark ? Colors.white : const Color(0xFF161615))
-                : const Color(0xFF888884),
-            borderRadius: BorderRadius.circular(6),
-            border: Border.all(
-              color: isDark ? const Color(0xFFE2DDD5) : const Color(0xFF161615),
-              width: 1.0,
+                widget.onPressed!();
+              }
+            : null,
+        onTapCancel: () => setState(() => _isPressed = false),
+        child: AnimatedScale(
+          scale: _isPressed ? 0.97 : (_isHovered ? 1.025 : 1.0),
+          duration: const Duration(milliseconds: 140),
+          curve: Curves.easeOutCubic,
+          child: AnimatedContainer(
+            duration: const Duration(milliseconds: 140),
+            curve: Curves.easeOutCubic,
+            padding: const EdgeInsets.symmetric(horizontal: 18, vertical: 12),
+            constraints: const BoxConstraints(minHeight: 44),
+            decoration: BoxDecoration(
+              color: widget.onPressed != null
+                  ? (isDark ? Colors.white : const Color(0xFF161615))
+                  : const Color(0xFF888884),
+              borderRadius: BorderRadius.circular(6),
+              border: Border.all(
+                color: isDark ? const Color(0xFFE2DDD5) : const Color(0xFF161615),
+                width: 1.0,
+              ),
+              boxShadow: _isHovered && widget.onPressed != null
+                  ? [
+                      BoxShadow(
+                        color: Colors.black.withValues(alpha: isDark ? 0.25 : 0.12),
+                        blurRadius: 10,
+                        offset: const Offset(0, 3),
+                      ),
+                    ]
+                  : null,
             ),
-          ),
-          child: Row(
+            child: Row(
             mainAxisSize: MainAxisSize.min,
             children: [
               if (widget.isLoading)
@@ -2079,8 +2128,9 @@ class _EditorialPillButtonState extends State<_EditorialPillButton> {
           ),
         ),
       ),
-    );
-  }
+    ),
+  );
+}
 }
 
 String _humanizeTitle(String raw) {
@@ -2170,6 +2220,7 @@ class _DocumentTile extends StatefulWidget {
 
 class _DocumentTileState extends State<_DocumentTile> {
   bool _isPressed = false;
+  bool _isHovered = false;
 
   int? _savedChunkIndex;
 
@@ -2201,32 +2252,51 @@ class _DocumentTileState extends State<_DocumentTile> {
 
     final isDark = Theme.of(context).brightness == Brightness.dark;
 
-    return InkWell(
-      onTap: () {
-        if (doc.isReady) {
-          widget.onTap();
-        } else {
-          context.push('/processing/${doc.id}');
-        }
-      },
-      onHighlightChanged: (val) {
-        if (mounted) setState(() => _isPressed = val);
-      },
-      borderRadius: BorderRadius.circular(16),
-      child: AnimatedScale(
-        scale: _isPressed ? 0.985 : 1.0,
-        duration: const Duration(milliseconds: 140),
-        curve: Curves.easeOutCubic,
-        child: Container(
-          decoration: BoxDecoration(
-            color: isDark ? const Color(0xFF1A1A18) : const Color(0xFFFAF7F2),
-            borderRadius: BorderRadius.circular(16),
-            border: Border.all(
-              color: isDark ? const Color(0xFF282828) : const Color(0xFFE2DDD5),
-              width: 1.0,
+    return MouseRegion(
+      cursor: SystemMouseCursors.click,
+      onEnter: (_) => setState(() => _isHovered = true),
+      onExit: (_) => setState(() => _isHovered = false),
+      child: InkWell(
+        onTap: () {
+          if (doc.isReady) {
+            widget.onTap();
+          } else {
+            context.push('/processing/${doc.id}');
+          }
+        },
+        onHighlightChanged: (val) {
+          if (mounted) setState(() => _isPressed = val);
+        },
+        borderRadius: BorderRadius.circular(16),
+        child: AnimatedScale(
+          scale: _isPressed ? 0.985 : (_isHovered ? 1.012 : 1.0),
+          duration: const Duration(milliseconds: 140),
+          curve: Curves.easeOutCubic,
+          child: AnimatedContainer(
+            duration: const Duration(milliseconds: 140),
+            curve: Curves.easeOutCubic,
+            decoration: BoxDecoration(
+              color: isDark ? const Color(0xFF1A1A18) : const Color(0xFFFAF7F2),
+              borderRadius: BorderRadius.circular(16),
+              border: Border.all(
+                color: _isHovered
+                    ? (isDark
+                        ? const Color(0xFFE2DDD5).withValues(alpha: 0.6)
+                        : const Color(0xFF161615).withValues(alpha: 0.35))
+                    : (isDark ? const Color(0xFF282828) : const Color(0xFFE2DDD5)),
+                width: _isHovered ? 1.5 : 1.0,
+              ),
+              boxShadow: _isHovered
+                  ? [
+                      BoxShadow(
+                        color: Colors.black.withValues(alpha: isDark ? 0.28 : 0.08),
+                        blurRadius: 14,
+                        offset: const Offset(0, 4),
+                      ),
+                    ]
+                  : null,
             ),
-          ),
-          child: IntrinsicHeight(
+            child: IntrinsicHeight(
             child: Row(
               crossAxisAlignment: CrossAxisAlignment.stretch,
               children: [
@@ -2480,8 +2550,9 @@ class _DocumentTileState extends State<_DocumentTile> {
           ),
         ),
       ),
-    );
-  }
+    ),
+  );
+}
 }
 
 class _StatusChip extends StatelessWidget {

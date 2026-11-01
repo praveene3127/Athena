@@ -174,19 +174,67 @@ def extract_concepts(
     return concepts
 
 
+def detect_passage_flavor(passage: str) -> str:
+    """Classifies passage into: scientific_claim, historical_event, human_behavior_or_narrative, philosophical_argument."""
+    lowered = passage.lower()
+
+    hist_markers = [
+        "century", "war", "emperor", "president", "king", "queen", "empire",
+        "treaty", "revolution", "dynasty", "reign", "archival", "in 18", "in 19",
+        "in 17", "in 16", "in 15", "in 14", "b.c.", "a.d.", "historian", "battle"
+    ]
+    if any(m in lowered for m in hist_markers):
+        return "historical_event"
+
+    phil_markers = [
+        "morality", "ethics", "free will", "consciousness", "epistemol", "metaphys",
+        "virtue", "truth", "justice", "existential", "axiom", "ontolog", "teleolog"
+    ]
+    if any(m in lowered for m in phil_markers):
+        return "philosophical_argument"
+
+    narrative_markers = [
+        "he said", "she said", "thought to himself", "felt", "whispered", "smiled",
+        "cried", "gazed", "walked toward", "character", "relationship", "family",
+        "childhood", "emotion", "anxiety", "fear", "habit", "behavior", "psychology"
+    ]
+    if any(m in lowered for m in narrative_markers):
+        return "human_behavior_or_narrative"
+
+    return "scientific_claim"
+
+
 def build_search_query_for_concept(concept_name: str, passage: str = "", archetype: str = "") -> str:
     """Constructs a high-precision academic / web search query targeting empirical studies,
-    counter-arguments, or historical receipts for a concept.
+    counter-arguments, or historical receipts for a concept with adaptive genre routing.
     """
     clean_name = re.sub(r"[^\w\s-]", "", concept_name).strip()
     arch_upper = archetype.upper()
+    flavor = detect_passage_flavor(passage) if passage else "scientific_claim"
+
     if "EMPIRICAL" in arch_upper:
+        if flavor == "human_behavior_or_narrative":
+            return f"{clean_name} behavioral psychology cognitive science experiment findings"
+        elif flavor == "historical_event":
+            return f"{clean_name} historical data demographic economic study findings"
         return f"{clean_name} empirical study experiment data findings"
+
     elif "DEBATE" in arch_upper or "CRITICAL" in arch_upper:
+        if flavor == "historical_event":
+            return f"{clean_name} historian dispute declassified records controversy"
+        elif flavor == "human_behavior_or_narrative":
+            return f"{clean_name} psychological counterpoint cognitive critique"
         return f"{clean_name} critique debate counterpoint controversy"
+
     elif "PARADOX" in arch_upper:
+        if flavor == "human_behavior_or_narrative":
+            return f"{clean_name} behavioral paradox decision bias contradiction"
         return f"{clean_name} paradox counter-intuitive dilemma contradiction"
+
     elif "HISTORICAL" in arch_upper:
+        if flavor == "human_behavior_or_narrative":
+            return f"{clean_name} historical origin case real life inspiration"
         return f"{clean_name} history archival origin case study"
+
     return f"{clean_name} research study analysis"
 

@@ -222,9 +222,9 @@ class ReadAheadPipeline:
         self.reader_cursor[doc_id] = current_chunk
         current_epoch = self.viewport_epochs.get(doc_id, 1)
 
-        # Look ahead across immediate visible range [current_chunk .. current_chunk + 16]
+        # Look ahead across immediate window [current_chunk, current_chunk + 1, current_chunk + 2, current_chunk + 3, current_chunk + 4]
         base = max(1, current_chunk)
-        candidate_slots = [base + (i * 4) for i in range(4)]
+        candidate_slots = [base + i for i in range(5)]
         if current_chunk > 1 and (current_chunk - 1) not in candidate_slots:
             candidate_slots.insert(0, max(1, current_chunk - 1))
 

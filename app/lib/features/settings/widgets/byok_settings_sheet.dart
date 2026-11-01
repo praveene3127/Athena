@@ -1,5 +1,6 @@
 import 'package:dio/dio.dart';
 import 'package:athena/core/config/config.dart';
+import 'package:athena/core/api/lan_discovery.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:shared_preferences/shared_preferences.dart';
@@ -127,7 +128,11 @@ class _BYOKSettingsSheetState extends State<BYOKSettingsSheet> {
           prefs.getString('athena_ai_fallback_base_url');
 
       setState(() {
-        _serverUrlController.text = AppConfig.runtimeBaseUrl ?? '';
+        final currentServer = AppConfig.runtimeBaseUrl ??
+            (AppConfig.apiBaseUrl.isNotEmpty
+                ? AppConfig.apiBaseUrl
+                : 'http://192.168.1.61:8000');
+        _serverUrlController.text = currentServer;
         _primaryProvider = config.primaryProvider.isNotEmpty
             ? config.primaryProvider
             : (savedLocalPrimaryProvider ?? 'gemini');
@@ -1252,32 +1257,78 @@ class _BYOKSettingsSheetState extends State<BYOKSettingsSheet> {
                     ),
                   ),
                   const SizedBox(height: 10),
-                  SizedBox(
-                    width: double.infinity,
-                    child: OutlinedButton.icon(
-                      onPressed: _testingServer ? null : _testServerConnection,
-                      icon: _testingServer
-                          ? const SizedBox(
-                              width: 12,
-                              height: 12,
-                              child: CircularProgressIndicator(
-                                strokeWidth: 1.5,
-                              ),
-                            )
-                          : const Icon(Icons.sensors_rounded, size: 14),
-                      label: Text(
-                        _testingServer ? 'Pinging...' : 'Test Server Link',
-                        style: const TextStyle(fontSize: 12),
-                      ),
-                      style: OutlinedButton.styleFrom(
-                        foregroundColor:
-                            isDark ? Colors.white : AppTheme.ink,
-                        shape: RoundedRectangleBorder(
-                          borderRadius: BorderRadius.circular(6),
+                  Row(
+                    children: [
+                      Expanded(
+                        child: OutlinedButton.icon(
+                          onPressed:
+                              _testingServer ? null : _testServerConnection,
+                          icon: _testingServer
+                              ? const SizedBox(
+                                  width: 12,
+                                  height: 12,
+                                  child: CircularProgressIndicator(
+                                    strokeWidth: 1.5,
+                                  ),
+                                )
+                              : const Icon(Icons.sensors_rounded, size: 14),
+                          label: Text(
+                            _testingServer ? 'Pinging...' : 'Test Link',
+                            style: const TextStyle(fontSize: 12),
+                          ),
+                          style: OutlinedButton.styleFrom(
+                            foregroundColor:
+                                isDark ? Colors.white : AppTheme.ink,
+                            shape: RoundedRectangleBorder(
+                              borderRadius: BorderRadius.circular(6),
+                            ),
+                            padding: const EdgeInsets.symmetric(vertical: 8),
+                          ),
                         ),
-                        padding: const EdgeInsets.symmetric(vertical: 8),
                       ),
-                    ),
+                      const SizedBox(width: 8),
+                      Expanded(
+                        child: OutlinedButton.icon(
+                          onPressed: _testingServer
+                              ? null
+                              : () async {
+                                  setState(() {
+                                    _testingServer = true;
+                                    _serverTestMessage =
+                                        'Scanning local Wi-Fi...';
+                                    _serverTestOk = null;
+                                  });
+                                  final found =
+                                      await LanDiscovery.discoverServer(
+                                          timeoutMs: 600);
+                                  if (found != null && found.isNotEmpty) {
+                                    _serverUrlController.text = found;
+                                    await _testServerConnection();
+                                  } else {
+                                    setState(() {
+                                      _testingServer = false;
+                                      _serverTestOk = false;
+                                      _serverTestMessage =
+                                          'No Athena server discovered on Wi-Fi.';
+                                    });
+                                  }
+                                },
+                          icon: const Icon(Icons.wifi_find_rounded, size: 14),
+                          label: const Text(
+                            'Scan Wi-Fi',
+                            style: TextStyle(fontSize: 12),
+                          ),
+                          style: OutlinedButton.styleFrom(
+                            foregroundColor:
+                                isDark ? Colors.white : AppTheme.ink,
+                            shape: RoundedRectangleBorder(
+                              borderRadius: BorderRadius.circular(6),
+                            ),
+                            padding: const EdgeInsets.symmetric(vertical: 8),
+                          ),
+                        ),
+                      ),
+                    ],
                   ),
                   if (_serverTestMessage != null) ...[
                     const SizedBox(height: 8),

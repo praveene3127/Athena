@@ -163,13 +163,15 @@ class _AskSheetState extends State<AskSheet> {
 
           _loading = false;
 
-          if (status == 'ok' && answer != null && answer.isNotEmpty) {
+          final effectiveAnswer = answer?.trim();
+          if (effectiveAnswer != null && effectiveAnswer.isNotEmpty) {
             _qaHistory.add({
               'question': trimmed,
-              'answer': answer,
+              'answer': effectiveAnswer,
             });
-
             _questionController.clear();
+            _status = 'ok';
+            _errorMessage = null;
           }
         });
       }

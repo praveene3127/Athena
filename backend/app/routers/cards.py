@@ -45,7 +45,7 @@ def create_or_save_user_quote(
             card_type="user_highlight",
             title=req.title or "Saved Passage",
             body=effective_body,
-            why_here="Saved directly by reader",
+            why_here=f"From: {req.document_title}" if req.document_title else "Saved directly by reader",
             exact_quote=effective_exact,
             saved=True,
             dismissed=False,
@@ -65,6 +65,8 @@ def create_or_save_user_quote(
             card.exact_quote = effective_exact
         if effective_chunk_id:
             card.source_chunk_id = effective_chunk_id
+        if req.document_title:
+            card.why_here = f"From: {req.document_title}"
 
     session.add(card)
     session.commit()

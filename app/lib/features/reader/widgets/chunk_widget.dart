@@ -13,7 +13,8 @@ class ChunkWidget extends StatelessWidget {
   final double fontSize;
   final VoidCallback onViewOriginalPage;
   final VoidCallback onAsk;
-  final VoidCallback? onSaveQuote;
+  final void Function([String? selectedText])? onSaveQuote;
+  final VoidCallback? onDeepDive;
   final bool isFeedMode;
   final bool bionicFocusEnabled;
   final String? layoutWarning;
@@ -28,6 +29,7 @@ class ChunkWidget extends StatelessWidget {
     required this.onViewOriginalPage,
     required this.onAsk,
     this.onSaveQuote,
+    this.onDeepDive,
     this.isFeedMode = true,
     this.bionicFocusEnabled = false,
     this.layoutWarning,
@@ -340,7 +342,7 @@ class ChunkWidget extends StatelessWidget {
                 label: 'Save Quote',
                 onPressed: () {
                   editableTextState.hideToolbar();
-                  if (onSaveQuote != null) onSaveQuote!();
+                  if (onSaveQuote != null) onSaveQuote!(selectedText.trim());
                 },
               ),
             );
@@ -368,33 +370,53 @@ class ChunkWidget extends StatelessWidget {
       child: Row(
         mainAxisAlignment: MainAxisAlignment.end,
         children: [
-          InkWell(
-            borderRadius: BorderRadius.circular(20),
+          _TactilePillButton(
+            backgroundColor: theme.pillBackground,
+            borderColor: theme.borderColor,
             onTap: () {
               HapticFeedback.selectionClick();
               onAsk();
             },
-            child: Container(
-              constraints: const BoxConstraints(minHeight: 36),
-              padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 7),
-              decoration: BoxDecoration(
-                color: theme.pillBackground,
-                borderRadius: BorderRadius.circular(20),
-                border: Border.all(
-                  color: theme.borderColor,
-                  width: 1,
+            child: Row(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                AthenaSymbol(
+                  size: 13,
+                  color: theme.accentColor,
                 ),
-              ),
+                const SizedBox(width: 6),
+                Text(
+                  'Ask Athena',
+                  style: TextStyle(
+                    fontFamily: AppTheme.fontUI,
+                    fontSize: 11.5,
+                    fontWeight: FontWeight.w600,
+                    color: theme.textColor,
+                  ),
+                ),
+              ],
+            ),
+          ),
+          if (onSaveQuote != null) ...[
+            const SizedBox(width: 8),
+            _TactilePillButton(
+              backgroundColor: theme.pillBackground,
+              borderColor: theme.borderColor,
+              onTap: () {
+                HapticFeedback.selectionClick();
+                onSaveQuote!();
+              },
               child: Row(
                 mainAxisSize: MainAxisSize.min,
                 children: [
-                  AthenaSymbol(
-                    size: 13,
+                  Icon(
+                    Icons.bookmark_add_outlined,
+                    size: 14,
                     color: theme.accentColor,
                   ),
-                  const SizedBox(width: 6),
+                  const SizedBox(width: 5),
                   Text(
-                    'Ask Athena',
+                    'Save Quote',
                     style: TextStyle(
                       fontFamily: AppTheme.fontUI,
                       fontSize: 11.5,
@@ -405,14 +427,45 @@ class ChunkWidget extends StatelessWidget {
                 ],
               ),
             ),
-          ),
-          if (onSaveQuote != null) ...[
+          ],
+          if (onDeepDive != null) ...[
+            const SizedBox(width: 8),
+            _TactilePillButton(
+              backgroundColor: theme.pillBackground,
+              borderColor: const Color(0xFFD97706),
+              onTap: () {
+                HapticFeedback.lightImpact();
+                onDeepDive!();
+              },
+              child: Row(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  const Icon(
+                    Icons.bolt_rounded,
+                    size: 15,
+                    color: Color(0xFFD97706),
+                  ),
+                  const SizedBox(width: 4),
+                  Text(
+                    'Fact-Check',
+                    style: TextStyle(
+                      fontFamily: AppTheme.fontUI,
+                      fontSize: 11.5,
+                      fontWeight: FontWeight.w600,
+                      color: theme.textColor,
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ],
+          if (onDeepDive != null) ...[
             const SizedBox(width: 8),
             InkWell(
               borderRadius: BorderRadius.circular(20),
               onTap: () {
-                HapticFeedback.selectionClick();
-                onSaveQuote!();
+                HapticFeedback.lightImpact();
+                onDeepDive!();
               },
               child: Container(
                 constraints: const BoxConstraints(minHeight: 36),
@@ -429,14 +482,14 @@ class ChunkWidget extends StatelessWidget {
                 child: Row(
                   mainAxisSize: MainAxisSize.min,
                   children: [
-                    Icon(
-                      Icons.bookmark_add_outlined,
-                      size: 14,
-                      color: theme.accentColor,
+                    const Icon(
+                      Icons.bolt_rounded,
+                      size: 15,
+                      color: Color(0xFFD97706),
                     ),
-                    const SizedBox(width: 5),
+                    const SizedBox(width: 4),
                     Text(
-                      'Save Quote',
+                      'Fact-Check',
                       style: TextStyle(
                         fontFamily: AppTheme.fontUI,
                         fontSize: 11.5,
@@ -499,6 +552,76 @@ class ChunkWidget extends StatelessWidget {
                 actionRowWidget,
               ],
             ),
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+
+class _TactilePillButton extends StatefulWidget {
+  final Widget child;
+  final VoidCallback onTap;
+  final Color backgroundColor;
+  final Color borderColor;
+
+  const _TactilePillButton({
+    required this.child,
+    required this.onTap,
+    required this.backgroundColor,
+    required this.borderColor,
+  });
+
+  @override
+  State<_TactilePillButton> createState() => _TactilePillButtonState();
+}
+
+class _TactilePillButtonState extends State<_TactilePillButton> {
+  bool _isPressed = false;
+  bool _isHovered = false;
+
+  @override
+  Widget build(BuildContext context) {
+    return MouseRegion(
+      cursor: SystemMouseCursors.click,
+      onEnter: (_) => setState(() => _isHovered = true),
+      onExit: (_) => setState(() => _isHovered = false),
+      child: GestureDetector(
+        onTapDown: (_) => setState(() => _isPressed = true),
+        onTapUp: (_) {
+          setState(() => _isPressed = false);
+          widget.onTap();
+        },
+        onTapCancel: () => setState(() => _isPressed = false),
+        child: AnimatedScale(
+          scale: _isPressed ? 0.94 : (_isHovered ? 1.03 : 1.0),
+          duration: const Duration(milliseconds: 120),
+          curve: Curves.easeOutCubic,
+          child: AnimatedContainer(
+            duration: const Duration(milliseconds: 140),
+            curve: Curves.easeOutCubic,
+            constraints: const BoxConstraints(minHeight: 36, minWidth: 44),
+            padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 7),
+            decoration: BoxDecoration(
+              color: widget.backgroundColor,
+              borderRadius: BorderRadius.circular(20),
+              border: Border.all(
+                color: _isHovered
+                    ? widget.borderColor.withValues(alpha: 0.9)
+                    : widget.borderColor,
+                width: 1,
+              ),
+              boxShadow: [
+                if (_isHovered)
+                  BoxShadow(
+                    color: widget.borderColor.withValues(alpha: 0.18),
+                    blurRadius: 10,
+                    offset: const Offset(0, 2),
+                  ),
+              ],
+            ),
+            child: widget.child,
           ),
         ),
       ),

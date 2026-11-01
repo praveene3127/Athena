@@ -39,17 +39,23 @@ class SavedItem {
   });
 
   factory SavedItem.fromJson(Map<String, dynamic> json) {
+    String docTitle = json['document_title'] as String? ?? '';
+    final whyHere = json['why_here'] as String?;
+    if (docTitle.isEmpty && whyHere != null && whyHere.startsWith('From: ')) {
+      docTitle = whyHere.substring(6).trim();
+    }
+    if (docTitle.isEmpty) docTitle = 'Document';
     return SavedItem(
       id: json['id'] as String? ?? '',
       documentId: json['document_id'] as String? ?? '',
-      documentTitle: json['document_title'] as String? ?? 'Document',
-      chunkId: json['chunk_id'] as String? ?? '',
+      documentTitle: docTitle,
+      chunkId: json['chunk_id'] as String? ?? (json['source_chunk_id'] as String? ?? ''),
       sequence: json['sequence'] as int? ?? 1,
       pageReference: json['page_reference'] as String? ?? 'Page 1',
-      cardType: json['card_type'] as String? ?? 'explain',
+      cardType: json['card_type'] as String? ?? 'user_highlight',
       title: json['title'] as String? ?? '',
       body: json['body'] as String? ?? '',
-      whyHere: json['why_here'] as String?,
+      whyHere: whyHere,
       citations:
           (json['citations'] as List?)?.cast<Map<String, dynamic>>() ?? [],
     );

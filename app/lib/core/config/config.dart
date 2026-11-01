@@ -28,6 +28,8 @@ class AppConfig {
           prefs.getString('athena_server_url');
       if (saved != null && saved.trim().isNotEmpty) {
         _runtimeBaseUrl = saved.trim().replaceAll(RegExp(r'/+$'), '');
+      } else if (!kIsWeb && _configured.isNotEmpty) {
+        _runtimeBaseUrl = _configured.trim().replaceAll(RegExp(r'/+$'), '');
       }
     } catch (_) {}
   }

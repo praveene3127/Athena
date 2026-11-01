@@ -64,17 +64,32 @@ def _fetch_multi_source_evidence(
 
     def _get_openalex() -> List[Dict[str, str]]:
         clean_q = re.sub(r"[^\w\s-]", " ", query).strip()
-        url = f"https://api.openalex.org/works?search={urllib.parse.quote(clean_q)}&per-page=2&sort=cited_by_count:desc"
-        req = urllib.request.Request(url, headers={"User-Agent": "AthenaReader/1.0 (mailto:athena@example.com)"})
-        with urllib.request.urlopen(req, timeout=3.5) as resp:
+        url = (
+            f"https://api.openalex.org/works?search={urllib.parse.quote(clean_q)}"
+            f"&filter=has_abstract:true"
+            f"&select=id,doi,display_name,publication_year,cited_by_count,abstract_inverted_index"
+            f"&per-page=2&mailto=athena@reader.local"
+        )
+        req = urllib.request.Request(
+            url,
+            headers={"User-Agent": "AthenaReader/1.0 (mailto:athena@reader.local)"},
+        )
+        with urllib.request.urlopen(req, timeout=2.5) as resp:
             data = json.loads(resp.read().decode("utf-8"))
             out = []
             for w in data.get("results", []):
-                inv = w.get("abstract_inverted_index") or {}
-                pos_words = [(p, word) for word, plist in inv.items() for p in plist]
-                pos_words.sort()
-                abst = " ".join(word for _, word in pos_words)[:400]
-                t = w.get("title") or "Empirical Study"
+                inv = w.get("abstract_inverted_index")
+                abst = ""
+                if inv and isinstance(inv, dict):
+                    pos_words = [
+                        (p, word)
+                        for word, plist in inv.items()
+                        for p in plist
+                        if isinstance(plist, list)
+                    ]
+                    pos_words.sort()
+                    abst = " ".join(word for _, word in pos_words)[:400]
+                t = w.get("display_name") or w.get("title") or "Empirical Study"
                 y = w.get("publication_year") or ""
                 c = w.get("cited_by_count") or 0
                 doi = w.get("doi") or w.get("id") or "https://openalex.org"
@@ -82,7 +97,41 @@ def _fetch_multi_source_evidence(
                     "title": f"Study ({y}, cited {c}x): {t}",
                     "publisher": "openalex.org",
                     "url": doi,
-                    "extract": abst,
+                    "extract": abst or t,
+                    "source_type": "academic_paper",
+                })
+            return out
+
+    def _get_crossref() -> List[Dict[str, str]]:
+        clean_q = re.sub(r"[^\w\s-]", " ", query).strip()
+        url = (
+            f"https://api.crossref.org/works?query={urllib.parse.quote(clean_q)}"
+            f"&select=DOI,title,published,is-referenced-by-count,abstract"
+            f"&rows=2&mailto=athena@reader.local"
+        )
+        req = urllib.request.Request(
+            url,
+            headers={"User-Agent": "AthenaReader/1.0 (mailto:athena@reader.local)"},
+        )
+        with urllib.request.urlopen(req, timeout=2.5) as resp:
+            data = json.loads(resp.read().decode("utf-8"))
+            out = []
+            items = data.get("message", {}).get("items", [])
+            for item in items:
+                titles = item.get("title", [])
+                t = titles[0] if titles else "Academic Paper"
+                doi = item.get("DOI")
+                link = f"https://doi.org/{doi}" if doi else "https://crossref.org"
+                c = item.get("is-referenced-by-count") or 0
+                pub_parts = item.get("published", {}).get("date-parts", [[None]])
+                pub = pub_parts[0][0] or "" if pub_parts and pub_parts[0] else ""
+                abst = item.get("abstract") or ""
+                abst_clean = re.sub(r"<[^>]+>", "", abst).strip()[:400]
+                out.append({
+                    "title": f"Study ({pub}, cited {c}x): {t}",
+                    "publisher": "crossref.org",
+                    "url": link,
+                    "extract": abst_clean or t,
                     "source_type": "academic_paper",
                 })
             return out
@@ -90,8 +139,8 @@ def _fetch_multi_source_evidence(
     def _get_semantic_scholar() -> List[Dict[str, str]]:
         clean_q = re.sub(r"[^\w\s-]", " ", query).strip()
         url = f"https://api.semanticscholar.org/graph/v1/paper/search?query={urllib.parse.quote(clean_q)}&limit=2&fields=title,year,abstract,url,citationCount"
-        req = urllib.request.Request(url, headers={"User-Agent": "AthenaReader/1.0"})
-        with urllib.request.urlopen(req, timeout=3.5) as resp:
+        req = urllib.request.Request(url, headers={"User-Agent": "AthenaReader/1.0 (mailto:athena@reader.local)"})
+        with urllib.request.urlopen(req, timeout=2.5) as resp:
             data = json.loads(resp.read().decode("utf-8"))
             out = []
             for p in data.get("data", []):
@@ -113,7 +162,7 @@ def _fetch_multi_source_evidence(
         clean_q = re.sub(r"[^\w\s-]", " ", concept_label).strip()
         url = f"https://api.duckduckgo.com/?q={urllib.parse.quote(clean_q)}&format=json&no_html=1"
         req = urllib.request.Request(url, headers={"User-Agent": "AthenaReader/1.0"})
-        with urllib.request.urlopen(req, timeout=3.5) as resp:
+        with urllib.request.urlopen(req, timeout=2.5) as resp:
             data = json.loads(resp.read().decode("utf-8"))
             out = []
             txt = data.get("AbstractText") or data.get("Answer") or ""
@@ -141,7 +190,7 @@ def _fetch_multi_source_evidence(
         clean_q = re.sub(r"[^\w\s-]", " ", concept_label).strip()
         url = f"https://hn.algolia.com/api/v1/search?query={urllib.parse.quote(clean_q)}&tags=story&hitsPerPage=2"
         req = urllib.request.Request(url, headers={"User-Agent": "AthenaReader/1.0"})
-        with urllib.request.urlopen(req, timeout=3.5) as resp:
+        with urllib.request.urlopen(req, timeout=2.5) as resp:
             data = json.loads(resp.read().decode("utf-8"))
             out = []
             for hit in data.get("hits", []):
@@ -157,13 +206,13 @@ def _fetch_multi_source_evidence(
                 })
             return out
 
-    tasks = [_get_openalex, _get_duckduckgo, _get_semantic_scholar]
+    tasks = [_get_openalex, _get_crossref, _get_duckduckgo, _get_semantic_scholar]
     if "DEBATE" in slot_archetype.upper() or "PARADOX" in slot_archetype.upper():
         tasks.append(_get_hackernews)
 
-    with ThreadPoolExecutor(max_workers=len(tasks)) as pool:
+    with ThreadPoolExecutor(max_workers=4) as pool:
         futures = [pool.submit(fn) for fn in tasks]
-        for fut in as_completed(futures, timeout=4.0):
+        for fut in as_completed(futures, timeout=2.5):
             try:
                 res = fut.result()
                 if res:

@@ -187,3 +187,83 @@ def test_create_and_fetch_saved_user_quote():
                 session.delete(d)
             session.commit()
 
+
+def test_saved_user_quote_survives_document_deletion():
+    from fastapi.testclient import TestClient
+    from app.main import app
+
+    client = TestClient(app)
+    doc_id = "doc_delete_survive_1"
+    note_id = "user_quote_survive_999"
+
+    with Session(engine) as session:
+        doc = Document(
+            id=doc_id,
+            filename="survive_doc.pdf",
+            title="Seneca Letters",
+            status="ready",
+            stage="done",
+            page_count=1,
+            created_at=utc_now(),
+            updated_at=utc_now(),
+        )
+        chunk = ReadingChunk(
+            id=f"{doc_id}-c0001",
+            document_id=doc_id,
+            sequence=1,
+            raw_text="True happiness is to enjoy the present, without anxious dependence upon the future.",
+            source_pages_json="[1]",
+            start_offset=0,
+            end_offset=82,
+            checksum="chk_seneca",
+            canonical_sha256="sha_seneca",
+        )
+        session.add(doc)
+        session.add(chunk)
+        session.commit()
+
+    try:
+        # Save user quote
+        payload = {
+            "id": note_id,
+            "document_id": doc_id,
+            "source_chunk_id": f"{doc_id}-c0001",
+            "title": "Saved Passage · Seneca",
+            "body": "True happiness is to enjoy the present.",
+            "exact_quote": "True happiness is to enjoy the present.",
+            "document_title": "Seneca Letters",
+        }
+        res = client.post("/api/cards/quote", json=payload)
+        assert res.status_code == 200
+
+        # Now delete the document
+        del_res = client.delete(f"/api/documents/{doc_id}")
+        assert del_res.status_code == 200
+
+        # Verify saved quote is STILL in /api/saved with document_title Seneca Letters
+        saved_res = client.get("/api/saved")
+        assert saved_res.status_code == 200
+        saved_items = saved_res.json()
+        matching = [item for item in saved_items if item["id"] == note_id]
+        assert len(matching) == 1
+        quote_card = matching[0]
+        assert quote_card["document_title"] == "Seneca Letters"
+        assert "True happiness" in quote_card["body"]
+        assert quote_card["saved"] is True
+
+        # Verify document is marked deleted and excluded from /api/documents list
+        docs_res = client.get("/api/documents")
+        assert docs_res.status_code == 200
+        assert not any(d["id"] == doc_id for d in docs_res.json())
+
+    finally:
+        with Session(engine) as session:
+            c = session.get(ContextCard, note_id)
+            if c:
+                session.delete(c)
+            d = session.get(Document, doc_id)
+            if d:
+                session.delete(d)
+            session.commit()
+
+

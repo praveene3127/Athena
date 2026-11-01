@@ -121,7 +121,7 @@ class LocalDatabase {
 
   Future<List<Map<String, dynamic>>> listDocuments() async {
     final db = await database;
-    final rows = await db.query('documents', orderBy: 'created_at DESC');
+    final rows = await db.query('documents', where: "status != 'deleted'", orderBy: 'created_at DESC');
     return rows.map((r) => Map<String, dynamic>.from(r)).toList();
   }
 
@@ -160,7 +160,21 @@ class LocalDatabase {
 
   Future<void> deleteDocument(String id) async {
     final db = await database;
-    await db.delete('documents', where: 'id = ?', whereArgs: [id]);
+    final savedCards = await db.query('context_cards',
+        where: 'document_id = ? AND saved = 1', whereArgs: [id]);
+    if (savedCards.isNotEmpty) {
+      await db.delete('reading_chunks', where: 'document_id = ?', whereArgs: [id]);
+      await db.delete('document_pages', where: 'document_id = ?', whereArgs: [id]);
+      await db.delete('context_cards',
+          where: 'document_id = ? AND saved = 0', whereArgs: [id]);
+      await db.update('documents', {
+        'status': 'deleted',
+        'file_path': '',
+        'canonical_text': '',
+      }, where: 'id = ?', whereArgs: [id]);
+    } else {
+      await db.delete('documents', where: 'id = ?', whereArgs: [id]);
+    }
   }
 
   Future<Map<String, dynamic>> getReaderData(String documentId) async {

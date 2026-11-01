@@ -6,6 +6,7 @@ import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:shared_preferences/shared_preferences.dart';
 
 import 'package:athena/core/config/config.dart';
+import 'package:athena/core/api/lan_discovery.dart';
 import 'package:athena/core/errors.dart';
 import 'package:athena/models/ai_provider.dart';
 import 'package:syncfusion_flutter_pdf/pdf.dart';
@@ -98,7 +99,28 @@ class ApiClient {
       return list;
     } catch (_) {
       final cached = await _loadCachedDocuments();
-      return cached;
+      if (cached.isNotEmpty) {
+        return cached;
+      }
+      if (!kIsWeb) {
+        try {
+          final found = await LanDiscovery.discoverServer(timeoutMs: 600);
+          if (found != null && found.isNotEmpty) {
+            await AppConfig.setBaseUrl(found);
+            final retryResp = await dio
+                .get('/api/documents')
+                .timeout(const Duration(seconds: 3));
+            final list = (retryResp.data as List).cast<Map<String, dynamic>>();
+            _cacheDocumentsLocally(list);
+            return list;
+          }
+        } catch (_) {}
+      }
+      throw AppError(
+        code: 'NETWORK_ERROR',
+        message:
+            'Cannot connect to Athena backend at ${AppConfig.apiBaseUrl}. Please ensure your phone and laptop are on the same Wi-Fi.',
+      );
     }
   }
 
@@ -381,6 +403,23 @@ class ApiClient {
       final cached = await _loadCachedReader(id);
       if (cached != null && cached.isNotEmpty) return cached;
       throw const AppError(code: 'NOT_FOUND', message: 'Reader data not found');
+    }
+  }
+
+  Future<Map<String, dynamic>?> generateCardForChunk(
+    String docId,
+    int chunkIndex, {
+    bool forceNew = false,
+  }) async {
+    try {
+      final response = await dio.post(
+        '/api/documents/$docId/cards/generate',
+        data: {'chunk_index': chunkIndex, 'force_new': forceNew},
+        options: Options(receiveTimeout: const Duration(seconds: 12)),
+      );
+      return response.data as Map<String, dynamic>;
+    } catch (_) {
+      return null;
     }
   }
 
@@ -838,7 +877,16 @@ class ApiClient {
             receiveTimeout: const Duration(seconds: 30),
           ),
         );
-        return response.data as Map<String, dynamic>;
+        final data = response.data as Map<String, dynamic>;
+        final answer = data['answer']?.toString();
+        if (data['status'] == 'ok' || (answer != null && answer.trim().isNotEmpty)) {
+          return {
+            'status': 'ok',
+            'answer': answer,
+            'citations': data['citations'] ?? [],
+            'source': 'backend',
+          };
+        }
       } catch (_) {}
     }
 
@@ -849,16 +897,17 @@ class ApiClient {
       final provider =
           prefs.getString('athena_ai_primary_provider') ?? 'gemini';
       final model =
-          prefs.getString('athena_ai_primary_model') ?? '';
+          prefs.getString('athena_ai_primary_model') ?? 'gemini-2.5-flash';
 
       if (key.isNotEmpty && provider == 'gemini') {
         final prompt =
             'You are Athena, a thoughtful literary reading companion.\n'
-            '${selectedText != null ? "Context: $selectedText\n\n" : ""}'
+            '${selectedText != null ? "Selected Context: $selectedText\n\n" : (passageText != null ? "Passage: $passageText\n\n" : "")}'
             'User Question: $question\n\n'
-            'Please provide a clear, insightful explanation.';
+            'Please provide a clear, concise (under 120 words), insightful explanation directly answering the question.';
+        final effectiveModel = model.isNotEmpty ? model : 'gemini-2.5-flash';
         final url =
-            'https://generativelanguage.googleapis.com/v1beta/models/$model:generateContent?key=$key';
+            'https://generativelanguage.googleapis.com/v1beta/models/$effectiveModel:generateContent?key=$key';
         final resp = await Dio().post(
           url,
           data: {
@@ -870,6 +919,7 @@ class ApiClient {
               }
             ]
           },
+          options: Options(receiveTimeout: const Duration(seconds: 15)),
         );
         if (resp.statusCode == 200 && resp.data is Map) {
           final cand = (resp.data['candidates'] as List?)?.firstOrNull;
@@ -878,7 +928,8 @@ class ApiClient {
           final text = part?['text']?.toString() ?? '';
           if (text.isNotEmpty) {
             return {
-              'answer': text,
+              'status': 'ok',
+              'answer': text.trim(),
               'citations': [],
               'source': 'direct_gemini',
             };
@@ -887,9 +938,39 @@ class ApiClient {
       }
     } catch (_) {}
 
+    // 3. Grounded passage fallback
+    final rawText = (selectedText != null && selectedText.isNotEmpty)
+        ? selectedText
+        : (passageText ?? '');
+    if (rawText.isNotEmpty) {
+      final sentences = rawText
+          .split(RegExp(r'(?<=[.!?])\s+'))
+          .where((s) => s.trim().isNotEmpty)
+          .toList();
+      if (sentences.isNotEmpty) {
+        String relevantSentence = sentences.first;
+        for (final s in sentences) {
+          if (question
+              .toLowerCase()
+              .split(' ')
+              .any((w) => w.length > 3 && s.toLowerCase().contains(w))) {
+            relevantSentence = s;
+            break;
+          }
+        }
+        return {
+          'status': 'ok',
+          'answer': 'From this passage: "$relevantSentence"',
+          'citations': [],
+          'source': 'offline_grounded',
+        };
+      }
+    }
+
     return {
+      'status': 'ok',
       'answer':
-          "Athena analyzed this passage in the context of the book's central theme. Enter an active Gemini API key in Settings to unlock deep analytical synthesis.",
+          "Athena analyzed this passage in the context of the book's central theme. Connect to the Athena server or add a Gemini API key in Settings to unlock deep analytical synthesis.",
       'citations': [],
       'source': 'offline_fallback',
     };

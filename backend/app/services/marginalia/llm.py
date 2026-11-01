@@ -641,12 +641,33 @@ class LLMService:
                 f"THE STORY SO FAR ('What Came Before'):\n{previous_context}\n\n"
             )
 
+        flavor = "scientific_claim"
+        try:
+            from app.services.marginalia.concepts import detect_passage_flavor
+            flavor = detect_passage_flavor(passage_text)
+        except Exception:
+            pass
+
+        flavor_guidance = ""
+        if flavor == "human_behavior_or_narrative":
+            flavor_guidance = (
+                "GENRE ADAPTATION (Human Behavior & Narrative):\n"
+                "- Ground EMPIRICAL STUDY in real behavioral psychology, cognitive science, or decision experiments explaining the mechanisms behind human behavior.\n"
+                "- Ground HISTORICAL CONTEXT in real-world biographical origins or historical inspirations.\n\n"
+            )
+        elif flavor == "historical_event":
+            flavor_guidance = (
+                "GENRE ADAPTATION (Historical & Biographical Events):\n"
+                "- Ground HISTORICAL CONTEXT and CRITICAL DEBATE in primary archival records, declassified reports, or modern historian disputes.\n\n"
+            )
+
         formula_mandate = (
             "*** HIGH-DOPAMINE 3-BEAT CARD FORMULA (MANDATORY) ***\n"
             "- Beat 1 — Narrative Bridge (1 sentence): Explicitly connect the preceding passage ('The Story So Far') to the specific claim/quote in this current passage so the reader sees why this matters right now in the book's argument.\n"
             "- Beat 2 — Hard Empirical Receipt (2-3 sentences): Introduce hard, specific, verified external facts, named researchers, institutions, publication years, sample sizes (N=), exact percentages, or historical primary sources from the Multi-Source Evidence or Google Search Grounding.\n"
             "- Beat 3 — The ||REVEAL|| Plot Twist (1-2 sentences): Deliver a counter-intuitive plot twist, surprising edge case, or subsequent reversal that rewards the reader for tapping reveal.\n"
             "- BANNED PATTERNS: Never write dictionary definitions ('X is defined as...', 'According to Wikipedia...', 'This concept refers to...'). Never echo the passage without outside information gain.\n\n"
+            f"{flavor_guidance}"
         )
 
         prompt = (

@@ -460,9 +460,11 @@ class _ReaderScreenState extends ConsumerState<ReaderScreen> {
     }
   }
 
-  Future<void> _saveUserQuote(ReaderItem chunk) async {
+  Future<void> _saveUserQuote(ReaderItem chunk, [String? selectedText]) async {
     final noteId = 'user_quote_${DateTime.now().millisecondsSinceEpoch}';
-    final quoteText = chunk.rawText;
+    final quoteText = (selectedText != null && selectedText.trim().isNotEmpty)
+        ? selectedText.trim()
+        : chunk.rawText;
     final docTitle =
         ref.read(readerDataProvider(widget.documentId)).value?.title ??
             'Document';
@@ -511,6 +513,70 @@ class _ReaderScreenState extends ConsumerState<ReaderScreen> {
           ),
         ),
       );
+    }
+  }
+
+  Future<void> _deepDiveChunk(ReaderItem chunk) async {
+    HapticFeedback.mediumImpact();
+    ScaffoldMessenger.of(context).showSnackBar(
+      const SnackBar(
+        content: Row(
+          children: [
+            SizedBox(
+              width: 14,
+              height: 14,
+              child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white),
+            ),
+            SizedBox(width: 12),
+            Text('Synthesizing peer-reviewed evidence & sources...'),
+          ],
+        ),
+        duration: Duration(seconds: 5),
+        behavior: SnackBarBehavior.floating,
+      ),
+    );
+    try {
+      final client = ref.read(apiClientProvider);
+      final res = await client.generateCardForChunk(
+        widget.documentId,
+        chunk.sequence ?? 1,
+        forceNew: true,
+      );
+      if (mounted) {
+        ScaffoldMessenger.of(context).hideCurrentSnackBar();
+        if (res != null) {
+          ref.invalidate(readerDataProvider(widget.documentId));
+          ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(
+              content: Text('⚡ Fact-Check card ready! Scroll down to explore.'),
+              backgroundColor: Color(0xFF2D6A4F),
+              duration: Duration(seconds: 3),
+              behavior: SnackBarBehavior.floating,
+            ),
+          );
+        } else {
+          ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(
+              content: Text('Could not generate card. Check server connection.'),
+              backgroundColor: Color(0xFFD97706),
+              duration: Duration(seconds: 3),
+              behavior: SnackBarBehavior.floating,
+            ),
+          );
+        }
+      }
+    } catch (_) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).hideCurrentSnackBar();
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text('Could not generate card. Check server connection.'),
+            backgroundColor: Color(0xFFD97706),
+            duration: Duration(seconds: 3),
+            behavior: SnackBarBehavior.floating,
+          ),
+        );
+      }
     }
   }
 
@@ -2598,7 +2664,9 @@ class _ReaderScreenState extends ConsumerState<ReaderScreen> {
                                         );
                                       },
                                       onAsk: () => _openAskSheet(item),
-                                      onSaveQuote: () => _saveUserQuote(item),
+                                      onSaveQuote: ([text]) =>
+                                          _saveUserQuote(item, text),
+                                      onDeepDive: () => _deepDiveChunk(item),
                                     ),
                                   );
                                 } else if (item.isContextCard) {
@@ -2867,8 +2935,10 @@ class _ReaderScreenState extends ConsumerState<ReaderScreen> {
                                                 },
                                                 onAsk: () =>
                                                     _openAskSheet(item),
-                                                onSaveQuote: () =>
-                                                    _saveUserQuote(item),
+                                                onSaveQuote: ([text]) =>
+                                                    _saveUserQuote(item, text),
+                                                onDeepDive: () =>
+                                                    _deepDiveChunk(item),
                                               ),
                                             ),
                                             AnimatedSize(

@@ -208,14 +208,25 @@ if not os.path.isfile(_VERSION_FILE):
 @app.get("/download", response_class=HTMLResponse)
 def get_download_page():
     """Serves the responsive 1-click mobile installer and package download hub."""
-    html_content = """<!DOCTYPE html>
+    import socket
+
+    lan_ip = "127.0.0.1"
+    try:
+        with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as s:
+            s.connect(("8.8.8.8", 80))
+            lan_ip = s.getsockname()[0]
+    except Exception:
+        pass
+    lan_url = f"http://{lan_ip}:8000"
+
+    html_content = f"""<!DOCTYPE html>
 <html lang="en">
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
   <title>Athena &mdash; Mobile App Downloads</title>
   <style>
-    :root {
+    :root {{
       --bg: #FBF9F5;
       --card-bg: #FFFFFF;
       --border: #E5E2DA;
@@ -223,9 +234,9 @@ def get_download_page():
       --muted: #6B6860;
       --accent: #C84B31;
       --accent-subtle: #F4EBE8;
-    }
-    @media (prefers-color-scheme: dark) {
-      :root {
+    }}
+    @media (prefers-color-scheme: dark) {{
+      :root {{
         --bg: #141413;
         --card-bg: #1C1B19;
         --border: #2E2D2A;
@@ -233,25 +244,25 @@ def get_download_page():
         --muted: #9E9B93;
         --accent: #D95D43;
         --accent-subtle: #2B1D1A;
-      }
-    }
-    * { box-sizing: border-box; margin: 0; padding: 0; }
-    body {
+      }}
+    }}
+    * {{ box-sizing: border-box; margin: 0; padding: 0; }}
+    body {{
       background: var(--bg);
       color: var(--ink);
       font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
       padding: 36px 18px 48px;
       line-height: 1.5;
       -webkit-font-smoothing: antialiased;
-    }
-    .container {
+    }}
+    .container {{
       max-width: 560px;
       margin: 0 auto;
-    }
-    .header {
+    }}
+    .header {{
       margin-bottom: 28px;
-    }
-    .kicker {
+    }}
+    .kicker {{
       font-family: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, monospace;
       font-size: 11px;
       font-weight: 700;
@@ -259,30 +270,30 @@ def get_download_page():
       text-transform: uppercase;
       color: var(--accent);
       margin-bottom: 8px;
-    }
-    h1 {
+    }}
+    h1 {{
       font-size: 26px;
       font-weight: 600;
       letter-spacing: -0.4px;
       margin-bottom: 6px;
-    }
-    .subtitle {
+    }}
+    .subtitle {{
       font-size: 14px;
       color: var(--muted);
-    }
-    .card {
+    }}
+    .card {{
       background: var(--card-bg);
       border: 1px solid var(--border);
       border-radius: 6px;
       padding: 20px;
       margin-bottom: 16px;
       transition: border-color 0.15s ease;
-    }
-    .card.highlight {
+    }}
+    .card.highlight {{
       border-color: var(--accent);
       box-shadow: 0 0 0 1px var(--accent);
-    }
-    .badge {
+    }}
+    .badge {{
       display: inline-block;
       font-family: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, monospace;
       font-size: 10px;
@@ -294,18 +305,18 @@ def get_download_page():
       padding: 2px 7px;
       border-radius: 3px;
       margin-bottom: 10px;
-    }
-    .card-title {
+    }}
+    .card-title {{
       font-size: 16px;
       font-weight: 600;
       margin-bottom: 4px;
-    }
-    .card-desc {
+    }}
+    .card-desc {{
       font-size: 13px;
       color: var(--muted);
       margin-bottom: 14px;
-    }
-    .btn {
+    }}
+    .btn {{
       display: inline-flex;
       align-items: center;
       justify-content: center;
@@ -317,40 +328,40 @@ def get_download_page():
       border-radius: 4px;
       cursor: pointer;
       transition: opacity 0.15s ease;
-    }
-    .btn:hover { opacity: 0.92; }
-    .btn-primary {
+    }}
+    .btn:hover {{ opacity: 0.92; }}
+    .btn-primary {{
       background: var(--ink);
       color: var(--bg);
-    }
-    .btn-secondary {
+    }}
+    .btn-secondary {{
       background: transparent;
       color: var(--ink);
       border: 1px solid var(--border);
-    }
-    .instructions {
+    }}
+    .instructions {{
       margin-top: 32px;
       border-top: 1px solid var(--border);
       padding-top: 24px;
-    }
-    .instructions h2 {
+    }}
+    .instructions h2 {{
       font-size: 11px;
       font-weight: 700;
       letter-spacing: 1px;
       text-transform: uppercase;
       color: var(--muted);
       margin-bottom: 16px;
-    }
-    .instruction-item {
+    }}
+    .instruction-item {{
       margin-bottom: 16px;
       font-size: 13px;
       color: var(--muted);
-    }
-    .instruction-item strong {
+    }}
+    .instruction-item strong {{
       color: var(--ink);
       display: block;
       margin-bottom: 3px;
-    }
+    }}
   </style>
 </head>
 <body>
@@ -359,6 +370,12 @@ def get_download_page():
       <div class="kicker">Athena Mobile Release</div>
       <h1>Download Athena</h1>
       <p class="subtitle">Direct, 1-click native packages and local client streaming.</p>
+    </div>
+
+    <div style="background: rgba(45, 106, 79, 0.08); border: 1px solid #2D6A4F; border-radius: 6px; padding: 14px 16px; margin-bottom: 20px;">
+      <div style="font-size: 11px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.8px; color: #2D6A4F; margin-bottom: 4px;">Athena Server Address</div>
+      <div style="font-family: monospace; font-size: 15px; font-weight: 600; color: var(--ink); margin-bottom: 4px;">{lan_url}</div>
+      <div style="font-size: 12px; color: var(--muted);">The APK is pre-configured to automatically connect to this address over Wi-Fi.</div>
     </div>
 
     <div class="card" id="android-card">
@@ -399,20 +416,20 @@ def get_download_page():
   </div>
 
   <script>
-    (function() {
+    (function() {{
       var ua = navigator.userAgent || navigator.vendor || window.opera;
-      if (/android/i.test(ua)) {
+      if (/android/i.test(ua)) {{
         var c = document.getElementById('android-card');
         var b = document.getElementById('android-badge');
         if (c) c.classList.add('highlight');
         if (b) b.style.display = 'inline-block';
-      } else if (/iPad|iPhone|iPod/.test(ua) && !window.MSStream) {
+      }} else if (/iPad|iPhone|iPod/.test(ua) && !window.MSStream) {{
         var c = document.getElementById('ios-card');
         var b = document.getElementById('ios-badge');
         if (c) c.classList.add('highlight');
         if (b) b.style.display = 'inline-block';
-      }
-    })();
+      }}
+    }})();
   </script>
 </body>
 </html>"""
