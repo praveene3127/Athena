@@ -964,101 +964,113 @@ class _LibraryScreenState extends ConsumerState<LibraryScreen>
           padding: const EdgeInsets.all(20),
           decoration: BoxDecoration(
             color: AppTheme.bgOf(ctx),
-            borderRadius: BorderRadius.circular(20),
+            borderRadius: BorderRadius.circular(12),
             border: Border.all(color: AppTheme.borderOf(ctx)),
           ),
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              Text(
-                'Import from URL',
-                style: TextStyle(
-                  fontFamily: AppTheme.fontDisplay,
-                  fontSize: 20,
-                  fontWeight: FontWeight.bold,
-                  color: AppTheme.textPrimaryOf(ctx),
+          child: SingleChildScrollView(
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  'Import from URL',
+                  style: TextStyle(
+                    fontFamily: AppTheme.fontDisplay,
+                    fontSize: 20,
+                    fontWeight: FontWeight.bold,
+                    color: AppTheme.textPrimaryOf(ctx),
+                  ),
                 ),
-              ),
-              const SizedBox(height: 8),
-              Text(
-                'Enter direct public URL to a PDF or EPUB document.',
-                style: TextStyle(
-                  fontSize: 13,
-                  color: AppTheme.textMutedOf(ctx),
-                ),
-              ),
-              const SizedBox(height: 16),
-              TextField(
-                controller: controller,
-                autofocus: true,
-                keyboardType: TextInputType.url,
-                style: TextStyle(
-                  fontSize: 14,
-                  color: AppTheme.textPrimaryOf(ctx),
-                ),
-                decoration: InputDecoration(
-                  hintText: 'https://example.com/book.pdf',
-                  hintStyle: TextStyle(
+                const SizedBox(height: 8),
+                Text(
+                  'Enter direct public URL to a PDF or EPUB document.',
+                  style: TextStyle(
                     fontSize: 13,
-                    color: isDark
-                        ? AppTheme.darkTextMuted
-                        : const Color(0xFF999999),
-                  ),
-                  filled: true,
-                  fillColor: AppTheme.surfaceOf(ctx),
-                  contentPadding:
-                      const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
-                  border: OutlineInputBorder(
-                    borderRadius: BorderRadius.circular(14),
-                    borderSide: BorderSide(color: AppTheme.borderOf(ctx)),
-                  ),
-                  enabledBorder: OutlineInputBorder(
-                    borderRadius: BorderRadius.circular(14),
-                    borderSide: BorderSide(color: AppTheme.borderOf(ctx)),
-                  ),
-                  focusedBorder: OutlineInputBorder(
-                    borderRadius: BorderRadius.circular(14),
-                    borderSide:
-                        const BorderSide(color: Color(0xFF2D6A4F), width: 1.5),
+                    color: AppTheme.textMutedOf(ctx),
                   ),
                 ),
-              ),
-              const SizedBox(height: 20),
-              Row(
-                mainAxisAlignment: MainAxisAlignment.end,
-                children: [
-                  TextButton(
-                    onPressed: () => Navigator.of(ctx).pop(null),
-                    style: TextButton.styleFrom(
-                      foregroundColor: AppTheme.textMutedOf(ctx),
-                    ),
-                    child: const Text('Cancel'),
+                const SizedBox(height: 16),
+                TextField(
+                  controller: controller,
+                  autofocus: true,
+                  keyboardType: TextInputType.url,
+                  style: TextStyle(
+                    fontSize: 14,
+                    color: AppTheme.textPrimaryOf(ctx),
                   ),
-                  const SizedBox(width: 8),
-                  ElevatedButton(
-                    onPressed: () {
-                      final text = controller.text.trim();
-
-                      if (text.isNotEmpty) {
-                        Navigator.of(ctx).pop(text);
-                      }
-                    },
-                    style: ElevatedButton.styleFrom(
-                      backgroundColor: const Color(0xFF2D6A4F),
-                      foregroundColor: Colors.white,
-                      elevation: 0,
-                      shape: RoundedRectangleBorder(
-                        borderRadius: BorderRadius.circular(20),
+                  decoration: InputDecoration(
+                    hintText: 'https://example.com/book.pdf',
+                    hintStyle: TextStyle(
+                      fontSize: 13,
+                      color: isDark
+                          ? AppTheme.darkTextMuted
+                          : const Color(0xFF999999),
+                    ),
+                    filled: true,
+                    fillColor: AppTheme.surfaceOf(ctx),
+                    contentPadding:
+                        const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
+                    suffixIcon: IconButton(
+                      icon: const Icon(Icons.content_paste_rounded, size: 18),
+                      tooltip: 'Paste from clipboard',
+                      onPressed: () async {
+                        final data = await Clipboard.getData(Clipboard.kTextPlain);
+                        if (data?.text != null && data!.text!.trim().isNotEmpty) {
+                          controller.text = data.text!.trim();
+                        }
+                      },
+                    ),
+                    border: OutlineInputBorder(
+                      borderRadius: BorderRadius.circular(6),
+                      borderSide: BorderSide(color: AppTheme.borderOf(ctx)),
+                    ),
+                    enabledBorder: OutlineInputBorder(
+                      borderRadius: BorderRadius.circular(6),
+                      borderSide: BorderSide(color: AppTheme.borderOf(ctx)),
+                    ),
+                    focusedBorder: OutlineInputBorder(
+                      borderRadius: BorderRadius.circular(6),
+                      borderSide:
+                          const BorderSide(color: Color(0xFF2D6A4F), width: 1.5),
+                    ),
+                  ),
+                ),
+                const SizedBox(height: 20),
+                Row(
+                  mainAxisAlignment: MainAxisAlignment.end,
+                  children: [
+                    TextButton(
+                      onPressed: () => Navigator.of(ctx).pop(null),
+                      style: TextButton.styleFrom(
+                        foregroundColor: AppTheme.textMutedOf(ctx),
                       ),
-                      padding: const EdgeInsets.symmetric(
-                          horizontal: 16, vertical: 10),
+                      child: const Text('Cancel'),
                     ),
-                    child: const Text('Import Book'),
-                  ),
-                ],
-              ),
-            ],
+                    const SizedBox(width: 8),
+                    ElevatedButton(
+                      onPressed: () {
+                        final text = controller.text.trim();
+
+                        if (text.isNotEmpty) {
+                          Navigator.of(ctx).pop(text);
+                        }
+                      },
+                      style: ElevatedButton.styleFrom(
+                        backgroundColor: const Color(0xFF2D6A4F),
+                        foregroundColor: Colors.white,
+                        elevation: 0,
+                        shape: RoundedRectangleBorder(
+                          borderRadius: BorderRadius.circular(6),
+                        ),
+                        padding: const EdgeInsets.symmetric(
+                            horizontal: 16, vertical: 10),
+                      ),
+                      child: const Text('Import Book'),
+                    ),
+                  ],
+                ),
+              ],
+            ),
           ),
         ),
       ),
@@ -2104,7 +2116,7 @@ class _EditorialPillButtonState extends State<_EditorialPillButton> {
             color: widget.onPressed != null
                 ? (isDark ? Colors.white : const Color(0xFF161615))
                 : const Color(0xFF888884),
-            borderRadius: BorderRadius.circular(24),
+            borderRadius: BorderRadius.circular(6),
             border: Border.all(
               color: isDark ? const Color(0xFFE2DDD5) : const Color(0xFF161615),
               width: 1.0,

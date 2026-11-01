@@ -452,9 +452,13 @@ class ApiClient {
     // Local substring search fallback over cached chunks if offline
     final cached = await _loadCachedReader(docId);
     final results = <Map<String, dynamic>>[];
-    if (cached != null && cached['chunks'] is List) {
+    if (cached != null) {
       final qLower = trimmed.toLowerCase();
-      final chunks = cached['chunks'] as List;
+      final chunks = (cached['chunks'] as List?) ??
+          ((cached['items'] as List?)
+              ?.where((it) => it is Map && it['type'] == 'reading_chunk')
+              .toList()) ??
+          [];
       for (int i = 0; i < chunks.length; i++) {
         final c = chunks[i];
         if (c is! Map) continue;
@@ -525,8 +529,14 @@ class ApiClient {
       final prefs = await SharedPreferences.getInstance();
       await prefs.setString('reader_cache_$docId', jsonEncode(data));
       if (!kIsWeb) {
-        final rawChunks = data['chunks'] as List?;
-        final rawCards = data['cards'] as List?;
+        final rawChunks = (data['chunks'] as List?) ??
+            ((data['items'] as List?)
+                ?.where((it) => it is Map && it['type'] == 'reading_chunk')
+                .toList());
+        final rawCards = (data['cards'] as List?) ??
+            ((data['items'] as List?)
+                ?.where((it) => it is Map && it['type'] == 'context_card')
+                .toList());
         if (rawChunks != null) {
           final chunkMaps = rawChunks.map((c) {
             final map = Map<String, dynamic>.from(c as Map);
@@ -583,17 +593,17 @@ class ApiClient {
 
   Future<Map<String, dynamic>?> _loadCachedReader(String docId) async {
     try {
+      final prefs = await SharedPreferences.getInstance();
+      final raw = prefs.getString('reader_cache_$docId');
+      if (raw != null && raw.isNotEmpty) {
+        return Map<String, dynamic>.from(jsonDecode(raw) as Map);
+      }
       if (!kIsWeb) {
         final dbData = await LocalDatabase.instance.getReaderData(docId);
         final chunks = dbData['chunks'] as List?;
         if (chunks != null && chunks.isNotEmpty) {
           return dbData;
         }
-      }
-      final prefs = await SharedPreferences.getInstance();
-      final raw = prefs.getString('reader_cache_$docId');
-      if (raw != null && raw.isNotEmpty) {
-        return Map<String, dynamic>.from(jsonDecode(raw) as Map);
       }
     } catch (_) {}
     return null;

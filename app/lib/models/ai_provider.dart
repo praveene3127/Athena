@@ -75,7 +75,7 @@ class AIConfig {
   factory AIConfig.fromJson(Map<String, dynamic> json) {
     return AIConfig(
       isConfigured: json['is_configured'] as bool? ?? false,
-      primaryProvider: json['primary_provider'] as String? ?? 'openrouter',
+      primaryProvider: json['primary_provider'] as String? ?? 'gemini',
       primaryModel: json['primary_model'] as String? ?? '',
       primaryApiKeyMasked: json['primary_api_key_masked'] as String?,
       primaryBaseUrl: json['primary_base_url'] as String?,

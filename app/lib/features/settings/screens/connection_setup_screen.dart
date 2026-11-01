@@ -1,3 +1,4 @@
+import 'package:flutter/services.dart';
 import 'package:flutter/material.dart';
 import 'package:athena/core/config/config.dart';
 import 'package:athena/core/theme/theme.dart';
@@ -205,14 +206,14 @@ class _ConnectionSetupScreenState extends State<ConnectionSetupScreen> {
                   padding: const EdgeInsets.all(7),
                   decoration: BoxDecoration(
                     color: const Color(0xFFF7F6F2),
-                    borderRadius: BorderRadius.circular(26),
+                    borderRadius: BorderRadius.circular(6),
                     border: Border.all(color: const Color(0xFFE5E7DC)),
                   ),
                   child: Container(
                     padding: const EdgeInsets.all(18),
                     decoration: BoxDecoration(
                       color: Colors.white,
-                      borderRadius: BorderRadius.circular(20),
+                      borderRadius: BorderRadius.circular(6),
                       border: Border.all(color: const Color(0xFFECEEE4)),
                     ),
                     child: Row(
@@ -223,7 +224,7 @@ class _ConnectionSetupScreenState extends State<ConnectionSetupScreen> {
                           decoration: BoxDecoration(
                             color:
                                 const Color(0xFF005E54).withValues(alpha: 0.1),
-                            borderRadius: BorderRadius.circular(14),
+                            borderRadius: BorderRadius.circular(6),
                           ),
                           child: const Icon(
                             Icons.vpn_key_rounded,
@@ -278,14 +279,14 @@ class _ConnectionSetupScreenState extends State<ConnectionSetupScreen> {
                   padding: const EdgeInsets.all(7),
                   decoration: BoxDecoration(
                     color: const Color(0xFFF7F6F2),
-                    borderRadius: BorderRadius.circular(26),
+                    borderRadius: BorderRadius.circular(6),
                     border: Border.all(color: const Color(0xFFE5E7DC)),
                   ),
                   child: Container(
                     padding: const EdgeInsets.all(20),
                     decoration: BoxDecoration(
                       color: Colors.white,
-                      borderRadius: BorderRadius.circular(20),
+                      borderRadius: BorderRadius.circular(6),
                       border: Border.all(color: const Color(0xFFECEEE4)),
                     ),
                     child: Column(
@@ -311,18 +312,28 @@ class _ConnectionSetupScreenState extends State<ConnectionSetupScreen> {
                             fillColor: const Color(0xFFFBFBF9),
                             contentPadding: const EdgeInsets.symmetric(
                                 horizontal: 16, vertical: 14),
+                            suffixIcon: IconButton(
+                              icon: const Icon(Icons.content_paste_rounded, size: 18),
+                              tooltip: 'Paste from clipboard',
+                              onPressed: () async {
+                                final data = await Clipboard.getData(Clipboard.kTextPlain);
+                                if (data?.text != null && data!.text!.trim().isNotEmpty) {
+                                  _urlController.text = data.text!.trim();
+                                }
+                              },
+                            ),
                             border: OutlineInputBorder(
-                              borderRadius: BorderRadius.circular(16),
+                              borderRadius: BorderRadius.circular(6),
                               borderSide:
                                   const BorderSide(color: Color(0xFFE5E7DC)),
                             ),
                             enabledBorder: OutlineInputBorder(
-                              borderRadius: BorderRadius.circular(16),
+                              borderRadius: BorderRadius.circular(6),
                               borderSide:
                                   const BorderSide(color: Color(0xFFE5E7DC)),
                             ),
                             focusedBorder: OutlineInputBorder(
-                              borderRadius: BorderRadius.circular(16),
+                              borderRadius: BorderRadius.circular(6),
                               borderSide: const BorderSide(
                                   color: Color(0xFF005E54), width: 1.5),
                             ),
@@ -389,17 +400,17 @@ class _ConnectionSetupScreenState extends State<ConnectionSetupScreen> {
                                   () => _obscureToken = !_obscureToken),
                             ),
                             border: OutlineInputBorder(
-                              borderRadius: BorderRadius.circular(16),
+                              borderRadius: BorderRadius.circular(6),
                               borderSide:
                                   const BorderSide(color: Color(0xFFE5E7DC)),
                             ),
                             enabledBorder: OutlineInputBorder(
-                              borderRadius: BorderRadius.circular(16),
+                              borderRadius: BorderRadius.circular(6),
                               borderSide:
                                   const BorderSide(color: Color(0xFFE5E7DC)),
                             ),
                             focusedBorder: OutlineInputBorder(
-                              borderRadius: BorderRadius.circular(16),
+                              borderRadius: BorderRadius.circular(6),
                               borderSide: const BorderSide(
                                   color: Color(0xFF005E54), width: 1.5),
                             ),
@@ -420,7 +431,7 @@ class _ConnectionSetupScreenState extends State<ConnectionSetupScreen> {
                                   ? const Color(0xFF005E54)
                                       .withValues(alpha: 0.08)
                                   : Colors.redAccent.withValues(alpha: 0.08),
-                              borderRadius: BorderRadius.circular(14),
+                              borderRadius: BorderRadius.circular(6),
                               border: Border.all(
                                 color: (_testSuccess == true)
                                     ? const Color(0xFF005E54)
@@ -462,13 +473,13 @@ class _ConnectionSetupScreenState extends State<ConnectionSetupScreen> {
                             Expanded(
                               child: InkWell(
                                 onTap: _testing ? null : _testConnection,
-                                borderRadius: BorderRadius.circular(24),
+                                borderRadius: BorderRadius.circular(6),
                                 child: Container(
                                   padding:
                                       const EdgeInsets.symmetric(vertical: 12),
                                   decoration: BoxDecoration(
                                     color: const Color(0xFFF7F6F2),
-                                    borderRadius: BorderRadius.circular(24),
+                                    borderRadius: BorderRadius.circular(6),
                                     border: Border.all(
                                         color: const Color(0xFFE5E7DC)),
                                   ),
@@ -509,13 +520,13 @@ class _ConnectionSetupScreenState extends State<ConnectionSetupScreen> {
                             Expanded(
                               child: InkWell(
                                 onTap: _saving ? null : _saveSettings,
-                                borderRadius: BorderRadius.circular(24),
+                                borderRadius: BorderRadius.circular(6),
                                 child: Container(
                                   padding: const EdgeInsets.symmetric(
                                       horizontal: 14, vertical: 8),
                                   decoration: BoxDecoration(
                                     color: const Color(0xFF005E54),
-                                    borderRadius: BorderRadius.circular(24),
+                                    borderRadius: BorderRadius.circular(6),
                                     boxShadow: [
                                       BoxShadow(
                                         color: const Color(0xFF005E54)
@@ -587,7 +598,7 @@ class _ConnectionSetupScreenState extends State<ConnectionSetupScreen> {
                     padding: const EdgeInsets.all(14),
                     decoration: BoxDecoration(
                       color: Colors.white,
-                      borderRadius: BorderRadius.circular(16),
+                      borderRadius: BorderRadius.circular(6),
                       border: Border.all(color: const Color(0xFFECEEE4)),
                     ),
                     child: const Row(

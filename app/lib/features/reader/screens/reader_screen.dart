@@ -510,6 +510,7 @@ class _ReaderScreenState extends ConsumerState<ReaderScreen> {
   void _showSearchSheet(BuildContext context) {
     showModalBottomSheet(
       context: context,
+      useSafeArea: true,
       isScrollControlled: true,
       backgroundColor: Colors.transparent,
       builder: (ctx) => _InBookSearchSheet(
@@ -1159,6 +1160,7 @@ class _ReaderScreenState extends ConsumerState<ReaderScreen> {
 
     showModalBottomSheet(
       context: context,
+      useSafeArea: true,
       backgroundColor: AppTheme.surfaceOf(context),
       isScrollControlled: true,
       shape: const RoundedRectangleBorder(
@@ -1168,9 +1170,12 @@ class _ReaderScreenState extends ConsumerState<ReaderScreen> {
         padding: EdgeInsets.only(bottom: MediaQuery.viewInsetsOf(ctx).bottom),
         child: StatefulBuilder(
           builder: (ctx, setSheetState) {
+            final screenHeight = MediaQuery.sizeOf(ctx).height;
+            final bottomInset = MediaQuery.viewInsetsOf(ctx).bottom;
+            final availableHeight = (screenHeight - bottomInset).clamp(200.0, screenHeight);
             return SafeArea(
               child: Container(
-                height: MediaQuery.of(ctx).size.height * 0.85,
+                height: (screenHeight * 0.85).clamp(200.0, availableHeight),
                 padding: const EdgeInsets.fromLTRB(20, 14, 20, 20),
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
@@ -1307,6 +1312,8 @@ class _ReaderScreenState extends ConsumerState<ReaderScreen> {
                               ),
                             )
                           : ListView.separated(
+                              keyboardDismissBehavior:
+                                  ScrollViewKeyboardDismissBehavior.onDrag,
                               itemCount: _brainDeckCards.length,
                               separatorBuilder: (_, __) =>
                                   const SizedBox(height: 10),
@@ -3923,10 +3930,13 @@ class _InBookSearchSheetState extends ConsumerState<_InBookSearchSheet> {
   @override
   Widget build(BuildContext context) {
     final isDark = Theme.of(context).brightness == Brightness.dark;
+    final screenHeight = MediaQuery.sizeOf(context).height;
+    final bottomInset = MediaQuery.viewInsetsOf(context).bottom;
+    final availableHeight = (screenHeight - bottomInset).clamp(240.0, screenHeight);
     return Container(
-      height: MediaQuery.of(context).size.height * 0.75,
+      height: (screenHeight * 0.75).clamp(240.0, availableHeight),
       padding: EdgeInsets.only(
-        bottom: MediaQuery.of(context).viewInsets.bottom,
+        bottom: bottomInset,
       ),
       decoration: BoxDecoration(
         color: AppTheme.bgOf(context),
@@ -4052,6 +4062,8 @@ class _InBookSearchSheetState extends ConsumerState<_InBookSearchSheet> {
                               ),
                             )
                           : ListView.separated(
+                              keyboardDismissBehavior:
+                                  ScrollViewKeyboardDismissBehavior.onDrag,
                               padding: const EdgeInsets.symmetric(
                                   horizontal: 16, vertical: 12),
                               itemCount: _results.length,

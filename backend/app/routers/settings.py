@@ -136,14 +136,14 @@ async def get_ai_config(session: Session = Depends(get_session)):
     env_llm = bool(LLM_API_KEY)
     is_configured = env_gemini or env_llm
 
-    primary_prov = "gemini" if env_gemini else ("openai" if env_llm else "openrouter")
-    primary_model = GEMINI_MODEL if env_gemini else (LLM_MODEL or "")
+    primary_prov = "gemini" if env_gemini else ("openai" if env_llm else "gemini")
+    primary_model = GEMINI_MODEL if env_gemini else (LLM_MODEL or "gemini-2.5-flash")
     masked_key = _mask_key(GEMINI_API_KEY_PRIMARY) if env_gemini else _mask_key(LLM_API_KEY)
 
     return {
         "is_configured": is_configured,
         "primary_provider": primary_prov,
-        "primary_model": primary_model if is_configured else "",
+        "primary_model": primary_model if is_configured else "gemini-2.5-flash",
         "primary_api_key_masked": masked_key,
         "primary_base_url": LLM_BASE_URL if env_llm else None,
         "fallback_provider": "gemini" if (env_gemini and GEMINI_API_KEY_SECONDARY) else None,

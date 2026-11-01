@@ -1,6 +1,7 @@
 import 'package:dio/dio.dart';
 import 'package:flutter/foundation.dart' show kIsWeb, defaultTargetPlatform;
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:athena/core/config/config.dart';
 import 'package:athena/core/config/update_service.dart';
@@ -26,18 +27,12 @@ class BYOKSettingsSheet extends StatefulWidget {
   }) {
     return showModalBottomSheet(
       context: context,
+      useSafeArea: true,
       isScrollControlled: true,
       backgroundColor: Colors.transparent,
-      builder: (ctx) => Padding(
-        padding: EdgeInsets.only(
-          bottom: MediaQuery.viewInsetsOf(ctx).bottom,
-        ),
-        child: SafeArea(
-          child: BYOKSettingsSheet(
-            apiClient: apiClient,
-            onConfigSaved: onConfigSaved,
-          ),
-        ),
+      builder: (ctx) => BYOKSettingsSheet(
+        apiClient: apiClient,
+        onConfigSaved: onConfigSaved,
       ),
     );
   }
@@ -46,18 +41,18 @@ class BYOKSettingsSheet extends StatefulWidget {
   State<BYOKSettingsSheet> createState() => _BYOKSettingsSheetState();
 }
 
-class _BYOKSettingsSheetState extends State<BYOKSettingsSheet>
-    with SingleTickerProviderStateMixin {
+class _BYOKSettingsSheetState extends State<BYOKSettingsSheet> {
   late final ApiClient _api;
-  late final TabController _tabController;
+  int _activeSegment = 0; // 0 = AI Key, 1 = Server Host
 
   bool _loading = true;
   bool _saving = false;
 
-  // Primary Provider State
-  String _primaryProvider = 'openrouter';
+  // Primary Provider State (Defaults to Google Gemini gemini-2.5-flash)
+  String _primaryProvider = 'gemini';
   final _primaryKeyController = TextEditingController();
-  final _primaryModelController = TextEditingController();
+  final _primaryModelController =
+      TextEditingController(text: 'gemini-2.5-flash');
   final _primaryBaseUrlController = TextEditingController();
   bool _obscurePrimaryKey = true;
   List<AIModelOption> _primaryModels = [];
@@ -70,9 +65,9 @@ class _BYOKSettingsSheetState extends State<BYOKSettingsSheet>
   bool _enableFallback = false;
   String _fallbackProvider = 'groq';
   final _fallbackKeyController = TextEditingController();
-  final _fallbackModelController = TextEditingController();
+  final _fallbackModelController =
+      TextEditingController(text: 'llama-3.3-70b-versatile');
   final _fallbackBaseUrlController = TextEditingController();
-  final _serverUrlController = TextEditingController();
   bool _obscureFallbackKey = true;
   List<AIModelOption> _fallbackModels = [];
   bool _fetchingFallbackModels = false;
@@ -81,6 +76,7 @@ class _BYOKSettingsSheetState extends State<BYOKSettingsSheet>
   bool? _fallbackTestOk;
 
   // Server Host State
+  final _serverUrlController = TextEditingController();
   bool _testingServer = false;
   String? _serverTestMessage;
   bool? _serverTestOk;
@@ -118,27 +114,38 @@ class _BYOKSettingsSheetState extends State<BYOKSettingsSheet>
       _checkingUpdates = true;
       _updateStatusMessage = null;
     });
+
     try {
-      final info = await UpdateService.checkForUpdates();
+      final info = await _api.checkAppUpdate(
+        currentVersion: kAthenaAppVersion,
+        platform: detectDevicePlatform(),
+      );
+
       if (!mounted) return;
-      setState(() {
-        _checkingUpdates = false;
-        _settingsUpdateInfo = info;
-        if (info == null) {
+
+      if (info != null) {
+        setState(() {
+          _settingsUpdateInfo = UpdateInfo.fromJson(info);
+          _checkingUpdates = false;
+          _updateStatusMessage = _settingsUpdateInfo!.updateAvailable
+              ? 'New version ${_settingsUpdateInfo!.latestVersion} available!'
+              : 'You are on the latest version ($kAthenaAppVersion).';
+        });
+      } else {
+        setState(() {
+          _settingsUpdateInfo = _fallbackSettingsUpdateInfo;
+          _checkingUpdates = false;
           _updateStatusMessage =
-              'Could not reach update server. Check your connection.';
-        } else if (info.updateAvailable) {
-          _updateStatusMessage =
-              'Update v${info.latestVersion} available! You are on v$kAthenaAppVersion.';
-        } else {
-          _updateStatusMessage = 'Athena is up to date (v$kAthenaAppVersion).';
-        }
-      });
+              'You are running version $kAthenaAppVersion (up to date).';
+        });
+      }
     } catch (_) {
       if (!mounted) return;
       setState(() {
+        _settingsUpdateInfo = _fallbackSettingsUpdateInfo;
         _checkingUpdates = false;
-        _updateStatusMessage = 'Unable to check for updates right now.';
+        _updateStatusMessage =
+            'Running $kAthenaAppVersion (could not query remote update feed).';
       });
     }
   }
@@ -147,13 +154,12 @@ class _BYOKSettingsSheetState extends State<BYOKSettingsSheet>
   void initState() {
     super.initState();
     _api = widget.apiClient ?? ApiClient();
-    _tabController = TabController(length: 3, vsync: this);
-    _loadConfig();
+    _serverUrlController.text = AppConfig.apiBaseUrl;
+    _loadCurrentConfig();
   }
 
   @override
   void dispose() {
-    _tabController.dispose();
     _primaryKeyController.dispose();
     _primaryModelController.dispose();
     _primaryBaseUrlController.dispose();
@@ -164,39 +170,17 @@ class _BYOKSettingsSheetState extends State<BYOKSettingsSheet>
     super.dispose();
   }
 
-  Future<void> _loadConfig() async {
-    setState(() {
-      _loading = true;
-    });
-
+  Future<void> _loadCurrentConfig() async {
     try {
+      final config = await _api.getAIConfig();
       final prefs = await SharedPreferences.getInstance();
-      final savedUrl = prefs.getString('custom_server_url') ??
-          prefs.getString('athena_backend_url');
-      final isMobile = !kIsWeb &&
-          (defaultTargetPlatform == TargetPlatform.android ||
-              defaultTargetPlatform == TargetPlatform.iOS);
-
-      if (savedUrl != null && savedUrl.isNotEmpty) {
-        _serverUrlController.text = savedUrl;
-      } else if (isMobile) {
-        _serverUrlController.text = '';
-      } else {
-        _serverUrlController.text = AppConfig.apiBaseUrl;
-      }
-
-      AIConfig? config;
-      if (!isMobile || (savedUrl != null && savedUrl.isNotEmpty)) {
-        try {
-          config = await _api.getAIConfig();
-        } catch (_) {}
-      }
-      if (!mounted) return;
 
       final savedLocalPrimaryProvider =
           prefs.getString('athena_ai_primary_provider');
-      final savedLocalPrimaryKey = prefs.getString('athena_ai_primary_api_key');
-      final savedLocalPrimaryModel = prefs.getString('athena_ai_primary_model');
+      final savedLocalPrimaryKey =
+          prefs.getString('athena_ai_primary_api_key');
+      final savedLocalPrimaryModel =
+          prefs.getString('athena_ai_primary_model');
       final savedLocalPrimaryBaseUrl =
           prefs.getString('athena_ai_primary_base_url');
 
@@ -210,47 +194,47 @@ class _BYOKSettingsSheetState extends State<BYOKSettingsSheet>
           prefs.getString('athena_ai_fallback_base_url');
 
       setState(() {
-        _primaryProvider = (config != null && config.primaryProvider.isNotEmpty)
+        _primaryProvider = config.primaryProvider.isNotEmpty
             ? config.primaryProvider
             : (savedLocalPrimaryProvider ?? 'gemini');
 
-        _primaryModelController.text =
-            (config != null && config.primaryModel.isNotEmpty)
-                ? config.primaryModel
-                : (savedLocalPrimaryModel ?? '');
+        final loadedModel = config.primaryModel.isNotEmpty
+            ? config.primaryModel
+            : (savedLocalPrimaryModel ?? '');
+        _primaryModelController.text = loadedModel.isNotEmpty
+            ? loadedModel
+            : (_primaryProvider == 'gemini' ? 'gemini-2.5-flash' : '');
 
         _primaryBaseUrlController.text =
-            config?.primaryBaseUrl ?? (savedLocalPrimaryBaseUrl ?? '');
+            config.primaryBaseUrl ?? (savedLocalPrimaryBaseUrl ?? '');
 
         if (savedLocalPrimaryKey != null && savedLocalPrimaryKey.isNotEmpty) {
           _primaryKeyController.text = savedLocalPrimaryKey;
-        } else if (config?.primaryApiKeyMasked != null) {
-          _primaryKeyController.text = config!.primaryApiKeyMasked!;
+        } else if (config.primaryApiKeyMasked != null) {
+          _primaryKeyController.text = config.primaryApiKeyMasked!;
         }
 
-        if ((config != null && config.fallbackProvider != null) ||
+        if (config.fallbackProvider != null ||
             (savedLocalFallbackProvider != null &&
                 savedLocalFallbackProvider.isNotEmpty)) {
           _enableFallback = true;
-          _fallbackProvider = config?.fallbackProvider ??
+          _fallbackProvider = config.fallbackProvider ??
               (savedLocalFallbackProvider ?? 'groq');
           _fallbackModelController.text =
-              config?.fallbackModel ?? (savedLocalFallbackModel ?? '');
+              config.fallbackModel ?? (savedLocalFallbackModel ?? '');
           _fallbackBaseUrlController.text =
-              config?.fallbackBaseUrl ?? (savedLocalFallbackBaseUrl ?? '');
+              config.fallbackBaseUrl ?? (savedLocalFallbackBaseUrl ?? '');
           if (savedLocalFallbackKey != null &&
               savedLocalFallbackKey.isNotEmpty) {
             _fallbackKeyController.text = savedLocalFallbackKey;
-          } else if (config?.fallbackApiKeyMasked != null) {
-            _fallbackKeyController.text = config!.fallbackApiKeyMasked!;
+          } else if (config.fallbackApiKeyMasked != null) {
+            _fallbackKeyController.text = config.fallbackApiKeyMasked!;
           }
         }
         _loading = false;
       });
 
-      // If backend was empty but local preferences has verified credentials, auto-sync to backend immediately
-      if (config != null &&
-          !config.isConfigured &&
+      if (!config.isConfigured &&
           savedLocalPrimaryKey != null &&
           savedLocalPrimaryKey.isNotEmpty) {
         _persistToLocalStorageAndBackend();
@@ -276,7 +260,6 @@ class _BYOKSettingsSheetState extends State<BYOKSettingsSheet>
             ? _fallbackBaseUrlController.text.trim()
             : null);
 
-    // Require an API key for cloud providers before attempting fetch
     if (provider != 'custom' && key.isEmpty) {
       setState(() {
         if (isPrimary) {
@@ -357,12 +340,10 @@ class _BYOKSettingsSheetState extends State<BYOKSettingsSheet>
       setState(() {
         if (isPrimary) {
           _primaryTestOk = false;
-          _primaryTestMessage = 'Please enter an API key first';
-          _primaryModels = [];
+          _primaryTestMessage = 'Please enter an API key first.';
         } else {
           _fallbackTestOk = false;
-          _fallbackTestMessage = 'Please enter an API key first';
-          _fallbackModels = [];
+          _fallbackTestMessage = 'Please enter a backup API key first.';
         }
       });
       return;
@@ -381,71 +362,32 @@ class _BYOKSettingsSheetState extends State<BYOKSettingsSheet>
     });
 
     try {
-      final result = await _api.testAIConnection(
+      final res = await _api.testAIConnection(
         provider: provider,
         apiKey: key.isNotEmpty ? key : null,
         model: model.isNotEmpty ? model : null,
         baseUrl: baseUrl,
       );
 
+      final ok = res['status'] == 'ok';
+      final msg = res['message'] as String? ??
+          (ok ? 'Connected successfully!' : 'Connection test failed.');
+
       if (!mounted) return;
-      final ok = result['ok'] as bool? ?? false;
-      final latency = result['latency_ms'] as int? ?? 0;
-      final msg = result['message'] as String? ?? (ok ? 'Verified' : 'Failed');
+      setState(() {
+        if (isPrimary) {
+          _testingPrimary = false;
+          _primaryTestOk = ok;
+          _primaryTestMessage = msg;
+        } else {
+          _testingFallback = false;
+          _fallbackTestOk = ok;
+          _fallbackTestMessage = msg;
+        }
+      });
 
       if (ok) {
-        List<AIModelOption> liveModels = [];
-        if (result['models'] is List && (result['models'] as List).isNotEmpty) {
-          liveModels = (result['models'] as List)
-              .map((item) =>
-                  AIModelOption.fromJson(item as Map<String, dynamic>))
-              .toList();
-        } else {
-          liveModels = await _fetchModels(isPrimary: isPrimary);
-        }
-
-        setState(() {
-          if (isPrimary) {
-            _testingPrimary = false;
-            _primaryTestOk = true;
-            _primaryModels = liveModels;
-            if (_primaryModelController.text.isEmpty && liveModels.isNotEmpty) {
-              _primaryModelController.text = liveModels.first.id;
-            }
-            _primaryTestMessage = liveModels.isNotEmpty
-                ? 'Saved & Connected in ${latency}ms (${liveModels.length} models discovered)'
-                : 'Saved & Connected in ${latency}ms';
-          } else {
-            _testingFallback = false;
-            _fallbackTestOk = true;
-            _fallbackModels = liveModels;
-            if (_fallbackModelController.text.isEmpty &&
-                liveModels.isNotEmpty) {
-              _fallbackModelController.text = liveModels.first.id;
-            }
-            _fallbackTestMessage = liveModels.isNotEmpty
-                ? 'Saved & Connected in ${latency}ms (${liveModels.length} models discovered)'
-                : 'Saved & Connected in ${latency}ms';
-          }
-        });
-
-        // Auto-persist verified credentials immediately to SharedPreferences & backend
-        _persistToLocalStorageAndBackend().catchError((_) {});
-        widget.onConfigSaved?.call();
-      } else {
-        setState(() {
-          if (isPrimary) {
-            _testingPrimary = false;
-            _primaryTestOk = false;
-            _primaryTestMessage = msg;
-            _primaryModels = [];
-          } else {
-            _testingFallback = false;
-            _fallbackTestOk = false;
-            _fallbackTestMessage = msg;
-            _fallbackModels = [];
-          }
-        });
+        _fetchModels(isPrimary: isPrimary);
       }
     } catch (e) {
       if (!mounted) return;
@@ -453,54 +395,51 @@ class _BYOKSettingsSheetState extends State<BYOKSettingsSheet>
         if (isPrimary) {
           _testingPrimary = false;
           _primaryTestOk = false;
-          _primaryTestMessage = 'Connection failed: $e';
-          _primaryModels = [];
+          _primaryTestMessage = 'Connection error: $e';
         } else {
           _testingFallback = false;
           _fallbackTestOk = false;
-          _fallbackTestMessage = 'Connection failed: $e';
-          _fallbackModels = [];
+          _fallbackTestMessage = 'Connection error: $e';
         }
       });
     }
   }
 
   Future<void> _testServerConnection() async {
-    final rawUrl = _serverUrlController.text.trim();
-    if (rawUrl.isEmpty) {
-      setState(() {
-        _serverTestOk = false;
-        _serverTestMessage = 'Please enter a Server URL.';
-      });
-      return;
-    }
+    final raw = _serverUrlController.text.trim();
+    final sanitized = raw.isEmpty ? AppConfig.apiBaseUrl : raw;
+
     setState(() {
       _testingServer = true;
       _serverTestMessage = null;
       _serverTestOk = null;
     });
 
-    final sanitized = rawUrl.replaceAll(RegExp(r'/+$'), '');
-    final healthEndpoint = '$sanitized/api/health';
     final sw = Stopwatch()..start();
     try {
-      final testDio = Dio(
+      final dio = Dio(
         BaseOptions(
           connectTimeout: const Duration(seconds: 4),
           receiveTimeout: const Duration(seconds: 4),
           headers: {'Accept': 'application/json'},
         ),
       );
-      final response = await testDio.get(healthEndpoint);
+
+      final targetUrl = sanitized.endsWith('/')
+          ? '${sanitized}api/health'
+          : '$sanitized/api/health';
+
+      final response = await dio.get(targetUrl);
       sw.stop();
+
       if (!mounted) return;
+
       if (response.statusCode == 200) {
-        await AppConfig.setBaseUrl(sanitized);
         setState(() {
           _testingServer = false;
           _serverTestOk = true;
           _serverTestMessage =
-              'Connected (${sw.elapsedMilliseconds}ms) — Engine live at $sanitized';
+              'Connected (${sw.elapsedMilliseconds}ms) — Server live at $sanitized';
         });
         widget.onConfigSaved?.call();
       } else {
@@ -518,7 +457,7 @@ class _BYOKSettingsSheetState extends State<BYOKSettingsSheet>
         _testingServer = false;
         _serverTestOk = false;
         _serverTestMessage =
-            'Connection failed. Ensure Athena is running and reachable on your phone\'s network.';
+            "Connection failed. Ensure Athena is running and reachable on your phone's network.";
       });
     }
   }
@@ -592,17 +531,13 @@ class _BYOKSettingsSheetState extends State<BYOKSettingsSheet>
   }
 
   Future<void> _saveConfig() async {
-    setState(() {
-      _saving = true;
-    });
+    setState(() => _saving = true);
 
     try {
       await _persistToLocalStorageAndBackend();
 
       if (!mounted) return;
-      setState(() {
-        _saving = false;
-      });
+      setState(() => _saving = false);
 
       widget.onConfigSaved?.call();
       Navigator.of(context).pop();
@@ -627,9 +562,7 @@ class _BYOKSettingsSheetState extends State<BYOKSettingsSheet>
       }
     } catch (e) {
       if (!mounted) return;
-      setState(() {
-        _saving = false;
-      });
+      setState(() => _saving = false);
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(
           content: Text('Could not save configuration: $e'),
@@ -650,6 +583,7 @@ class _BYOKSettingsSheetState extends State<BYOKSettingsSheet>
 
     showModalBottomSheet(
       context: context,
+      useSafeArea: true,
       isScrollControlled: true,
       backgroundColor: Colors.transparent,
       builder: (ctx) {
@@ -674,36 +608,33 @@ class _BYOKSettingsSheetState extends State<BYOKSettingsSheet>
   @override
   Widget build(BuildContext context) {
     final isDark = Theme.of(context).brightness == Brightness.dark;
-    final bottomInset = MediaQuery.of(context).viewInsets.bottom;
-    final maxHeight = MediaQuery.of(context).size.height * 0.88;
+    final screenHeight = MediaQuery.sizeOf(context).height;
+    final bottomInset = MediaQuery.viewInsetsOf(context).bottom;
+    final maxHeight = (screenHeight * 0.88).clamp(320.0, screenHeight);
 
     return Container(
       constraints: BoxConstraints(maxHeight: maxHeight),
-      margin: EdgeInsets.only(
-        left: 12,
-        right: 12,
-        bottom: bottomInset > 0 ? bottomInset + 8 : 16,
-      ),
+      margin: const EdgeInsets.symmetric(horizontal: 10),
       decoration: BoxDecoration(
         color: isDark ? const Color(0xFF181818) : Colors.white,
-        borderRadius: BorderRadius.circular(24),
+        borderRadius: const BorderRadius.vertical(top: Radius.circular(20)),
         border: Border.all(
           color: isDark ? const Color(0xFF282828) : AppTheme.border,
           width: 1.5,
         ),
         boxShadow: const [
           BoxShadow(
-            color: Color(0x14000000),
+            color: Color(0x18000000),
             blurRadius: 28,
             offset: Offset(0, 10),
           ),
         ],
       ),
       child: ClipRRect(
-        borderRadius: BorderRadius.circular(24),
+        borderRadius: const BorderRadius.vertical(top: Radius.circular(20)),
         child: _loading
             ? SizedBox(
-                height: 280,
+                height: 260,
                 child: Center(
                   child: CircularProgressIndicator(
                     color: isDark ? Colors.white : AppTheme.ink,
@@ -714,67 +645,54 @@ class _BYOKSettingsSheetState extends State<BYOKSettingsSheet>
                 mainAxisSize: MainAxisSize.min,
                 crossAxisAlignment: CrossAxisAlignment.stretch,
                 children: [
-                  _buildHeader(),
+                  _buildCompactHeader(isDark),
                   Divider(
                     height: 1,
                     color: isDark ? const Color(0xFF282828) : AppTheme.hairline,
                   ),
-                  _buildTabBar(),
+                  _buildSegmentedToggle(isDark),
                   Flexible(
-                    child: TabBarView(
-                      controller: _tabController,
-                      children: [
-                        _buildPrimaryTab(),
-                        _buildFallbackTab(),
-                        _buildServerTab(),
-                      ],
+                    child: SingleChildScrollView(
+                      keyboardDismissBehavior:
+                          ScrollViewKeyboardDismissBehavior.onDrag,
+                      padding: EdgeInsets.fromLTRB(
+                        16,
+                        10,
+                        16,
+                        bottomInset > 0 ? bottomInset + 16 : 24,
+                      ),
+                      child: _activeSegment == 0
+                          ? _buildAIKeyTab(isDark)
+                          : _buildServerTab(isDark),
                     ),
                   ),
-                  Divider(
-                    height: 1,
-                    color: isDark ? const Color(0xFF282828) : AppTheme.hairline,
-                  ),
-                  _buildFooter(),
                 ],
               ),
       ),
     );
   }
 
-  Widget _buildHeader() {
-    final isDark = Theme.of(context).brightness == Brightness.dark;
-    return Padding(
-      padding: const EdgeInsets.fromLTRB(20, 18, 16, 12),
+  Widget _buildCompactHeader(bool isDark) {
+    return Container(
+      height: 48,
+      padding: const EdgeInsets.symmetric(horizontal: 16),
       child: Row(
         children: [
           const AthenaAvatar(
             expression: AthenaExpression.happy,
-            size: 32,
+            size: 24,
             showBezel: true,
           ),
-          const SizedBox(width: 12),
+          const SizedBox(width: 10),
           Expanded(
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Text(
-                  'Intelligence Engines (BYOK)',
-                  style: TextStyle(
-                    fontFamily: AppTheme.fontDisplay,
-                    fontSize: 18,
-                    fontWeight: FontWeight.w600,
-                    color: isDark ? Colors.white : AppTheme.ink,
-                  ),
-                ),
-                Text(
-                  'Dynamic Multi-Provider AI • Dual Failover',
-                  style: TextStyle(
-                    fontFamily: AppTheme.fontUI,
-                    fontSize: 12,
-                    color: isDark ? AppTheme.darkTextMuted : AppTheme.textMuted,
-                  ),
-                ),
-              ],
+            child: Text(
+              'AI & Server Settings',
+              style: TextStyle(
+                fontFamily: AppTheme.fontDisplay,
+                fontSize: 16,
+                fontWeight: FontWeight.w700,
+                color: isDark ? Colors.white : AppTheme.ink,
+              ),
             ),
           ),
           IconButton(
@@ -784,450 +702,887 @@ class _BYOKSettingsSheetState extends State<BYOKSettingsSheet>
               color: isDark ? AppTheme.darkTextMuted : AppTheme.textMuted,
             ),
             onPressed: () => Navigator.of(context).pop(),
+            padding: EdgeInsets.zero,
+            constraints: const BoxConstraints(minWidth: 32, minHeight: 32),
           ),
         ],
       ),
     );
   }
 
-  Widget _buildTabBar() {
-    final isDark = Theme.of(context).brightness == Brightness.dark;
-    return Container(
-      color: isDark ? const Color(0xFF202020) : AppTheme.surfaceWarm,
-      child: TabBar(
-        controller: _tabController,
-        labelColor: isDark ? Colors.white : AppTheme.ink,
-        unselectedLabelColor:
-            isDark ? AppTheme.darkTextMuted : AppTheme.textMuted,
-        indicatorColor: isDark ? Colors.white : AppTheme.ink,
-        indicatorWeight: 2,
-        labelStyle: const TextStyle(
-          fontFamily: AppTheme.fontUI,
-          fontSize: 12,
-          fontWeight: FontWeight.w700,
-          letterSpacing: 0.8,
+  Widget _buildSegmentedToggle(bool isDark) {
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(16, 6, 16, 8),
+      child: Container(
+        height: 38,
+        padding: const EdgeInsets.all(3),
+        decoration: BoxDecoration(
+          color: isDark ? const Color(0xFF222222) : const Color(0xFFEEEEEE),
+          borderRadius: BorderRadius.circular(8),
         ),
-        tabs: const [
-          Tab(text: 'PRIMARY AI'),
-          Tab(text: 'FAILOVER BACKUP'),
-          Tab(text: 'SERVER HOST'),
-        ],
+        child: Row(
+          children: [
+            Expanded(
+              child: _buildSegmentButton(
+                index: 0,
+                label: 'AI Key',
+                icon: Icons.key_rounded,
+                isDark: isDark,
+              ),
+            ),
+            const SizedBox(width: 4),
+            Expanded(
+              child: _buildSegmentButton(
+                index: 1,
+                label: 'Server Host',
+                icon: Icons.dns_rounded,
+                isDark: isDark,
+              ),
+            ),
+          ],
+        ),
       ),
     );
   }
 
-  Widget _buildPrimaryTab() {
+  Widget _buildSegmentButton({
+    required int index,
+    required String label,
+    required IconData icon,
+    required bool isDark,
+  }) {
+    final isSelected = _activeSegment == index;
+    return GestureDetector(
+      onTap: () => setState(() => _activeSegment = index),
+      behavior: HitTestBehavior.opaque,
+      child: Container(
+        alignment: Alignment.center,
+        decoration: BoxDecoration(
+          color: isSelected
+              ? (isDark ? const Color(0xFF333333) : Colors.white)
+              : Colors.transparent,
+          borderRadius: BorderRadius.circular(6),
+          boxShadow: isSelected
+              ? const [
+                  BoxShadow(
+                    color: Color(0x0C000000),
+                    blurRadius: 4,
+                    offset: Offset(0, 1),
+                  ),
+                ]
+              : null,
+        ),
+        child: Row(
+          mainAxisAlignment: MainAxisAlignment.center,
+          children: [
+            Icon(
+              icon,
+              size: 15,
+              color: isSelected
+                  ? (isDark ? Colors.white : AppTheme.ink)
+                  : (isDark ? AppTheme.darkTextMuted : AppTheme.textMuted),
+            ),
+            const SizedBox(width: 6),
+            Text(
+              label,
+              style: TextStyle(
+                fontFamily: AppTheme.fontUI,
+                fontSize: 12,
+                fontWeight: isSelected ? FontWeight.w700 : FontWeight.w500,
+                color: isSelected
+                    ? (isDark ? Colors.white : AppTheme.ink)
+                    : (isDark ? AppTheme.darkTextMuted : AppTheme.textMuted),
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget _buildAIKeyTab(bool isDark) {
     final info = kSupportedProviders.firstWhere(
       (p) => p.id == _primaryProvider,
       orElse: () => kSupportedProviders.first,
     );
 
-    return SingleChildScrollView(
-      padding: const EdgeInsets.all(20),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          _buildSectionLabel('SELECT PROVIDER'),
-          const SizedBox(height: 8),
-          _buildProviderChips(
-            selectedId: _primaryProvider,
-            onSelected: (id) {
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        _buildSectionLabel('AI PROVIDER'),
+        const SizedBox(height: 6),
+        _buildProviderDropdown(
+          value: _primaryProvider,
+          isDark: isDark,
+          onChanged: (val) {
+            if (val != null) {
               setState(() {
-                _primaryProvider = id;
-                _primaryModelController.text = '';
+                _primaryProvider = val;
+                if (val == 'gemini') {
+                  _primaryModelController.text = 'gemini-2.5-flash';
+                } else if (val == 'groq') {
+                  _primaryModelController.text = 'llama-3.3-70b-versatile';
+                } else {
+                  _primaryModelController.text = '';
+                }
                 _primaryTestMessage = null;
                 _primaryTestOk = null;
                 _primaryModels = [];
               });
-            },
-          ),
-          const SizedBox(height: 18),
-          _buildApiKeyField(
-            controller: _primaryKeyController,
-            obscureText: _obscurePrimaryKey,
-            onToggleObscure: () {
-              setState(() => _obscurePrimaryKey = !_obscurePrimaryKey);
-            },
-            placeholder: info.keyPlaceholder,
-            docUrl: info.docUrl,
-            providerName: info.name,
-            onChanged: (val) {
-              if (_primaryTestOk != null || _primaryModels.isNotEmpty) {
-                setState(() {
-                  _primaryTestOk = null;
-                  _primaryTestMessage = null;
-                  _primaryModels = [];
-                });
-              }
-            },
-          ),
-          if (_primaryProvider == 'custom') ...[
-            const SizedBox(height: 14),
-            _buildBaseUrlField(_primaryBaseUrlController),
-          ],
-          const SizedBox(height: 18),
-          _buildModelSelector(
-            isPrimary: true,
-            modelController: _primaryModelController,
-            models: _primaryModels,
-            isFetching: _fetchingPrimaryModels,
-          ),
-          const SizedBox(height: 18),
-          _buildTestConnectionButton(
-            isPrimary: true,
-            testing: _testingPrimary,
-            testOk: _primaryTestOk,
-            testMessage: _primaryTestMessage,
-          ),
+            }
+          },
+        ),
+        const SizedBox(height: 14),
+        _buildApiKeyField(
+          controller: _primaryKeyController,
+          obscureText: _obscurePrimaryKey,
+          onToggleObscure: () =>
+              setState(() => _obscurePrimaryKey = !_obscurePrimaryKey),
+          placeholder: info.keyPlaceholder,
+          docUrl: info.docUrl,
+          providerName: info.name,
+          isDark: isDark,
+          onChanged: (val) {
+            if (_primaryTestOk != null || _primaryModels.isNotEmpty) {
+              setState(() {
+                _primaryTestOk = null;
+                _primaryTestMessage = null;
+                _primaryModels = [];
+              });
+            }
+          },
+        ),
+        if (_primaryProvider == 'custom') ...[
+          const SizedBox(height: 12),
+          _buildBaseUrlField(_primaryBaseUrlController, isDark),
         ],
+        const SizedBox(height: 14),
+        _buildModelSelector(
+          isPrimary: true,
+          modelController: _primaryModelController,
+          models: _primaryModels,
+          isFetching: _fetchingPrimaryModels,
+          isDark: isDark,
+        ),
+        const SizedBox(height: 14),
+        _buildTestConnectionButton(
+          isPrimary: true,
+          testing: _testingPrimary,
+          testOk: _primaryTestOk,
+          testMessage: _primaryTestMessage,
+          isDark: isDark,
+        ),
+        const SizedBox(height: 16),
+        _buildFailoverAccordion(isDark),
+        const SizedBox(height: 20),
+        _buildActionButtons(isDark),
+      ],
+    );
+  }
+
+  Widget _buildProviderDropdown({
+    required String value,
+    required bool isDark,
+    required ValueChanged<String?> onChanged,
+  }) {
+    final dropdownOptions = [
+      {'id': 'gemini', 'label': 'Google Gemini (Recommended)'},
+      {'id': 'openrouter', 'label': 'OpenRouter'},
+      {'id': 'groq', 'label': 'Groq (Ultra-Fast)'},
+      {'id': 'openai', 'label': 'OpenAI'},
+      {'id': 'anthropic', 'label': 'Anthropic Claude'},
+      {'id': 'nvidia', 'label': 'NVIDIA NIM'},
+      {'id': 'deepseek', 'label': 'DeepSeek'},
+      {'id': 'mistral', 'label': 'Mistral AI'},
+      {'id': 'together', 'label': 'Together AI'},
+      {'id': 'custom', 'label': 'Local Ollama / Custom'},
+    ];
+
+    // Ensure value exists in options
+    final effectiveValue =
+        dropdownOptions.any((opt) => opt['id'] == value) ? value : 'gemini';
+
+    return Container(
+      decoration: BoxDecoration(
+        color: isDark ? const Color(0xFF222222) : AppTheme.surfaceWarm,
+        borderRadius: BorderRadius.circular(6),
+        border: Border.all(
+          color: isDark ? const Color(0xFF383838) : AppTheme.border,
+        ),
+      ),
+      child: DropdownButtonHideUnderline(
+        child: DropdownButton<String>(
+          value: effectiveValue,
+          isExpanded: true,
+          dropdownColor: isDark ? const Color(0xFF222222) : Colors.white,
+          borderRadius: BorderRadius.circular(6),
+          padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 2),
+          style: TextStyle(
+            fontFamily: AppTheme.fontUI,
+            fontSize: 13,
+            fontWeight: FontWeight.w600,
+            color: isDark ? Colors.white : AppTheme.ink,
+          ),
+          items: dropdownOptions.map((opt) {
+            return DropdownMenuItem<String>(
+              value: opt['id'],
+              child: Text(opt['label']!),
+            );
+          }).toList(),
+          onChanged: onChanged,
+        ),
       ),
     );
   }
 
-  Widget _buildFallbackTab() {
+  Widget _buildApiKeyField({
+    required TextEditingController controller,
+    required bool obscureText,
+    required VoidCallback onToggleObscure,
+    required String placeholder,
+    required String docUrl,
+    required String providerName,
+    required bool isDark,
+    required ValueChanged<String> onChanged,
+  }) {
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Row(
+          mainAxisAlignment: MainAxisAlignment.spaceBetween,
+          children: [
+            _buildSectionLabel('API KEY'),
+            Text(
+              'Get key: $docUrl',
+              style: TextStyle(
+                fontFamily: AppTheme.fontUI,
+                fontSize: 10,
+                color: isDark ? AppTheme.darkTextMuted : AppTheme.textMuted,
+              ),
+            ),
+          ],
+        ),
+        const SizedBox(height: 6),
+        Container(
+          decoration: BoxDecoration(
+            color: isDark ? const Color(0xFF222222) : AppTheme.surfaceWarm,
+            borderRadius: BorderRadius.circular(6),
+            border: Border.all(
+              color: isDark ? const Color(0xFF383838) : AppTheme.border,
+            ),
+          ),
+          child: TextField(
+            controller: controller,
+            obscureText: obscureText,
+            onChanged: onChanged,
+            style: TextStyle(
+              fontFamily: 'monospace',
+              fontSize: 13,
+              color: isDark ? Colors.white : AppTheme.ink,
+            ),
+            decoration: InputDecoration(
+              hintText: placeholder,
+              hintStyle: TextStyle(
+                fontFamily: AppTheme.fontUI,
+                fontSize: 12,
+                color: isDark ? AppTheme.darkTextMuted : AppTheme.textMuted,
+              ),
+              border: InputBorder.none,
+              contentPadding:
+                  const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
+              suffixIcon: Row(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  IconButton(
+                    icon: const Icon(Icons.content_paste_rounded, size: 18),
+                    tooltip: 'Paste from clipboard',
+                    onPressed: () async {
+                      final data =
+                          await Clipboard.getData(Clipboard.kTextPlain);
+                      if (data?.text != null &&
+                          data!.text!.trim().isNotEmpty) {
+                        controller.text = data.text!.trim();
+                        onChanged(controller.text);
+                      }
+                    },
+                  ),
+                  IconButton(
+                    icon: Icon(
+                      obscureText
+                          ? Icons.visibility_outlined
+                          : Icons.visibility_off_outlined,
+                      size: 18,
+                      color:
+                          isDark ? AppTheme.darkTextMuted : AppTheme.textMuted,
+                    ),
+                    tooltip: obscureText ? 'Show key' : 'Hide key',
+                    onPressed: onToggleObscure,
+                  ),
+                ],
+              ),
+            ),
+          ),
+        ),
+      ],
+    );
+  }
+
+  Widget _buildBaseUrlField(TextEditingController controller, bool isDark) {
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        _buildSectionLabel('CUSTOM BASE URL'),
+        const SizedBox(height: 6),
+        Container(
+          decoration: BoxDecoration(
+            color: isDark ? const Color(0xFF222222) : AppTheme.surfaceWarm,
+            borderRadius: BorderRadius.circular(6),
+            border: Border.all(
+              color: isDark ? const Color(0xFF383838) : AppTheme.border,
+            ),
+          ),
+          child: TextField(
+            controller: controller,
+            style: TextStyle(
+              fontFamily: 'monospace',
+              fontSize: 13,
+              color: isDark ? Colors.white : AppTheme.ink,
+            ),
+            decoration: InputDecoration(
+              hintText: 'http://localhost:11434/v1',
+              hintStyle: TextStyle(
+                fontFamily: 'monospace',
+                fontSize: 12,
+                color: isDark ? AppTheme.darkTextMuted : AppTheme.textMuted,
+              ),
+              border: InputBorder.none,
+              contentPadding:
+                  const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
+            ),
+          ),
+        ),
+      ],
+    );
+  }
+
+  Widget _buildModelSelector({
+    required bool isPrimary,
+    required TextEditingController modelController,
+    required List<AIModelOption> models,
+    required bool isFetching,
+    required bool isDark,
+  }) {
+    final currentVal = modelController.text.trim();
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Row(
+          mainAxisAlignment: MainAxisAlignment.spaceBetween,
+          children: [
+            _buildSectionLabel(isPrimary ? 'AI MODEL' : 'BACKUP MODEL'),
+            if (isFetching)
+              SizedBox(
+                width: 12,
+                height: 12,
+                child: CircularProgressIndicator(
+                  strokeWidth: 1.5,
+                  color: isDark ? Colors.white : AppTheme.ink,
+                ),
+              ),
+          ],
+        ),
+        const SizedBox(height: 6),
+        InkWell(
+          onTap: () => _showModelPicker(isPrimary: isPrimary),
+          borderRadius: BorderRadius.circular(6),
+          child: Container(
+            padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
+            decoration: BoxDecoration(
+              color: isDark ? const Color(0xFF222222) : AppTheme.surfaceWarm,
+              borderRadius: BorderRadius.circular(6),
+              border: Border.all(
+                color: isDark ? const Color(0xFF383838) : AppTheme.border,
+              ),
+            ),
+            child: Row(
+              children: [
+                Expanded(
+                  child: Text(
+                    currentVal.isNotEmpty
+                        ? currentVal
+                        : (isPrimary ? 'gemini-2.5-flash' : 'Select model...'),
+                    style: TextStyle(
+                      fontFamily: 'monospace',
+                      fontSize: 13,
+                      fontWeight: FontWeight.w600,
+                      color: isDark ? Colors.white : AppTheme.ink,
+                    ),
+                  ),
+                ),
+                Icon(
+                  Icons.unfold_more_rounded,
+                  size: 18,
+                  color: isDark ? AppTheme.darkTextMuted : AppTheme.textMuted,
+                ),
+              ],
+            ),
+          ),
+        ),
+      ],
+    );
+  }
+
+  Widget _buildTestConnectionButton({
+    required bool isPrimary,
+    required bool testing,
+    required bool? testOk,
+    required String? testMessage,
+    required bool isDark,
+  }) {
+    return Row(
+      children: [
+        OutlinedButton.icon(
+          onPressed:
+              testing ? null : () => _testConnection(isPrimary: isPrimary),
+          icon: testing
+              ? SizedBox(
+                  width: 14,
+                  height: 14,
+                  child: CircularProgressIndicator(
+                    strokeWidth: 2,
+                    color: isDark ? Colors.white : AppTheme.ink,
+                  ),
+                )
+              : const Icon(Icons.flash_on_rounded, size: 16),
+          label: Text(testing ? 'Testing...' : 'Test Connection'),
+          style: OutlinedButton.styleFrom(
+            foregroundColor: isDark ? Colors.white : AppTheme.ink,
+            side: BorderSide(
+              color: isDark ? const Color(0xFF444444) : AppTheme.border,
+            ),
+            shape: RoundedRectangleBorder(
+              borderRadius: BorderRadius.circular(6),
+            ),
+            padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
+            minimumSize: const Size(0, 38),
+          ),
+        ),
+        const SizedBox(width: 10),
+        if (testMessage != null)
+          Expanded(
+            child: Row(
+              children: [
+                if (testOk == true)
+                  const AthenaAvatar(
+                    expression: AthenaExpression.wink,
+                    size: 18,
+                  )
+                else
+                  const AthenaAvatar(
+                    expression: AthenaExpression.surprised,
+                    size: 18,
+                  ),
+                const SizedBox(width: 6),
+                Expanded(
+                  child: Text(
+                    testMessage,
+                    style: TextStyle(
+                      fontFamily: AppTheme.fontUI,
+                      fontSize: 12,
+                      fontWeight: FontWeight.w500,
+                      color: testOk == true
+                          ? const Color(0xFF007A3D)
+                          : Colors.redAccent,
+                    ),
+                    maxLines: 2,
+                    overflow: TextOverflow.ellipsis,
+                  ),
+                ),
+              ],
+            ),
+          ),
+      ],
+    );
+  }
+
+  Widget _buildFailoverAccordion(bool isDark) {
     final info = kSupportedProviders.firstWhere(
       (p) => p.id == _fallbackProvider,
       orElse: () => kSupportedProviders.first,
     );
 
-    return SingleChildScrollView(
-      padding: const EdgeInsets.all(20),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Container(
-            padding: const EdgeInsets.all(12),
-            decoration: BoxDecoration(
-              color: AppTheme.surfaceWarm,
-              borderRadius: BorderRadius.circular(12),
-              border: Border.all(color: AppTheme.border),
+    return Theme(
+      data: Theme.of(context).copyWith(
+        dividerColor: Colors.transparent,
+      ),
+      child: Container(
+        decoration: BoxDecoration(
+          color: isDark ? const Color(0xFF1E1E1E) : const Color(0xFFF9F9F8),
+          borderRadius: BorderRadius.circular(6),
+          border: Border.all(
+            color: isDark ? const Color(0xFF2C2C2C) : AppTheme.border,
+          ),
+        ),
+        child: ExpansionTile(
+          tilePadding: const EdgeInsets.symmetric(horizontal: 14, vertical: 4),
+          childrenPadding: const EdgeInsets.fromLTRB(14, 0, 14, 14),
+          title: Text(
+            'Failover Backup Engine (Optional)',
+            style: TextStyle(
+              fontFamily: AppTheme.fontUI,
+              fontWeight: FontWeight.w700,
+              fontSize: 13,
+              color: isDark ? Colors.white : AppTheme.ink,
             ),
-            child: Row(
+          ),
+          subtitle: Text(
+            _enableFallback
+                ? 'Active failover: ${_fallbackProvider.toUpperCase()}'
+                : 'Standby: Routes requests here if primary engine hits quota',
+            style: TextStyle(
+              fontFamily: AppTheme.fontUI,
+              fontSize: 11,
+              color: isDark ? AppTheme.darkTextMuted : AppTheme.textMuted,
+            ),
+          ),
+          children: [
+            Row(
+              mainAxisAlignment: MainAxisAlignment.spaceBetween,
               children: [
-                const Expanded(
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      Text(
-                        'Automatic Failover Backup',
-                        style: TextStyle(
-                          fontFamily: AppTheme.fontUI,
-                          fontWeight: FontWeight.w600,
-                          fontSize: 13,
-                          color: AppTheme.ink,
-                        ),
-                      ),
-                      SizedBox(height: 2),
-                      Text(
-                        'Automatically routes requests here if primary engine hits quota or rate limits.',
-                        style: TextStyle(
-                          fontFamily: AppTheme.fontUI,
-                          fontSize: 11,
-                          color: AppTheme.textMuted,
-                        ),
-                      ),
-                    ],
-                  ),
+                const Text(
+                  'Enable Automatic Failover',
+                  style: TextStyle(fontSize: 12, fontWeight: FontWeight.w600),
                 ),
                 Switch(
                   value: _enableFallback,
-                  activeThumbColor: AppTheme.ink,
+                  activeThumbColor: isDark ? Colors.white : AppTheme.ink,
                   onChanged: (val) {
                     setState(() {
                       _enableFallback = val;
-                      if (!val) {
-                        _fallbackModels = [];
-                      }
+                      if (!val) _fallbackModels = [];
                     });
                   },
                 ),
               ],
             ),
-          ),
-          if (_enableFallback &&
-              _fallbackKeyController.text.trim().isEmpty) ...[
-            const SizedBox(height: 12),
-            Container(
-              padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
-              decoration: BoxDecoration(
-                color: const Color(0xFFFFFBEB),
-                borderRadius: BorderRadius.circular(10),
-                border: Border.all(color: const Color(0xFFFDE68A)),
+            if (_enableFallback) ...[
+              const SizedBox(height: 10),
+              _buildSectionLabel('SELECT BACKUP PROVIDER'),
+              const SizedBox(height: 6),
+              _buildProviderDropdown(
+                value: _fallbackProvider,
+                isDark: isDark,
+                onChanged: (val) {
+                  if (val != null) {
+                    setState(() {
+                      _fallbackProvider = val;
+                      _fallbackModelController.text = '';
+                      _fallbackTestMessage = null;
+                      _fallbackTestOk = null;
+                      _fallbackModels = [];
+                    });
+                  }
+                },
               ),
-              child: const Row(
-                children: [
-                  Icon(Icons.warning_amber_rounded,
-                      size: 18, color: Color(0xFFB45309)),
-                  SizedBox(width: 8),
-                  Expanded(
-                    child: Text(
-                      'No backup key entered. Athena works completely fine using only your primary API key. Failover will remain standby until a backup key is provided.',
-                      style: TextStyle(
-                        fontFamily: AppTheme.fontUI,
-                        fontSize: 11,
-                        color: Color(0xFF92400E),
-                        height: 1.35,
-                      ),
-                    ),
-                  ),
-                ],
+              const SizedBox(height: 12),
+              _buildApiKeyField(
+                controller: _fallbackKeyController,
+                obscureText: _obscureFallbackKey,
+                onToggleObscure: () => setState(
+                    () => _obscureFallbackKey = !_obscureFallbackKey),
+                placeholder: info.keyPlaceholder,
+                docUrl: info.docUrl,
+                providerName: info.name,
+                isDark: isDark,
+                onChanged: (val) {
+                  if (_fallbackTestOk != null || _fallbackModels.isNotEmpty) {
+                    setState(() {
+                      _fallbackTestOk = null;
+                      _fallbackTestMessage = null;
+                      _fallbackModels = [];
+                    });
+                  }
+                },
               ),
-            ),
-          ],
-          if (_enableFallback) ...[
-            const SizedBox(height: 20),
-            _buildSectionLabel('SELECT BACKUP PROVIDER'),
-            const SizedBox(height: 8),
-            _buildProviderChips(
-              selectedId: _fallbackProvider,
-              onSelected: (id) {
-                setState(() {
-                  _fallbackProvider = id;
-                  _fallbackModelController.text = '';
-                  _fallbackTestMessage = null;
-                  _fallbackTestOk = null;
-                  _fallbackModels = [];
-                });
-              },
-            ),
-            const SizedBox(height: 18),
-            _buildApiKeyField(
-              controller: _fallbackKeyController,
-              obscureText: _obscureFallbackKey,
-              onToggleObscure: () {
-                setState(() => _obscureFallbackKey = !_obscureFallbackKey);
-              },
-              placeholder: info.keyPlaceholder,
-              docUrl: info.docUrl,
-              providerName: info.name,
-              onChanged: (val) {
-                if (_fallbackTestOk != null || _fallbackModels.isNotEmpty) {
-                  setState(() {
-                    _fallbackTestOk = null;
-                    _fallbackTestMessage = null;
-                    _fallbackModels = [];
-                  });
-                }
-              },
-            ),
-            if (_fallbackProvider == 'custom') ...[
-              const SizedBox(height: 14),
-              _buildBaseUrlField(_fallbackBaseUrlController),
+              if (_fallbackProvider == 'custom') ...[
+                const SizedBox(height: 12),
+                _buildBaseUrlField(_fallbackBaseUrlController, isDark),
+              ],
+              const SizedBox(height: 12),
+              _buildModelSelector(
+                isPrimary: false,
+                modelController: _fallbackModelController,
+                models: _fallbackModels,
+                isFetching: _fetchingFallbackModels,
+                isDark: isDark,
+              ),
+              const SizedBox(height: 12),
+              _buildTestConnectionButton(
+                isPrimary: false,
+                testing: _testingFallback,
+                testOk: _fallbackTestOk,
+                testMessage: _fallbackTestMessage,
+                isDark: isDark,
+              ),
             ],
-            const SizedBox(height: 18),
-            _buildModelSelector(
-              isPrimary: false,
-              modelController: _fallbackModelController,
-              models: _fallbackModels,
-              isFetching: _fetchingFallbackModels,
-            ),
-            const SizedBox(height: 18),
-            _buildTestConnectionButton(
-              isPrimary: false,
-              testing: _testingFallback,
-              testOk: _fallbackTestOk,
-              testMessage: _fallbackTestMessage,
-            ),
           ],
-        ],
+        ),
       ),
     );
   }
 
-  Widget _buildServerTab() {
-    final isDark = Theme.of(context).brightness == Brightness.dark;
+  Widget _buildActionButtons(bool isDark) {
+    return Row(
+      mainAxisAlignment: MainAxisAlignment.end,
+      children: [
+        TextButton(
+          onPressed: _saving ? null : () => Navigator.of(context).pop(),
+          style: TextButton.styleFrom(
+            foregroundColor: isDark ? Colors.white70 : AppTheme.textMuted,
+            shape: RoundedRectangleBorder(
+              borderRadius: BorderRadius.circular(6),
+            ),
+          ),
+          child: const Text('Cancel'),
+        ),
+        const SizedBox(width: 8),
+        ElevatedButton(
+          onPressed: _saving ? null : _saveConfig,
+          style: ElevatedButton.styleFrom(
+            backgroundColor: isDark ? Colors.white : AppTheme.ink,
+            foregroundColor: isDark ? Colors.black : Colors.white,
+            elevation: 0,
+            shape: RoundedRectangleBorder(
+              borderRadius: BorderRadius.circular(6),
+            ),
+            padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 12),
+          ),
+          child: _saving
+              ? const SizedBox(
+                  width: 16,
+                  height: 16,
+                  child: CircularProgressIndicator(
+                    strokeWidth: 2,
+                    color: Colors.white,
+                  ),
+                )
+              : const Text(
+                  'Save & Apply',
+                  style: TextStyle(fontWeight: FontWeight.w700),
+                ),
+        ),
+      ],
+    );
+  }
+
+  Widget _buildServerTab(bool isDark) {
     final currentResolved = AppConfig.apiBaseUrl;
 
-    return SingleChildScrollView(
-      padding: const EdgeInsets.all(20),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          _buildSectionLabel('BACKEND SERVER URL'),
-          const SizedBox(height: 6),
-          Text(
-            kIsWeb
-                ? 'Web defaults to this page origin ($currentResolved). Change only if backend is on a separate machine.'
-                : 'Native APK/IPA: laptop Wi-Fi IP (http://192.168.x.x:8000) or Cloudflare Tunnel URL.',
-            style: TextStyle(
-              fontFamily: AppTheme.fontUI,
-              fontSize: 12,
-              height: 1.4,
-              color: isDark ? AppTheme.darkTextMuted : AppTheme.textMuted,
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        _buildSectionLabel('BACKEND SERVER URL'),
+        const SizedBox(height: 6),
+        Text(
+          kIsWeb
+              ? 'Web defaults to this page origin ($currentResolved). Change only if backend is on a separate machine.'
+              : 'Native APK/IPA: laptop Wi-Fi IP (http://192.168.x.x:8000) or Cloudflare Tunnel URL.',
+          style: TextStyle(
+            fontFamily: AppTheme.fontUI,
+            fontSize: 12,
+            height: 1.4,
+            color: isDark ? AppTheme.darkTextMuted : AppTheme.textMuted,
+          ),
+        ),
+        const SizedBox(height: 12),
+        Container(
+          decoration: BoxDecoration(
+            color: isDark ? const Color(0xFF222222) : AppTheme.surfaceWarm,
+            borderRadius: BorderRadius.circular(6),
+            border: Border.all(
+              color: isDark ? const Color(0xFF333333) : AppTheme.border,
             ),
           ),
-          const SizedBox(height: 14),
-          Container(
-            decoration: BoxDecoration(
-              color: isDark ? const Color(0xFF222222) : AppTheme.surfaceWarm,
-              borderRadius: BorderRadius.circular(12),
-              border: Border.all(
-                color: isDark ? const Color(0xFF333333) : AppTheme.border,
-              ),
+          child: TextField(
+            controller: _serverUrlController,
+            keyboardType: TextInputType.url,
+            autocorrect: false,
+            style: TextStyle(
+              fontFamily: 'monospace',
+              fontSize: 13,
+              color: isDark ? Colors.white : AppTheme.ink,
             ),
-            child: TextField(
-              controller: _serverUrlController,
-              keyboardType: TextInputType.url,
-              autocorrect: false,
-              style: TextStyle(
+            decoration: InputDecoration(
+              hintText: 'http://192.168.1.5:8000',
+              hintStyle: TextStyle(
                 fontFamily: 'monospace',
                 fontSize: 13,
-                color: isDark ? Colors.white : AppTheme.ink,
+                color: isDark ? AppTheme.darkTextMuted : AppTheme.textMuted,
               ),
-              decoration: InputDecoration(
-                hintText: 'http://192.168.1.5:8000',
-                hintStyle: TextStyle(
-                  fontFamily: 'monospace',
-                  fontSize: 13,
-                  color: isDark ? AppTheme.darkTextMuted : AppTheme.textMuted,
-                ),
-                border: InputBorder.none,
-                contentPadding:
-                    const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
-                suffixIcon: IconButton(
-                  icon: const Icon(Icons.clear, size: 18),
-                  onPressed: () => _serverUrlController.clear(),
-                ),
+              border: InputBorder.none,
+              contentPadding:
+                  const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
+              suffixIcon: Row(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  IconButton(
+                    icon: const Icon(Icons.content_paste_rounded, size: 18),
+                    tooltip: 'Paste from clipboard',
+                    onPressed: () async {
+                      final data =
+                          await Clipboard.getData(Clipboard.kTextPlain);
+                      if (data?.text != null &&
+                          data!.text!.trim().isNotEmpty) {
+                        _serverUrlController.text = data.text!.trim();
+                      }
+                    },
+                  ),
+                  IconButton(
+                    icon: const Icon(Icons.clear, size: 18),
+                    onPressed: () => _serverUrlController.clear(),
+                  ),
+                ],
               ),
             ),
           ),
-          const SizedBox(height: 14),
-          _buildSectionLabel('QUICK PRESETS'),
-          const SizedBox(height: 8),
-          Wrap(
-            spacing: 8,
-            runSpacing: 8,
-            children: [
-              if (kIsWeb)
-                _buildPresetChip(
-                  'Web Origin',
-                  Uri.base.origin,
-                )
-              else if (defaultTargetPlatform == TargetPlatform.android ||
-                  defaultTargetPlatform == TargetPlatform.iOS) ...[
-                _buildPresetChip('Wi-Fi (:8000)', 'http://192.168.1.'),
-                _buildPresetChip('Android Emulator', 'http://10.0.2.2:8000'),
-                _buildPresetChip('USB Tether (:8000)', 'http://127.0.0.1:8000'),
-              ] else ...[
-                _buildPresetChip('Localhost (:8000)', 'http://127.0.0.1:8000'),
-                _buildPresetChip('Alt Port (:8080)', 'http://127.0.0.1:8080'),
-              ],
+        ),
+        const SizedBox(height: 12),
+        _buildSectionLabel('QUICK PRESETS'),
+        const SizedBox(height: 8),
+        Wrap(
+          spacing: 8,
+          runSpacing: 8,
+          children: [
+            if (kIsWeb)
+              _buildPresetChip('Web Origin', Uri.base.origin, isDark)
+            else if (defaultTargetPlatform == TargetPlatform.android ||
+                defaultTargetPlatform == TargetPlatform.iOS) ...[
+              _buildPresetChip('Wi-Fi (:8000)', 'http://192.168.1.', isDark),
+              _buildPresetChip(
+                  'Android Emulator', 'http://10.0.2.2:8000', isDark),
+              _buildPresetChip(
+                  'USB Tether (:8000)', 'http://127.0.0.1:8000', isDark),
+            ] else ...[
+              _buildPresetChip(
+                  'Localhost (:8000)', 'http://127.0.0.1:8000', isDark),
+              _buildPresetChip(
+                  'Alt Port (:8080)', 'http://127.0.0.1:8080', isDark),
             ],
-          ),
-          const SizedBox(height: 20),
-          Row(
-            children: [
-              Expanded(
-                child: OutlinedButton.icon(
-                  onPressed: _testingServer ? null : _testServerConnection,
-                  icon: _testingServer
-                      ? SizedBox(
-                          width: 14,
-                          height: 14,
-                          child: CircularProgressIndicator(
-                            strokeWidth: 2,
-                            color: isDark ? Colors.white : AppTheme.ink,
-                          ),
-                        )
-                      : const Icon(Icons.bolt_rounded, size: 16),
-                  label:
-                      Text(_testingServer ? 'Pinging...' : 'Test Connection'),
-                  style: OutlinedButton.styleFrom(
-                    padding: const EdgeInsets.symmetric(vertical: 12),
-                    side: BorderSide(
-                      color: isDark ? const Color(0xFF444444) : AppTheme.border,
-                    ),
-                    shape: RoundedRectangleBorder(
-                      borderRadius: BorderRadius.circular(10),
-                    ),
+          ],
+        ),
+        const SizedBox(height: 16),
+        Row(
+          children: [
+            Expanded(
+              child: OutlinedButton.icon(
+                onPressed: _testingServer ? null : _testServerConnection,
+                icon: _testingServer
+                    ? SizedBox(
+                        width: 14,
+                        height: 14,
+                        child: CircularProgressIndicator(
+                          strokeWidth: 2,
+                          color: isDark ? Colors.white : AppTheme.ink,
+                        ),
+                      )
+                    : const Icon(Icons.bolt_rounded, size: 16),
+                label: Text(_testingServer ? 'Pinging...' : 'Test Connection'),
+                style: OutlinedButton.styleFrom(
+                  foregroundColor: isDark ? Colors.white : AppTheme.ink,
+                  padding: const EdgeInsets.symmetric(vertical: 12),
+                  side: BorderSide(
+                    color: isDark ? const Color(0xFF444444) : AppTheme.border,
+                  ),
+                  shape: RoundedRectangleBorder(
+                    borderRadius: BorderRadius.circular(6),
                   ),
                 ),
               ),
-              const SizedBox(width: 12),
-              Expanded(
-                child: ElevatedButton.icon(
-                  onPressed: () async {
-                    final raw = _serverUrlController.text.trim();
-                    await AppConfig.setBaseUrl(raw);
-                    widget.onConfigSaved?.call();
-                    if (!mounted) return;
-                    ScaffoldMessenger.of(context).showSnackBar(
-                      SnackBar(
-                        content: Text(raw.isEmpty
-                            ? 'Server URL reset to automatic host detection.'
-                            : 'Server URL saved: $raw'),
-                        duration: const Duration(seconds: 2),
-                      ),
-                    );
-                  },
-                  icon: const Icon(Icons.check_rounded, size: 16),
-                  label: const Text('Save Host'),
-                  style: ElevatedButton.styleFrom(
-                    backgroundColor: isDark ? Colors.white : AppTheme.ink,
-                    foregroundColor: isDark ? Colors.black : Colors.white,
-                    padding: const EdgeInsets.symmetric(vertical: 12),
-                    shape: RoundedRectangleBorder(
-                      borderRadius: BorderRadius.circular(10),
+            ),
+            const SizedBox(width: 12),
+            Expanded(
+              child: ElevatedButton.icon(
+                onPressed: () async {
+                  final raw = _serverUrlController.text.trim();
+                  await AppConfig.setBaseUrl(raw);
+                  widget.onConfigSaved?.call();
+                  if (!mounted) return;
+                  ScaffoldMessenger.of(context).showSnackBar(
+                    SnackBar(
+                      content: Text(raw.isEmpty
+                          ? 'Server URL reset to automatic host detection.'
+                          : 'Server URL saved: $raw'),
+                      duration: const Duration(seconds: 2),
                     ),
+                  );
+                },
+                icon: const Icon(Icons.check_rounded, size: 16),
+                label: const Text('Save Host'),
+                style: ElevatedButton.styleFrom(
+                  backgroundColor: isDark ? Colors.white : AppTheme.ink,
+                  foregroundColor: isDark ? Colors.black : Colors.white,
+                  elevation: 0,
+                  padding: const EdgeInsets.symmetric(vertical: 12),
+                  shape: RoundedRectangleBorder(
+                    borderRadius: BorderRadius.circular(6),
                   ),
                 ),
               ),
-            ],
-          ),
-          if (_serverTestMessage != null) ...[
-            const SizedBox(height: 14),
-            Container(
-              padding: const EdgeInsets.all(12),
-              decoration: BoxDecoration(
+            ),
+          ],
+        ),
+        if (_serverTestMessage != null) ...[
+          const SizedBox(height: 12),
+          Container(
+            padding: const EdgeInsets.all(12),
+            decoration: BoxDecoration(
+              color: _serverTestOk == true
+                  ? const Color(0x1A10B981)
+                  : const Color(0x1AEF4444),
+              borderRadius: BorderRadius.circular(6),
+              border: Border.all(
                 color: _serverTestOk == true
-                    ? const Color(0x1A10B981)
-                    : const Color(0x1AEF4444),
-                borderRadius: BorderRadius.circular(10),
-                border: Border.all(
+                    ? const Color(0xFF10B981)
+                    : const Color(0xFFEF4444),
+              ),
+            ),
+            child: Row(
+              children: [
+                Icon(
+                  _serverTestOk == true
+                      ? Icons.check_circle_outline
+                      : Icons.error_outline,
+                  size: 18,
                   color: _serverTestOk == true
                       ? const Color(0xFF10B981)
                       : const Color(0xFFEF4444),
                 ),
-              ),
-              child: Row(
-                children: [
-                  Icon(
-                    _serverTestOk == true
-                        ? Icons.check_circle_outline
-                        : Icons.error_outline,
-                    size: 18,
-                    color: _serverTestOk == true
-                        ? const Color(0xFF10B981)
-                        : const Color(0xFFEF4444),
-                  ),
-                  const SizedBox(width: 10),
-                  Expanded(
-                    child: Text(
-                      _serverTestMessage!,
-                      style: TextStyle(
-                        fontFamily: AppTheme.fontUI,
-                        fontSize: 12,
-                        color: _serverTestOk == true
-                            ? const Color(0xFF10B981)
-                            : const Color(0xFFEF4444),
-                      ),
+                const SizedBox(width: 10),
+                Expanded(
+                  child: Text(
+                    _serverTestMessage!,
+                    style: TextStyle(
+                      fontFamily: AppTheme.fontUI,
+                      fontSize: 12,
+                      color: _serverTestOk == true
+                          ? const Color(0xFF10B981)
+                          : const Color(0xFFEF4444),
                     ),
                   ),
-                ],
-              ),
+                ),
+              ],
             ),
-          ],
-          const SizedBox(height: 24),
-          _buildAppVersionAndDownloadsCard(isDark),
-          const SizedBox(height: 16),
-          _buildMobileGuideCard(isDark),
+          ),
         ],
-      ),
+        const SizedBox(height: 20),
+        _buildAppVersionAndDownloadsCard(isDark),
+        const SizedBox(height: 16),
+        _buildMobileGuideCard(isDark),
+      ],
     );
   }
 
-  Widget _buildPresetChip(String label, String value) {
-    final isDark = Theme.of(context).brightness == Brightness.dark;
+  Widget _buildPresetChip(String label, String value, bool isDark) {
     return ActionChip(
       label: Text(
         label,
@@ -1239,7 +1594,7 @@ class _BYOKSettingsSheetState extends State<BYOKSettingsSheet>
       ),
       backgroundColor: isDark ? const Color(0xFF282828) : AppTheme.surfaceWarm,
       shape: RoundedRectangleBorder(
-        borderRadius: BorderRadius.circular(8),
+        borderRadius: BorderRadius.circular(6),
         side: BorderSide(
           color: isDark ? const Color(0xFF383838) : AppTheme.border,
         ),
@@ -1259,12 +1614,12 @@ class _BYOKSettingsSheetState extends State<BYOKSettingsSheet>
     final effectiveInfo = _settingsUpdateInfo ?? _fallbackSettingsUpdateInfo;
 
     return Container(
-      padding: const EdgeInsets.all(16),
+      padding: const EdgeInsets.all(14),
       decoration: BoxDecoration(
-        color: isDark ? const Color(0xFF1F1F1F) : const Color(0xFFF2EFE9),
-        borderRadius: BorderRadius.circular(12),
+        color: isDark ? const Color(0xFF1F1F1F) : const Color(0xFFF9F9F7),
+        borderRadius: BorderRadius.circular(6),
         border: Border.all(
-          color: isDark ? const Color(0xFF2E2E2E) : const Color(0xFFE2DDD5),
+          color: isDark ? const Color(0xFF2E2E2E) : AppTheme.border,
         ),
       ),
       child: Column(
@@ -1272,81 +1627,45 @@ class _BYOKSettingsSheetState extends State<BYOKSettingsSheet>
         children: [
           Row(
             children: [
-              const Icon(
+              Icon(
                 Icons.system_update_rounded,
                 size: 16,
-                color: Color(0xFFC84B31),
+                color: isDark ? Colors.white70 : AppTheme.ink,
               ),
               const SizedBox(width: 8),
               Expanded(
                 child: Text(
-                  'APP VERSION & MOBILE DOWNLOADS',
+                  'Athena App Version: v$kAthenaAppVersion',
                   style: TextStyle(
                     fontFamily: AppTheme.fontUI,
-                    fontSize: 11,
+                    fontSize: 12.5,
                     fontWeight: FontWeight.w700,
-                    letterSpacing: 0.8,
                     color: isDark ? Colors.white : AppTheme.ink,
-                  ),
-                ),
-              ),
-              Container(
-                padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
-                decoration: BoxDecoration(
-                  color: isDark
-                      ? const Color(0xFF2C2B29)
-                      : const Color(0xFFE5DDD0),
-                  borderRadius: BorderRadius.circular(4),
-                ),
-                child: const Text(
-                  'v$kAthenaAppVersion',
-                  style: TextStyle(
-                    fontFamily: 'monospace',
-                    fontSize: 10,
-                    fontWeight: FontWeight.w700,
-                    color: Color(0xFFC84B31),
                   ),
                 ),
               ),
             ],
           ),
-          const SizedBox(height: 12),
-          Text(
-            'Keep your native mobile builds synced with your local library. Click below to download the platform package directly.',
-            style: TextStyle(
-              fontFamily: AppTheme.fontUI,
-              fontSize: 11.5,
-              height: 1.45,
-              color: isDark ? AppTheme.darkTextMuted : AppTheme.textMuted,
-            ),
-          ),
-          const SizedBox(height: 12),
+          const SizedBox(height: 10),
           SizedBox(
             width: double.infinity,
             child: OutlinedButton.icon(
               onPressed: _checkingUpdates ? null : _checkSettingsUpdates,
               icon: _checkingUpdates
-                  ? SizedBox(
-                      width: 14,
-                      height: 14,
-                      child: CircularProgressIndicator(
-                        strokeWidth: 2,
-                        color: isDark ? Colors.white : AppTheme.ink,
-                      ),
+                  ? const SizedBox(
+                      width: 12,
+                      height: 12,
+                      child: CircularProgressIndicator(strokeWidth: 1.5),
                     )
-                  : const Icon(Icons.sync_rounded, size: 15),
-              label: Text(_checkingUpdates
-                  ? 'Checking Server...'
-                  : 'Check for Updates'),
+                  : const Icon(Icons.sync_rounded, size: 14),
+              label: Text(
+                _checkingUpdates ? 'Checking...' : 'Check for Updates',
+                style: const TextStyle(fontSize: 11),
+              ),
               style: OutlinedButton.styleFrom(
                 foregroundColor: isDark ? Colors.white : AppTheme.ink,
-                side: BorderSide(
-                  color: isDark
-                      ? const Color(0xFF444444)
-                      : const Color(0xFFCCCCCC),
-                ),
                 shape: RoundedRectangleBorder(
-                  borderRadius: BorderRadius.circular(8),
+                  borderRadius: BorderRadius.circular(6),
                 ),
                 padding: const EdgeInsets.symmetric(vertical: 10),
               ),
@@ -1363,7 +1682,7 @@ class _BYOKSettingsSheetState extends State<BYOKSettingsSheet>
                     : (isDark
                         ? const Color(0xFF282828)
                         : const Color(0xFFEAE7E0)),
-                borderRadius: BorderRadius.circular(8),
+                borderRadius: BorderRadius.circular(6),
                 border: Border.all(
                   color: _settingsUpdateInfo?.updateAvailable == true
                       ? const Color(0xFFC84B31)
@@ -1386,7 +1705,6 @@ class _BYOKSettingsSheetState extends State<BYOKSettingsSheet>
             ),
           ],
           const SizedBox(height: 14),
-          // 1-Click Platform Binary Buttons
           Row(
             children: [
               Expanded(
@@ -1411,7 +1729,7 @@ class _BYOKSettingsSheetState extends State<BYOKSettingsSheet>
                           foregroundColor: Colors.white,
                           elevation: 0,
                           shape: RoundedRectangleBorder(
-                            borderRadius: BorderRadius.circular(8),
+                            borderRadius: BorderRadius.circular(6),
                           ),
                           padding: const EdgeInsets.symmetric(vertical: 12),
                         ),
@@ -1429,14 +1747,15 @@ class _BYOKSettingsSheetState extends State<BYOKSettingsSheet>
                           style: TextStyle(fontSize: 11.5),
                         ),
                         style: OutlinedButton.styleFrom(
-                          foregroundColor: isDark ? Colors.white : AppTheme.ink,
+                          foregroundColor:
+                              isDark ? Colors.white : AppTheme.ink,
                           side: BorderSide(
                             color: isDark
                                 ? const Color(0xFF444444)
                                 : const Color(0xFFCCCCCC),
                           ),
                           shape: RoundedRectangleBorder(
-                            borderRadius: BorderRadius.circular(8),
+                            borderRadius: BorderRadius.circular(6),
                           ),
                           padding: const EdgeInsets.symmetric(vertical: 12),
                         ),
@@ -1465,7 +1784,7 @@ class _BYOKSettingsSheetState extends State<BYOKSettingsSheet>
                           foregroundColor: Colors.white,
                           elevation: 0,
                           shape: RoundedRectangleBorder(
-                            borderRadius: BorderRadius.circular(8),
+                            borderRadius: BorderRadius.circular(6),
                           ),
                           padding: const EdgeInsets.symmetric(vertical: 12),
                         ),
@@ -1483,14 +1802,15 @@ class _BYOKSettingsSheetState extends State<BYOKSettingsSheet>
                           style: TextStyle(fontSize: 11.5),
                         ),
                         style: OutlinedButton.styleFrom(
-                          foregroundColor: isDark ? Colors.white : AppTheme.ink,
+                          foregroundColor:
+                              isDark ? Colors.white : AppTheme.ink,
                           side: BorderSide(
                             color: isDark
                                 ? const Color(0xFF444444)
                                 : const Color(0xFFCCCCCC),
                           ),
                           shape: RoundedRectangleBorder(
-                            borderRadius: BorderRadius.circular(8),
+                            borderRadius: BorderRadius.circular(6),
                           ),
                           padding: const EdgeInsets.symmetric(vertical: 12),
                         ),
@@ -1519,7 +1839,7 @@ class _BYOKSettingsSheetState extends State<BYOKSettingsSheet>
                   foregroundColor: const Color(0xFFC84B31),
                   side: const BorderSide(color: Color(0xFFC84B31)),
                   shape: RoundedRectangleBorder(
-                    borderRadius: BorderRadius.circular(8),
+                    borderRadius: BorderRadius.circular(6),
                   ),
                   padding: const EdgeInsets.symmetric(vertical: 10),
                 ),
@@ -1536,7 +1856,7 @@ class _BYOKSettingsSheetState extends State<BYOKSettingsSheet>
       padding: const EdgeInsets.all(14),
       decoration: BoxDecoration(
         color: isDark ? const Color(0xFF1F1F1F) : const Color(0xFFF9F9F7),
-        borderRadius: BorderRadius.circular(12),
+        borderRadius: BorderRadius.circular(6),
         border: Border.all(
           color: isDark ? const Color(0xFF2E2E2E) : AppTheme.border,
         ),
@@ -1590,409 +1910,6 @@ class _BYOKSettingsSheetState extends State<BYOKSettingsSheet>
         fontWeight: FontWeight.w700,
         letterSpacing: 1.0,
         color: AppTheme.textMuted,
-      ),
-    );
-  }
-
-  Widget _buildProviderChips({
-    required String selectedId,
-    required ValueChanged<String> onSelected,
-  }) {
-    return SizedBox(
-      height: 40,
-      child: ListView.separated(
-        scrollDirection: Axis.horizontal,
-        itemCount: kSupportedProviders.length,
-        separatorBuilder: (_, __) => const SizedBox(width: 8),
-        itemBuilder: (ctx, i) {
-          final prov = kSupportedProviders[i];
-          final isSelected = prov.id == selectedId;
-
-          return InkWell(
-            onTap: () => onSelected(prov.id),
-            borderRadius: BorderRadius.circular(10),
-            child: Container(
-              padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
-              decoration: BoxDecoration(
-                color: isSelected ? AppTheme.ink : AppTheme.surfaceWarm,
-                borderRadius: BorderRadius.circular(10),
-                border: Border.all(
-                  color: isSelected ? AppTheme.ink : AppTheme.border,
-                ),
-              ),
-              child: Row(
-                mainAxisSize: MainAxisSize.min,
-                children: [
-                  Text(
-                    prov.name,
-                    style: TextStyle(
-                      fontFamily: AppTheme.fontUI,
-                      fontSize: 12,
-                      fontWeight:
-                          isSelected ? FontWeight.w600 : FontWeight.w500,
-                      color: isSelected ? Colors.white : AppTheme.ink,
-                    ),
-                  ),
-                  const SizedBox(width: 6),
-                  Container(
-                    padding:
-                        const EdgeInsets.symmetric(horizontal: 5, vertical: 2),
-                    decoration: BoxDecoration(
-                      color: isSelected
-                          ? Colors.white.withValues(alpha: 0.2)
-                          : AppTheme.border,
-                      borderRadius: BorderRadius.circular(4),
-                    ),
-                    child: Text(
-                      prov.tag,
-                      style: TextStyle(
-                        fontFamily: AppTheme.fontUI,
-                        fontSize: 9,
-                        fontWeight: FontWeight.w600,
-                        color: isSelected ? Colors.white : AppTheme.textMuted,
-                      ),
-                    ),
-                  ),
-                ],
-              ),
-            ),
-          );
-        },
-      ),
-    );
-  }
-
-  Widget _buildApiKeyField({
-    required TextEditingController controller,
-    required bool obscureText,
-    required VoidCallback onToggleObscure,
-    required String placeholder,
-    required String docUrl,
-    required String providerName,
-    required ValueChanged<String> onChanged,
-  }) {
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.start,
-      children: [
-        Row(
-          mainAxisAlignment: MainAxisAlignment.spaceBetween,
-          children: [
-            _buildSectionLabel('API KEY'),
-            Text(
-              'Get key: $docUrl',
-              style: const TextStyle(
-                fontFamily: AppTheme.fontUI,
-                fontSize: 10,
-                color: AppTheme.textMuted,
-              ),
-            ),
-          ],
-        ),
-        const SizedBox(height: 6),
-        Container(
-          decoration: BoxDecoration(
-            color: AppTheme.surfaceWarm,
-            borderRadius: BorderRadius.circular(12),
-            border: Border.all(color: AppTheme.border),
-          ),
-          child: TextField(
-            controller: controller,
-            obscureText: obscureText,
-            onChanged: onChanged,
-            style: const TextStyle(
-              fontFamily: 'monospace',
-              fontSize: 13,
-              color: AppTheme.ink,
-            ),
-            decoration: InputDecoration(
-              hintText: placeholder,
-              hintStyle: const TextStyle(
-                fontFamily: AppTheme.fontUI,
-                fontSize: 12,
-                color: AppTheme.textMuted,
-              ),
-              border: InputBorder.none,
-              contentPadding:
-                  const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
-              suffixIcon: IconButton(
-                icon: Icon(
-                  obscureText
-                      ? Icons.visibility_outlined
-                      : Icons.visibility_off_outlined,
-                  size: 18,
-                  color: AppTheme.textMuted,
-                ),
-                onPressed: onToggleObscure,
-              ),
-            ),
-          ),
-        ),
-      ],
-    );
-  }
-
-  Widget _buildBaseUrlField(TextEditingController controller) {
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.start,
-      children: [
-        _buildSectionLabel('CUSTOM BASE URL'),
-        const SizedBox(height: 6),
-        Container(
-          decoration: BoxDecoration(
-            color: AppTheme.surfaceWarm,
-            borderRadius: BorderRadius.circular(12),
-            border: Border.all(color: AppTheme.border),
-          ),
-          child: TextField(
-            controller: controller,
-            style: const TextStyle(
-              fontFamily: 'monospace',
-              fontSize: 13,
-              color: AppTheme.ink,
-            ),
-            decoration: const InputDecoration(
-              hintText: 'http://localhost:11434/v1',
-              hintStyle: TextStyle(
-                fontFamily: AppTheme.fontUI,
-                fontSize: 12,
-                color: AppTheme.textMuted,
-              ),
-              border: InputBorder.none,
-              contentPadding:
-                  EdgeInsets.symmetric(horizontal: 14, vertical: 12),
-            ),
-          ),
-        ),
-      ],
-    );
-  }
-
-  Widget _buildModelSelector({
-    required bool isPrimary,
-    required TextEditingController modelController,
-    required List<AIModelOption> models,
-    required bool isFetching,
-  }) {
-    final currentVal = modelController.text;
-    final hasModels = models.isNotEmpty;
-
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.start,
-      children: [
-        Row(
-          mainAxisAlignment: MainAxisAlignment.spaceBetween,
-          children: [
-            _buildSectionLabel(hasModels ? 'ACTIVE MODEL' : 'MODEL SELECTION'),
-            if (isFetching)
-              const SizedBox(
-                width: 14,
-                height: 14,
-                child: CircularProgressIndicator(
-                    strokeWidth: 2, color: AppTheme.ink),
-              )
-            else if (hasModels)
-              InkWell(
-                onTap: () => _fetchModels(isPrimary: isPrimary),
-                child: Row(
-                  mainAxisSize: MainAxisSize.min,
-                  children: [
-                    const Icon(Icons.refresh_rounded,
-                        size: 12, color: AppTheme.textMuted),
-                    const SizedBox(width: 4),
-                    Text(
-                      '${models.length} live models',
-                      style: const TextStyle(
-                        fontFamily: AppTheme.fontUI,
-                        fontSize: 10,
-                        fontWeight: FontWeight.w600,
-                        color: AppTheme.textMuted,
-                      ),
-                    ),
-                  ],
-                ),
-              )
-            else
-              const Text(
-                '0 live models',
-                style: TextStyle(
-                  fontFamily: AppTheme.fontUI,
-                  fontSize: 10,
-                  fontWeight: FontWeight.w600,
-                  color: AppTheme.textMuted,
-                ),
-              ),
-          ],
-        ),
-        const SizedBox(height: 6),
-        InkWell(
-          onTap: () => _showModelPicker(isPrimary: isPrimary),
-          borderRadius: BorderRadius.circular(12),
-          child: Container(
-            padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
-            decoration: BoxDecoration(
-              color: AppTheme.surfaceWarm,
-              borderRadius: BorderRadius.circular(12),
-              border: Border.all(color: AppTheme.border),
-            ),
-            child: Row(
-              children: [
-                Expanded(
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      Row(
-                        children: [
-                          Flexible(
-                            child: Text(
-                              (hasModels && currentVal.isNotEmpty)
-                                  ? currentVal
-                                  : 'No model selected',
-                              style: TextStyle(
-                                fontFamily: AppTheme.fontUI,
-                                fontSize: 13,
-                                fontWeight: FontWeight.w600,
-                                color: (hasModels && currentVal.isNotEmpty)
-                                    ? AppTheme.ink
-                                    : AppTheme.textMuted,
-                              ),
-                              overflow: TextOverflow.ellipsis,
-                            ),
-                          ),
-                          if (hasModels && currentVal.isNotEmpty) ...[
-                            const SizedBox(width: 8),
-                            Container(
-                              padding: const EdgeInsets.symmetric(
-                                  horizontal: 6, vertical: 2),
-                              decoration: BoxDecoration(
-                                color: const Color(0xFFE0F2FE),
-                                borderRadius: BorderRadius.circular(4),
-                              ),
-                              child: const Text(
-                                'CHOSEN',
-                                style: TextStyle(
-                                  fontFamily: AppTheme.fontUI,
-                                  fontSize: 9,
-                                  fontWeight: FontWeight.w700,
-                                  color: Color(0xFF0369A1),
-                                ),
-                              ),
-                            ),
-                          ],
-                        ],
-                      ),
-                      const SizedBox(height: 2),
-                      Text(
-                        hasModels
-                            ? 'Tap to browse live provider catalog (${models.length} models)'
-                            : 'Test connection with your key to discover models',
-                        style: const TextStyle(
-                          fontFamily: AppTheme.fontUI,
-                          fontSize: 11,
-                          color: AppTheme.textMuted,
-                        ),
-                      ),
-                    ],
-                  ),
-                ),
-                const Icon(Icons.keyboard_arrow_down_rounded,
-                    size: 20, color: AppTheme.ink),
-              ],
-            ),
-          ),
-        ),
-      ],
-    );
-  }
-
-  Widget _buildTestConnectionButton({
-    required bool isPrimary,
-    required bool testing,
-    required bool? testOk,
-    required String? testMessage,
-  }) {
-    return Row(
-      children: [
-        OutlinedButton.icon(
-          onPressed:
-              testing ? null : () => _testConnection(isPrimary: isPrimary),
-          icon: testing
-              ? const SizedBox(
-                  width: 14,
-                  height: 14,
-                  child: CircularProgressIndicator(
-                      strokeWidth: 2, color: AppTheme.ink),
-                )
-              : const Icon(Icons.flash_on_rounded, size: 16),
-          label: Text(testing ? 'Testing...' : 'Test Connection'),
-          style: OutlinedButton.styleFrom(
-            padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
-            minimumSize: const Size(0, 38),
-          ),
-        ),
-        const SizedBox(width: 12),
-        if (testMessage != null)
-          Expanded(
-            child: Row(
-              children: [
-                if (testOk == true)
-                  const AthenaAvatar(
-                    expression: AthenaExpression.wink,
-                    size: 18,
-                  )
-                else
-                  const AthenaAvatar(
-                    expression: AthenaExpression.surprised,
-                    size: 18,
-                  ),
-                const SizedBox(width: 6),
-                Expanded(
-                  child: Text(
-                    testMessage,
-                    style: TextStyle(
-                      fontFamily: AppTheme.fontUI,
-                      fontSize: 12,
-                      fontWeight: FontWeight.w500,
-                      color: testOk == true
-                          ? const Color(0xFF007A3D)
-                          : Colors.redAccent,
-                    ),
-                    maxLines: 1,
-                    overflow: TextOverflow.ellipsis,
-                  ),
-                ),
-              ],
-            ),
-          ),
-      ],
-    );
-  }
-
-  Widget _buildFooter() {
-    return Padding(
-      padding: const EdgeInsets.fromLTRB(20, 14, 20, 16),
-      child: Row(
-        mainAxisAlignment: MainAxisAlignment.end,
-        children: [
-          TextButton(
-            onPressed: _saving ? null : () => Navigator.of(context).pop(),
-            child: const Text('Cancel'),
-          ),
-          const SizedBox(width: 8),
-          ElevatedButton(
-            onPressed: _saving ? null : _saveConfig,
-            style: ElevatedButton.styleFrom(
-              padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 12),
-            ),
-            child: _saving
-                ? const SizedBox(
-                    width: 18,
-                    height: 18,
-                    child: CircularProgressIndicator(
-                        strokeWidth: 2, color: Colors.white),
-                  )
-                : const Text('Save & Apply'),
-          ),
-        ],
       ),
     );
   }
@@ -2068,7 +1985,7 @@ class _ModelSelectionModalState extends State<_ModelSelectionModal> {
       height: MediaQuery.of(context).size.height * 0.75,
       decoration: const BoxDecoration(
         color: AppTheme.surface,
-        borderRadius: BorderRadius.vertical(top: Radius.circular(24)),
+        borderRadius: BorderRadius.vertical(top: Radius.circular(20)),
       ),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.stretch,
@@ -2140,7 +2057,7 @@ class _ModelSelectionModalState extends State<_ModelSelectionModal> {
                           ? widget.currentModel
                           : 'e.g. meta-llama/llama-3.3-70b-instruct',
                       border: OutlineInputBorder(
-                        borderRadius: BorderRadius.circular(10),
+                        borderRadius: BorderRadius.circular(6),
                       ),
                       contentPadding: const EdgeInsets.symmetric(
                           horizontal: 14, vertical: 12),
@@ -2153,6 +2070,11 @@ class _ModelSelectionModalState extends State<_ModelSelectionModal> {
                         widget.onModelSelected(_manualController.text.trim());
                       }
                     },
+                    style: ElevatedButton.styleFrom(
+                      shape: RoundedRectangleBorder(
+                        borderRadius: BorderRadius.circular(6),
+                      ),
+                    ),
                     child: const Text('Use This Model'),
                   ),
                 ],
@@ -2206,6 +2128,11 @@ class _ModelSelectionModalState extends State<_ModelSelectionModal> {
                         onPressed: () {
                           setState(() => _customMode = true);
                         },
+                        style: OutlinedButton.styleFrom(
+                          shape: RoundedRectangleBorder(
+                            borderRadius: BorderRadius.circular(6),
+                          ),
+                        ),
                         child: const Text('Enter Model Slug Manually'),
                       ),
                     ],
@@ -2237,7 +2164,7 @@ class _ModelSelectionModalState extends State<_ModelSelectionModal> {
                       : null,
                   hintText: 'Search ${_models.length} live models...',
                   border: OutlineInputBorder(
-                    borderRadius: BorderRadius.circular(12),
+                    borderRadius: BorderRadius.circular(6),
                     borderSide: const BorderSide(color: AppTheme.border),
                   ),
                   contentPadding:

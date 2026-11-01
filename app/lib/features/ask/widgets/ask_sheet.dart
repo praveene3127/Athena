@@ -57,6 +57,7 @@ class AskSheet extends StatefulWidget {
   }) {
     return showModalBottomSheet(
       context: context,
+      useSafeArea: true,
       isScrollControlled: true,
       backgroundColor: Colors.transparent,
       builder: (context) => Padding(
@@ -341,7 +342,7 @@ class _AskSheetState extends State<AskSheet> {
                         const SizedBox(height: 10),
                         Text(
                           passage,
-                          maxLines: 4,
+                          maxLines: MediaQuery.viewInsetsOf(context).bottom > 0 ? 2 : 4,
                           overflow: TextOverflow.ellipsis,
                           style: TextStyle(
                             color:
