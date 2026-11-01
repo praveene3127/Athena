@@ -214,9 +214,10 @@ class _BYOKSettingsSheetState extends State<BYOKSettingsSheet>
             ? config.primaryProvider
             : (savedLocalPrimaryProvider ?? 'gemini');
 
-        _primaryModelController.text = (config != null && config.primaryModel.isNotEmpty)
-            ? config.primaryModel
-            : (savedLocalPrimaryModel ?? '');
+        _primaryModelController.text =
+            (config != null && config.primaryModel.isNotEmpty)
+                ? config.primaryModel
+                : (savedLocalPrimaryModel ?? '');
 
         _primaryBaseUrlController.text =
             config?.primaryBaseUrl ?? (savedLocalPrimaryBaseUrl ?? '');
@@ -231,8 +232,8 @@ class _BYOKSettingsSheetState extends State<BYOKSettingsSheet>
             (savedLocalFallbackProvider != null &&
                 savedLocalFallbackProvider.isNotEmpty)) {
           _enableFallback = true;
-          _fallbackProvider =
-              config?.fallbackProvider ?? (savedLocalFallbackProvider ?? 'groq');
+          _fallbackProvider = config?.fallbackProvider ??
+              (savedLocalFallbackProvider ?? 'groq');
           _fallbackModelController.text =
               config?.fallbackModel ?? (savedLocalFallbackModel ?? '');
           _fallbackBaseUrlController.text =

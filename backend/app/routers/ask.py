@@ -3,12 +3,11 @@ import secrets
 from collections import deque
 from threading import Lock
 from typing import Any, Dict, Optional
-from fastapi import APIRouter, Depends, Header, Query
+from fastapi import APIRouter, Depends, Header
 from pydantic import BaseModel, Field
 from sqlmodel import Session, select
 
 from app.config import (
-    ASK_MAX_QUESTION_CHARS,
     ASK_RATE_LIMIT,
     ATHENA_CONTEXT_PROXY_TOKEN,
     is_llm_configured,

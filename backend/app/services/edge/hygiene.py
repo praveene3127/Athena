@@ -7,7 +7,7 @@ Shannon character entropy, letter-spaced imprint collapse, and wordninja kerning
 import logging
 import math
 import re
-from typing import Any, List, Optional, Set, Tuple
+from typing import List, Set, Tuple
 
 from .novelty import _get_embedder, _get_proto_vectors, _cosine_similarity
 

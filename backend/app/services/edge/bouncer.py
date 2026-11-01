@@ -5,10 +5,9 @@ Evaluates per-page structural dominance, font telemetry, and prose-to-formula ra
 
 import logging
 import re
-from typing import Any, List, Optional, Set
+from typing import Any, List, Optional
 
 from .novelty import _get_embedder
-from .hygiene import PROSE_STOPWORDS
 
 logger = logging.getLogger(__name__)
 

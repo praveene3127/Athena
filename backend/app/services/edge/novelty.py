@@ -4,7 +4,7 @@ Edge AI Novelty & Epistemic Curiosity Engine (FastEmbed ONNX + Vector Gating).
 
 import logging
 import re
-from typing import Any, List, Optional
+from typing import List
 
 logger = logging.getLogger(__name__)
 

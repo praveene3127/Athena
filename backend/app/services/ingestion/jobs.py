@@ -14,7 +14,6 @@ from app.services.ingestion.integrity import verify_integrity
 from app.services.marginalia.concepts import extract_concepts
 from app.services.marginalia.cards import generate_context_cards
 from app.services.edge_ai import classify_document_purpose
-from app.config import UPLOADS_DIR
 
 logger = logging.getLogger(__name__)
 
@@ -320,7 +319,7 @@ def process_document_job(doc_id: str) -> None:
             doc.updated_at = utc_now()
             session.add(doc)
             session.commit()
-        except Exception as e:
+        except Exception:
             logger.exception("Unexpected error processing document %s", doc_id)
             doc.status = "failed"
             doc.error_code = "INTERNAL"

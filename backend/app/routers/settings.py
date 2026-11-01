@@ -1,5 +1,5 @@
 import logging
-from typing import Any, Dict, List, Optional
+from typing import Optional
 from fastapi import APIRouter, Depends, Request
 from pydantic import BaseModel
 from sqlmodel import Session, select
@@ -11,7 +11,6 @@ from app.config import (
     LLM_API_KEY,
     LLM_BASE_URL,
     LLM_MODEL,
-    is_llm_configured,
 )
 from app.db import get_session
 from app.models import AISettings, utc_now

@@ -13,7 +13,6 @@ import pymupdf
 
 from app.services.ingestion.repairs import repair_text, RepairLedger
 from app.services.edge_ai import (
-    clean_block_hygiene,
     is_front_matter_or_noise_page,
     self_heal_prose_text,
     COMPOUND_PREFIXES,
@@ -326,7 +325,6 @@ def extract_document_structure(
         ledger = RepairLedger()
 
     total_pages = doc.page_count
-    raw_spans_record: List[Dict[str, Any]] = []
 
     # 1. Fetch document outline (TOC) for cross-checking headings
     outline_titles: Set[str] = set()

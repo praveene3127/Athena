@@ -77,7 +77,6 @@ def detect_script_and_direction(text: str, bbox: Optional[Tuple[float, float, fl
     hiragana_count = len(re.findall(r"[\u3040-\u309f]", text))
     katakana_count = len(re.findall(r"[\u30a0-\u30ff]", text))
     hangul_count = len(re.findall(r"[\uac00-\ud7af]", text))
-    latin_count = len(re.findall(r"[A-Za-z]", text))
 
     is_japanese = (hiragana_count + katakana_count > 0)
     is_korean = (hangul_count > 0)

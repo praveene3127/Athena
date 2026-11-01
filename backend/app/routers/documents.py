@@ -10,7 +10,7 @@ import urllib.parse
 import uuid
 from typing import Any, Dict, List
 import httpx
-from fastapi import APIRouter, Depends, File, Request, UploadFile, status
+from fastapi import APIRouter, Depends, File, Request, UploadFile
 from fastapi.responses import Response, StreamingResponse
 from pydantic import BaseModel
 from sqlmodel import Session, select
@@ -18,6 +18,7 @@ import pymupdf
 
 from app.config import (
     BASE_DIR,
+    MAX_UPLOAD_SIZE_BYTES,
     RAW_DIR,
     UPLOADS_DIR,
 )
@@ -31,7 +32,7 @@ from app.services.marginalia.llm import LLMService
 router = APIRouter(prefix="/api/documents", tags=["documents"])
 logger = logging.getLogger(__name__)
 
-MAX_UPLOAD_SIZE = 500 * 1024 * 1024  # 500 MB bound to prevent disk exhaustion
+MAX_UPLOAD_SIZE = MAX_UPLOAD_SIZE_BYTES  # 500 MB bound to prevent disk exhaustion
 
 STAGE_LABELS: Dict[str, str] = {
     "validating": "Reading PDF",

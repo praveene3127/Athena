@@ -138,7 +138,7 @@ def verify_integrity(
     # 7. Ledger replay fidelity check (if ledger and raw_text are passed)
     if ledger is not None and raw_text is not None:
         try:
-            replayed = ledger.replay_on_text(raw_text)
+            _ = ledger.replay_on_text(raw_text)
             # Replayed raw_text should contain the repaired characters
         except Exception as e:
             reasons.append(f"Ledger replay check error: {e}")

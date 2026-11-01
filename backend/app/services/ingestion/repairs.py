@@ -99,7 +99,6 @@ class RepairLedger:
         Replays the ledger repairs onto raw_text in order.
         Guarantees that replaying the ledger matches the repaired canonical text.
         """
-        chars = list(raw_text)
         # Apply in reverse order if offsets change length, or sequentially with running delta
         # Since entries were recorded sequentially during text pass:
         result_parts: List[str] = []
