@@ -4,7 +4,7 @@ import 'dart:convert';
 import 'package:archive/archive.dart';
 import 'package:cross_file/cross_file.dart';
 import 'package:dio/dio.dart';
-import 'package:flutter/foundation.dart' show kIsWeb;
+import 'package:flutter/foundation.dart' show compute, kIsWeb;
 import 'package:shared_preferences/shared_preferences.dart';
 
 import 'package:athena/core/config/config.dart';
@@ -57,6 +57,95 @@ String _extractEpubText(List<int> bytes) {
   } catch (_) {
     return '';
   }
+}
+
+class _ParseDocumentParams {
+  final List<int> bytes;
+  final String fileName;
+  final String docId;
+
+  const _ParseDocumentParams({
+    required this.bytes,
+    required this.fileName,
+    required this.docId,
+  });
+}
+
+class _ParseDocumentResult {
+  final String canonicalText;
+  final int pageCount;
+  final List<Map<String, Object?>> chunkMaps;
+
+  const _ParseDocumentResult({
+    required this.canonicalText,
+    required this.pageCount,
+    required this.chunkMaps,
+  });
+}
+
+_ParseDocumentResult _parseAndChunkDocumentInBackground(_ParseDocumentParams params) {
+  final bytes = params.bytes;
+  final fileName = params.fileName;
+  final docId = params.docId;
+  final lowerName = fileName.toLowerCase();
+  String canonicalText = '';
+  int pageCount = 1;
+
+  if (lowerName.endsWith('.pdf')) {
+    try {
+      final PdfDocument pdfDoc = PdfDocument(inputBytes: bytes);
+      pageCount = pdfDoc.pages.count;
+      final PdfTextExtractor extractor = PdfTextExtractor(pdfDoc);
+      canonicalText = extractor.extractText();
+      pdfDoc.dispose();
+    } catch (_) {
+      try {
+        canonicalText = utf8.decode(bytes, allowMalformed: true);
+      } catch (_) {
+        canonicalText = String.fromCharCodes(bytes);
+      }
+    }
+  } else if (lowerName.endsWith('.epub')) {
+    canonicalText = _extractEpubText(bytes);
+    if (canonicalText.isEmpty) {
+      try {
+        canonicalText = utf8.decode(bytes, allowMalformed: true);
+      } catch (_) {
+        canonicalText = String.fromCharCodes(bytes);
+      }
+    }
+  } else {
+    try {
+      canonicalText = utf8.decode(bytes, allowMalformed: true);
+    } catch (_) {
+      canonicalText = String.fromCharCodes(bytes);
+    }
+  }
+
+  canonicalText = canonicalText.trim();
+  if (canonicalText.isEmpty) {
+    canonicalText = 'Document: $fileName\n\nPreserved text content.';
+  }
+
+  final chunkMaps = LosslessChunker().build(
+    documentId: docId,
+    canonicalText: canonicalText,
+    spans: [
+      {
+        'start': 0,
+        'end': canonicalText.length,
+        'page_start': 1,
+        'page_end': pageCount,
+        'type': 'paragraph',
+      },
+    ],
+  );
+
+  return _ParseDocumentResult(
+    canonicalText: canonicalText,
+    pageCount: pageCount,
+    chunkMaps: chunkMaps,
+  );
 }
 
 class ApiClient {
@@ -317,45 +406,18 @@ class ApiClient {
       );
     }
 
-    final lowerName = fileName.toLowerCase();
-    String canonicalText = '';
-    int pageCount = 1;
+    final parseResult = await compute(
+      _parseAndChunkDocumentInBackground,
+      _ParseDocumentParams(
+        bytes: bytes,
+        fileName: fileName,
+        docId: docId,
+      ),
+    );
 
-    if (lowerName.endsWith('.pdf')) {
-      try {
-        final PdfDocument pdfDoc = PdfDocument(inputBytes: bytes);
-        pageCount = pdfDoc.pages.count;
-        final PdfTextExtractor extractor = PdfTextExtractor(pdfDoc);
-        canonicalText = extractor.extractText();
-        pdfDoc.dispose();
-      } catch (_) {
-        try {
-          canonicalText = utf8.decode(bytes, allowMalformed: true);
-        } catch (_) {
-          canonicalText = String.fromCharCodes(bytes);
-        }
-      }
-    } else if (lowerName.endsWith('.epub')) {
-      canonicalText = _extractEpubText(bytes);
-      if (canonicalText.isEmpty) {
-        try {
-          canonicalText = utf8.decode(bytes, allowMalformed: true);
-        } catch (_) {
-          canonicalText = String.fromCharCodes(bytes);
-        }
-      }
-    } else {
-      try {
-        canonicalText = utf8.decode(bytes, allowMalformed: true);
-      } catch (_) {
-        canonicalText = String.fromCharCodes(bytes);
-      }
-    }
-
-    canonicalText = canonicalText.trim();
-    if (canonicalText.isEmpty) {
-      canonicalText = 'Document: $fileName\n\nPreserved text content.';
-    }
+    final canonicalText = parseResult.canonicalText;
+    final pageCount = parseResult.pageCount;
+    final chunkMaps = parseResult.chunkMaps;
 
     final now = DateTime.now().toIso8601String();
     final cleanTitle = fileName.replaceAll(RegExp(r'\.[a-zA-Z0-9]+$'), '');
@@ -377,20 +439,6 @@ class ApiClient {
       'created_at': now,
       'updated_at': now,
     });
-
-    final chunkMaps = LosslessChunker().build(
-      documentId: docId,
-      canonicalText: canonicalText,
-      spans: [
-        {
-          'start': 0,
-          'end': canonicalText.length,
-          'page_start': 1,
-          'page_end': pageCount,
-          'type': 'paragraph',
-        },
-      ],
-    );
 
     await LocalDatabase.instance.insertChunks(chunkMaps);
 

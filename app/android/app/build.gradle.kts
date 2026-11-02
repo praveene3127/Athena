@@ -28,12 +28,19 @@ android {
 
     signingConfigs {
         create("release") {
-            val keystorePath = project.findProperty("KEYSTORE_PATH") as String?
-            if (keystorePath != null && file(keystorePath).exists()) {
-                storeFile = file(keystorePath)
-                storePassword = (project.findProperty("KEYSTORE_PASSWORD") as String?) ?: ""
-                keyAlias = (project.findProperty("KEY_ALIAS") as String?) ?: ""
-                keyPassword = (project.findProperty("KEY_PASSWORD") as String?) ?: ""
+            val keystoreProp = project.findProperty("KEYSTORE_PATH") as String?
+            val customKeystore = if (keystoreProp != null) file(keystoreProp) else null
+            val defaultKeystore = File(project.rootDir, "../../releases/athena-release.keystore")
+            val targetKeystore = when {
+                customKeystore != null && customKeystore.exists() -> customKeystore
+                defaultKeystore.exists() -> defaultKeystore
+                else -> null
+            }
+            if (targetKeystore != null) {
+                storeFile = targetKeystore
+                storePassword = (project.findProperty("KEYSTORE_PASSWORD") as String?) ?: "athena123"
+                keyAlias = (project.findProperty("KEY_ALIAS") as String?) ?: "athena"
+                keyPassword = (project.findProperty("KEY_PASSWORD") as String?) ?: "athena123"
             } else {
                 val debug = signingConfigs.getByName("debug")
                 storeFile = debug.storeFile

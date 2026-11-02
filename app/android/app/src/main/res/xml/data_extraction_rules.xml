@@ -2,6 +2,7 @@
 <data-extraction-rules>
     <cloud-backup>
         <exclude domain="database" path="athena_library.sqlite"/>
+        <exclude domain="sharedpref" path="FlutterSharedPreferences.xml"/>
     </cloud-backup>
     <device-transfer>
         <exclude domain="database" path="athena_library.sqlite"/>
