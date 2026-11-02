@@ -53,6 +53,10 @@ Any autonomous agent operating in Athena MUST strictly comply with every constit
 - **High-Surprisal Marginalia**:
   Cards must introduce orthogonal information gain (>= 2 novel named entities/metrics not in the chunk, echo cosine similarity <= 0.81, and rotation across the 4 archetypes: `empirical_study`, `philosophy_paradox`, `historical_case`, `counterpoint`).
 
+### Law 5: Zero Static AI Models Law (100% Live API Model Discovery)
+- **Strict Prohibition**: Never hardcode static lists of AI model IDs (e.g., `gemini-2.5-flash`, `gemini-2.5-pro`, `gemini-2.0-flash`, `gpt-4o`, `claude-3`, `llama-3`) in any Flutter UI widget (`byok_settings_sheet.dart`), `api_client.dart`, or backend provider fallback (`providers.py`).
+- **Check-Connection-Driven Model Discovery**: The Model selector in the UI MUST start empty (`[]`). Models may ONLY be fetched dynamically from the provider's live API endpoint (`/v1beta/models` or `/v1/models`) using the user's entered API key when the user clicks **"Check Connection"** (or when verifying an already-saved valid API key). If no valid API key is verified, the Model list MUST return `[]`.
+
 ---
 
 ## 2. ECC Skills Autonomous Orchestration Directive

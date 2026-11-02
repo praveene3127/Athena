@@ -1433,84 +1433,89 @@ class _LibraryScreenState extends ConsumerState<LibraryScreen>
                   ],
 
                   if (!_aiConfigured) ...[
-                    Container(
-                      width: double.infinity,
-                      margin: const EdgeInsets.only(bottom: 16),
-                      padding: const EdgeInsets.symmetric(
-                          horizontal: 16, vertical: 12),
-                      decoration: BoxDecoration(
-                        color: isDark
-                            ? const Color(0xFF1E1E1E)
-                            : const Color(0xFFFFFDF8),
-                        borderRadius: BorderRadius.circular(16),
-                        border: Border.all(
-                          color: isDark
-                              ? const Color(0xFF333333)
-                              : const Color(0xFFE5DDD0),
-                          width: 1.0,
+                    Material(
+                      color: Colors.transparent,
+                      child: InkWell(
+                        onTap: () => BYOKSettingsSheet.show(
+                          context,
+                          apiClient: ref.read(apiClientProvider),
+                          onConfigSaved: _checkAIConfiguration,
                         ),
-                      ),
-                      child: Row(
-                        children: [
-                          const AthenaAvatar(
-                            expression: AthenaExpression.sleepy,
-                            size: 32,
-                            showBezel: true,
-                          ),
-                          const SizedBox(width: 12),
-                          Expanded(
-                            child: Column(
-                              crossAxisAlignment: CrossAxisAlignment.start,
-                              children: [
-                                Text(
-                                  'Offline Mode Active',
-                                  style: TextStyle(
-                                    fontFamily: AppTheme.fontDisplay,
-                                    fontSize: 14,
-                                    fontWeight: FontWeight.w700,
-                                    color: isDark ? Colors.white : AppTheme.ink,
-                                  ),
-                                ),
-                                const SizedBox(height: 2),
-                                Text(
-                                  'Reading unblocked · Add API key for AI context cards',
-                                  style: TextStyle(
-                                    fontFamily: AppTheme.fontUI,
-                                    fontSize: 11.5,
-                                    color: isDark
-                                        ? AppTheme.darkTextMuted
-                                        : AppTheme.textMuted,
-                                  ),
-                                ),
-                              ],
+                        borderRadius: BorderRadius.circular(16),
+                        child: Container(
+                          width: double.infinity,
+                          margin: const EdgeInsets.only(bottom: 16),
+                          padding: const EdgeInsets.symmetric(
+                              horizontal: 16, vertical: 12),
+                          decoration: BoxDecoration(
+                            color: isDark
+                                ? const Color(0xFF1E1E1E)
+                                : const Color(0xFFFFFDF8),
+                            borderRadius: BorderRadius.circular(16),
+                            border: Border.all(
+                              color: isDark
+                                  ? const Color(0xFF333333)
+                                  : const Color(0xFFE5DDD0),
+                              width: 1.0,
                             ),
                           ),
-                          const SizedBox(width: 8),
-                          TextButton.icon(
-                            icon: const Icon(Icons.key_rounded, size: 14),
-                            label: const Text('Configure API Key',
-                                style: TextStyle(
-                                    fontSize: 12, fontWeight: FontWeight.w600)),
-                            onPressed: () => BYOKSettingsSheet.show(
-                              context,
-                              apiClient: ref.read(apiClientProvider),
-                              onConfigSaved: _checkAIConfiguration,
-                            ),
-                            style: TextButton.styleFrom(
-                              foregroundColor: isDark
-                                  ? const Color(0xFF2DD4BF)
-                                  : const Color(0xFF005E54),
-                              backgroundColor: (isDark
+                          child: Row(
+                            children: [
+                              const AthenaAvatar(
+                                expression: AthenaExpression.sleepy,
+                                size: 32,
+                                showBezel: true,
+                              ),
+                              const SizedBox(width: 12),
+                              Expanded(
+                                child: Column(
+                                  crossAxisAlignment: CrossAxisAlignment.start,
+                                  children: [
+                                    Text(
+                                      'Offline Mode Active',
+                                      style: TextStyle(
+                                        fontFamily: AppTheme.fontDisplay,
+                                        fontSize: 14,
+                                        fontWeight: FontWeight.w700,
+                                        color: isDark ? Colors.white : AppTheme.ink,
+                                      ),
+                                    ),
+                                    const SizedBox(height: 2),
+                                    Text(
+                                      'Reading unblocked · Tap to add your API key for AI context cards',
+                                      style: TextStyle(
+                                        fontFamily: AppTheme.fontUI,
+                                        fontSize: 11.5,
+                                        color: isDark
+                                            ? AppTheme.darkTextMuted
+                                            : AppTheme.textMuted,
+                                      ),
+                                    ),
+                                  ],
+                                ),
+                              ),
+                              const SizedBox(width: 10),
+                              Container(
+                                width: 28,
+                                height: 28,
+                                decoration: BoxDecoration(
+                                  color: (isDark
+                                          ? const Color(0xFF2DD4BF)
+                                          : const Color(0xFF005E54))
+                                      .withValues(alpha: 0.12),
+                                  shape: BoxShape.circle,
+                                ),
+                                child: Icon(
+                                  Icons.arrow_forward_rounded,
+                                  size: 15,
+                                  color: isDark
                                       ? const Color(0xFF2DD4BF)
-                                      : const Color(0xFF005E54))
-                                  .withValues(alpha: 0.1),
-                              padding: const EdgeInsets.symmetric(
-                                  horizontal: 12, vertical: 8),
-                              shape: RoundedRectangleBorder(
-                                  borderRadius: BorderRadius.circular(20)),
-                            ),
+                                      : const Color(0xFF005E54),
+                                ),
+                              ),
+                            ],
                           ),
-                        ],
+                        ),
                       ),
                     ),
                   ],

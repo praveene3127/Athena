@@ -4,6 +4,52 @@ import 'package:shared_preferences/shared_preferences.dart';
 
 import 'package:athena/core/api/api_client.dart';
 import 'package:athena/core/theme/theme.dart';
+import 'package:athena/models/ai_provider.dart';
+
+class _ProviderOption {
+  final String id;
+  final String name;
+  final String description;
+
+  const _ProviderOption({
+    required this.id,
+    required this.name,
+    required this.description,
+  });
+}
+
+const _kProviderOptions = [
+  _ProviderOption(
+    id: 'gemini',
+    name: 'Google Gemini (Recommended)',
+    description: 'Direct Gemini API key via Google AI Studio',
+  ),
+  _ProviderOption(
+    id: 'groq',
+    name: 'Groq (Ultra-Fast)',
+    description: 'Direct API key at 500+ tokens/sec',
+  ),
+  _ProviderOption(
+    id: 'openrouter',
+    name: 'OpenRouter',
+    description: 'Multi-provider gateway with unified API key',
+  ),
+  _ProviderOption(
+    id: 'openai',
+    name: 'OpenAI',
+    description: 'Direct OpenAI platform API key',
+  ),
+  _ProviderOption(
+    id: 'anthropic',
+    name: 'Anthropic Claude',
+    description: 'Direct Anthropic console API key',
+  ),
+  _ProviderOption(
+    id: 'custom',
+    name: 'Custom Endpoint',
+    description: 'Self-hosted vLLM, Ollama, or OpenAI-compatible API',
+  ),
+];
 
 class BYOKSettingsSheet extends StatefulWidget {
   final ApiClient? apiClient;
@@ -49,18 +95,16 @@ class _BYOKSettingsSheetState extends State<BYOKSettingsSheet> {
   bool _obscureKey = true;
 
   String _provider = 'gemini';
-  String _selectedModel = 'gemini-2.5-flash';
+  String? _selectedModel;
   final _keyController = TextEditingController();
   final _baseUrlController = TextEditingController();
 
-  List<String> _availableModels = [
-    'gemini-2.5-flash',
-    'gemini-2.5-pro',
-    'gemini-2.0-flash',
-  ];
-
+  List<AIModelOption> _models = [];
   bool? _testOk;
   String? _testMessage;
+
+  bool _providerMenuOpen = false;
+  bool _modelMenuOpen = false;
 
   @override
   void initState() {
@@ -85,7 +129,7 @@ class _BYOKSettingsSheetState extends State<BYOKSettingsSheet> {
           (config.primaryProvider.isNotEmpty ? config.primaryProvider : 'gemini');
       final savedKey = prefs.getString('athena_ai_primary_api_key') ?? '';
       final savedModel = prefs.getString('athena_ai_primary_model') ??
-          (config.primaryModel.isNotEmpty ? config.primaryModel : 'gemini-2.5-flash');
+          (config.primaryModel.isNotEmpty ? config.primaryModel : null);
       final savedBaseUrl = prefs.getString('athena_ai_primary_base_url') ??
           (config.primaryBaseUrl ?? '');
 
@@ -94,47 +138,14 @@ class _BYOKSettingsSheetState extends State<BYOKSettingsSheet> {
         _keyController.text = savedKey;
         _baseUrlController.text = savedBaseUrl;
         _selectedModel = savedModel;
-        _updateModelOptionsForProvider(savedProvider, currentModel: savedModel);
+        _models = savedModel != null && savedModel.isNotEmpty
+            ? [AIModelOption(id: savedModel, name: savedModel)]
+            : [];
         _loading = false;
       });
     } catch (_) {
       if (mounted) setState(() => _loading = false);
     }
-  }
-
-  void _updateModelOptionsForProvider(String prov, {String? currentModel}) {
-    List<String> list;
-    switch (prov.toLowerCase()) {
-      case 'gemini':
-        list = ['gemini-2.5-flash', 'gemini-2.5-pro', 'gemini-2.0-flash'];
-        break;
-      case 'groq':
-        list = ['llama-3.3-70b-versatile', 'llama-3.1-8b-instant'];
-        break;
-      case 'openrouter':
-        list = [
-          'google/gemini-2.5-flash',
-          'anthropic/claude-3.5-haiku',
-          'meta-llama/llama-3.3-70b-instruct',
-        ];
-        break;
-      case 'openai':
-        list = ['gpt-4o-mini', 'gpt-4o'];
-        break;
-      case 'anthropic':
-        list = ['claude-3-5-haiku-20241022', 'claude-3-5-sonnet-20241022'];
-        break;
-      default:
-        list = ['default'];
-    }
-
-    final target = currentModel ?? list.first;
-    if (!list.contains(target)) {
-      list = [target, ...list];
-    }
-
-    _availableModels = list;
-    _selectedModel = target;
   }
 
   Future<void> _pasteFromClipboard() async {
@@ -149,7 +160,7 @@ class _BYOKSettingsSheetState extends State<BYOKSettingsSheet> {
     }
   }
 
-  Future<void> _testConnection() async {
+  Future<void> _testConnectionAndFetchLiveModels() async {
     final key = _keyController.text.trim();
     if (_provider != 'custom' && key.isEmpty) {
       setState(() {
@@ -163,42 +174,54 @@ class _BYOKSettingsSheetState extends State<BYOKSettingsSheet> {
       _testing = true;
       _testOk = null;
       _testMessage = null;
+      _providerMenuOpen = false;
+      _modelMenuOpen = false;
     });
 
     try {
+      final baseUrl = _baseUrlController.text.trim().isNotEmpty
+          ? _baseUrlController.text.trim()
+          : null;
+
       final res = await _api.testAIConnection(
         provider: _provider,
         apiKey: key,
         model: _selectedModel,
-        baseUrl: _baseUrlController.text.trim().isNotEmpty
-            ? _baseUrlController.text.trim()
-            : null,
+        baseUrl: baseUrl,
+      );
+
+      final liveModels = await _api.fetchModels(
+        provider: _provider,
+        apiKey: key,
+        baseUrl: baseUrl,
       );
 
       if (!mounted) return;
 
       final ok = (res['ok'] == true || res['valid'] == true);
-      final msg = res['message']?.toString() ??
-          (ok ? 'Connected successfully!' : 'Connection test failed.');
-
-      final rawModels = res['models'] as List? ?? [];
-      final discovered = rawModels
-          .map((m) =>
-              m is Map ? (m['id'] ?? m['name'])?.toString() : m.toString())
-          .where((s) => s != null && s.isNotEmpty)
-          .cast<String>()
-          .toList();
+      final rawMsg = res['message']?.toString();
 
       setState(() {
         _testing = false;
         _testOk = ok;
-        _testMessage = msg;
-        if (discovered.isNotEmpty) {
-          final merged = <String>{..._availableModels, ...discovered}.toList();
-          _availableModels = merged;
-          if (!merged.contains(_selectedModel)) {
-            _selectedModel = discovered.first;
+
+        if (liveModels.isNotEmpty) {
+          _models = liveModels;
+          final existingMatch =
+              liveModels.any((m) => m.id == _selectedModel);
+          if (!existingMatch) {
+            _selectedModel = liveModels.first.id;
           }
+          _testMessage = ok
+              ? 'Connected! Loaded ${liveModels.length} live models from API.'
+              : (rawMsg ?? 'Live models loaded, but validation check returned an error.');
+        } else {
+          _models = [];
+          _selectedModel = null;
+          _testMessage = rawMsg ??
+              (ok
+                  ? 'Connected, but no compatible generation models were found.'
+                  : 'Connection test failed. Check your API key.');
         }
       });
     } catch (e) {
@@ -206,6 +229,8 @@ class _BYOKSettingsSheetState extends State<BYOKSettingsSheet> {
       setState(() {
         _testing = false;
         _testOk = false;
+        _models = [];
+        _selectedModel = null;
         _testMessage = e.toString();
       });
     }
@@ -233,7 +258,7 @@ class _BYOKSettingsSheetState extends State<BYOKSettingsSheet> {
         SnackBar(
           content: Text(
             key.isEmpty
-                ? 'Saved on-device! (Add an API key anytime for deep AI analysis)'
+                ? 'Saved on-device (Offline mode).'
                 : 'AI Engine Settings updated and saved successfully.',
           ),
           backgroundColor: const Color(0xFF2D6A4F),
@@ -252,7 +277,8 @@ class _BYOKSettingsSheetState extends State<BYOKSettingsSheet> {
     }
   }
 
-  InputDecoration _buildInputDecoration(bool isDark, {String? hintText, Widget? suffixIcon}) {
+  InputDecoration _buildInputDecoration(bool isDark,
+      {String? hintText, Widget? suffixIcon}) {
     return InputDecoration(
       hintText: hintText,
       hintStyle: TextStyle(
@@ -262,7 +288,7 @@ class _BYOKSettingsSheetState extends State<BYOKSettingsSheet> {
       ),
       suffixIcon: suffixIcon,
       filled: true,
-      fillColor: isDark ? const Color(0xFF202020) : const Color(0xFFF7F5F0),
+      fillColor: isDark ? const Color(0xFF202020) : const Color(0xFFF5F2EB),
       contentPadding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
       border: OutlineInputBorder(
         borderRadius: BorderRadius.circular(12),
@@ -292,16 +318,24 @@ class _BYOKSettingsSheetState extends State<BYOKSettingsSheet> {
   Widget build(BuildContext context) {
     final isDark = Theme.of(context).brightness == Brightness.dark;
     final bottomInset = MediaQuery.viewInsetsOf(context).bottom;
+    final sheetBg = isDark ? const Color(0xFF141413) : const Color(0xFFFBF9F5);
+    final borderColor = isDark ? const Color(0xFF282828) : AppTheme.border;
+    final primaryInk = isDark ? Colors.white : AppTheme.ink;
+
+    final selectedProvObj = _kProviderOptions.firstWhere(
+      (p) => p.id == _provider,
+      orElse: () => _kProviderOptions.first,
+    );
 
     return Padding(
       padding: EdgeInsets.only(bottom: bottomInset),
       child: Container(
         margin: const EdgeInsets.symmetric(horizontal: 10, vertical: 10),
         decoration: BoxDecoration(
-          color: isDark ? const Color(0xFF181818) : Colors.white,
+          color: sheetBg,
           borderRadius: BorderRadius.circular(24),
           border: Border.all(
-            color: isDark ? const Color(0xFF282828) : AppTheme.border,
+            color: borderColor,
             width: 1.5,
           ),
           boxShadow: const [
@@ -319,7 +353,7 @@ class _BYOKSettingsSheetState extends State<BYOKSettingsSheet> {
                   height: 200,
                   child: Center(
                     child: CircularProgressIndicator(
-                      color: isDark ? Colors.white : AppTheme.ink,
+                      color: primaryInk,
                     ),
                   ),
                 )
@@ -377,7 +411,7 @@ class _BYOKSettingsSheetState extends State<BYOKSettingsSheet> {
                       ),
                       const SizedBox(height: 14),
 
-                      // AI Provider Dropdown
+                      // Step 1: AI Provider (Attached In-Sheet Expandable Card)
                       Text(
                         'AI Provider',
                         style: TextStyle(
@@ -390,54 +424,163 @@ class _BYOKSettingsSheetState extends State<BYOKSettingsSheet> {
                         ),
                       ),
                       const SizedBox(height: 6),
-                      DropdownButtonFormField<String>(
-                        // ignore: deprecated_member_use
-                        value: _provider,
-                        dropdownColor:
-                            isDark ? const Color(0xFF222222) : Colors.white,
-                        decoration: _buildInputDecoration(isDark),
-                        style: TextStyle(
-                          fontFamily: AppTheme.fontUI,
-                          fontSize: 14,
+                      Container(
+                        decoration: BoxDecoration(
                           color: isDark
-                              ? const Color(0xFFF3F3F3)
-                              : AppTheme.textPrimary,
+                              ? const Color(0xFF202020)
+                              : const Color(0xFFF5F2EB),
+                          borderRadius: BorderRadius.circular(12),
+                          border: Border.all(
+                            color: _providerMenuOpen
+                                ? (isDark
+                                    ? const Color(0xFF2DD4BF)
+                                    : const Color(0xFF2D6A4F))
+                                : (isDark
+                                    ? const Color(0xFF2C2C2C)
+                                    : AppTheme.border),
+                            width: _providerMenuOpen ? 1.5 : 1.0,
+                          ),
                         ),
-                        items: const [
-                          DropdownMenuItem(
-                            value: 'gemini',
-                            child: Text('Google Gemini (Recommended)'),
-                          ),
-                          DropdownMenuItem(
-                            value: 'groq',
-                            child: Text('Groq (Ultra-Fast)'),
-                          ),
-                          DropdownMenuItem(
-                            value: 'openrouter',
-                            child: Text('OpenRouter'),
-                          ),
-                          DropdownMenuItem(
-                            value: 'openai',
-                            child: Text('OpenAI'),
-                          ),
-                          DropdownMenuItem(
-                            value: 'anthropic',
-                            child: Text('Anthropic Claude'),
-                          ),
-                          DropdownMenuItem(
-                            value: 'custom',
-                            child: Text('Custom Endpoint'),
-                          ),
-                        ],
-                        onChanged: (val) {
-                          if (val == null) return;
-                          setState(() {
-                            _provider = val;
-                            _testOk = null;
-                            _testMessage = null;
-                            _updateModelOptionsForProvider(val);
-                          });
-                        },
+                        child: Column(
+                          children: [
+                            InkWell(
+                              onTap: () {
+                                setState(() {
+                                  _providerMenuOpen = !_providerMenuOpen;
+                                  _modelMenuOpen = false;
+                                });
+                              },
+                              borderRadius: BorderRadius.circular(12),
+                              child: Padding(
+                                padding: const EdgeInsets.symmetric(
+                                    horizontal: 14, vertical: 12),
+                                child: Row(
+                                  children: [
+                                    Expanded(
+                                      child: Column(
+                                        crossAxisAlignment:
+                                            CrossAxisAlignment.start,
+                                        children: [
+                                          Text(
+                                            selectedProvObj.name,
+                                            style: TextStyle(
+                                              fontFamily: AppTheme.fontUI,
+                                              fontSize: 14,
+                                              fontWeight: FontWeight.w600,
+                                              color: isDark
+                                                  ? const Color(0xFFF3F3F3)
+                                                  : AppTheme.textPrimary,
+                                            ),
+                                          ),
+                                          Text(
+                                            selectedProvObj.description,
+                                            style: TextStyle(
+                                              fontFamily: AppTheme.fontUI,
+                                              fontSize: 11,
+                                              color: isDark
+                                                  ? const Color(0xFF888888)
+                                                  : AppTheme.textMuted,
+                                            ),
+                                          ),
+                                        ],
+                                      ),
+                                    ),
+                                    Icon(
+                                      _providerMenuOpen
+                                          ? Icons.keyboard_arrow_up_rounded
+                                          : Icons.keyboard_arrow_down_rounded,
+                                      color: isDark
+                                          ? const Color(0xFF888888)
+                                          : AppTheme.textMuted,
+                                    ),
+                                  ],
+                                ),
+                              ),
+                            ),
+                            if (_providerMenuOpen) ...[
+                              Divider(
+                                height: 1,
+                                thickness: 1,
+                                color: isDark
+                                    ? const Color(0xFF2C2C2C)
+                                    : AppTheme.border,
+                              ),
+                              ConstrainedBox(
+                                constraints:
+                                    const BoxConstraints(maxHeight: 220),
+                                child: ListView.separated(
+                                  shrinkWrap: true,
+                                  padding: const EdgeInsets.symmetric(
+                                      vertical: 4),
+                                  itemCount: _kProviderOptions.length,
+                                  separatorBuilder: (_, __) => Divider(
+                                    height: 1,
+                                    thickness: 0.5,
+                                    color: isDark
+                                        ? const Color(0xFF272727)
+                                        : const Color(0xFFECE7DE),
+                                  ),
+                                  itemBuilder: (ctx, idx) {
+                                    final p = _kProviderOptions[idx];
+                                    final selected = p.id == _provider;
+                                    return ListTile(
+                                      dense: true,
+                                      contentPadding:
+                                          const EdgeInsets.symmetric(
+                                              horizontal: 14, vertical: 2),
+                                      title: Text(
+                                        p.name,
+                                        style: TextStyle(
+                                          fontFamily: AppTheme.fontUI,
+                                          fontSize: 13,
+                                          fontWeight: selected
+                                              ? FontWeight.w700
+                                              : FontWeight.w500,
+                                          color: selected
+                                              ? (isDark
+                                                  ? const Color(0xFF2DD4BF)
+                                                  : const Color(0xFF2D6A4F))
+                                              : (isDark
+                                                  ? Colors.white
+                                                  : AppTheme.ink),
+                                        ),
+                                      ),
+                                      subtitle: Text(
+                                        p.description,
+                                        style: TextStyle(
+                                          fontFamily: AppTheme.fontUI,
+                                          fontSize: 11,
+                                          color: isDark
+                                              ? const Color(0xFF888888)
+                                              : AppTheme.textMuted,
+                                        ),
+                                      ),
+                                      trailing: selected
+                                          ? Icon(
+                                              Icons.check_rounded,
+                                              size: 16,
+                                              color: isDark
+                                                  ? const Color(0xFF2DD4BF)
+                                                  : const Color(0xFF2D6A4F),
+                                            )
+                                          : null,
+                                      onTap: () {
+                                        setState(() {
+                                          _provider = p.id;
+                                          _providerMenuOpen = false;
+                                          _testOk = null;
+                                          _testMessage = null;
+                                          _models = [];
+                                          _selectedModel = null;
+                                        });
+                                      },
+                                    );
+                                  },
+                                ),
+                              ),
+                            ],
+                          ],
+                        ),
                       ),
                       const SizedBox(height: 14),
 
@@ -472,7 +615,7 @@ class _BYOKSettingsSheetState extends State<BYOKSettingsSheet> {
                         const SizedBox(height: 14),
                       ],
 
-                      // API Key TextField
+                      // Step 2: API Key TextField
                       Text(
                         'API Key',
                         style: TextStyle(
@@ -488,6 +631,14 @@ class _BYOKSettingsSheetState extends State<BYOKSettingsSheet> {
                       TextField(
                         controller: _keyController,
                         obscureText: _obscureKey,
+                        onChanged: (_) {
+                          if (_testOk != null || _testMessage != null) {
+                            setState(() {
+                              _testOk = null;
+                              _testMessage = null;
+                            });
+                          }
+                        },
                         decoration: _buildInputDecoration(
                           isDark,
                           hintText: _provider == 'gemini'
@@ -535,7 +686,7 @@ class _BYOKSettingsSheetState extends State<BYOKSettingsSheet> {
                       ),
                       const SizedBox(height: 14),
 
-                      // Model Dropdown
+                      // Step 4: Model Selector (ONLY unlocked when live models exist)
                       Text(
                         'Model',
                         style: TextStyle(
@@ -548,33 +699,181 @@ class _BYOKSettingsSheetState extends State<BYOKSettingsSheet> {
                         ),
                       ),
                       const SizedBox(height: 6),
-                      DropdownButtonFormField<String>(
-                        // ignore: deprecated_member_use
-                        value: _availableModels.contains(_selectedModel)
-                            ? _selectedModel
-                            : _availableModels.firstOrNull,
-                        dropdownColor:
-                            isDark ? const Color(0xFF222222) : Colors.white,
-                        decoration: _buildInputDecoration(isDark),
-                        style: TextStyle(
-                          fontFamily: AppTheme.fontUI,
-                          fontSize: 14,
-                          color: isDark
-                              ? const Color(0xFFF3F3F3)
-                              : AppTheme.textPrimary,
+                      if (_models.isEmpty) ...[
+                        Container(
+                          padding: const EdgeInsets.symmetric(
+                              horizontal: 14, vertical: 14),
+                          decoration: BoxDecoration(
+                            color: isDark
+                                ? const Color(0xFF1E1E1E)
+                                : const Color(0xFFF5F2EB),
+                            borderRadius: BorderRadius.circular(12),
+                            border: Border.all(
+                              color: borderColor,
+                              width: 1.0,
+                            ),
+                          ),
+                          child: Row(
+                            children: [
+                              Icon(
+                                Icons.lock_outline_rounded,
+                                size: 16,
+                                color: isDark
+                                    ? const Color(0xFF888888)
+                                    : AppTheme.textMuted,
+                              ),
+                              const SizedBox(width: 10),
+                              Expanded(
+                                child: Text(
+                                  "Enter your API key and tap 'Check Connection' to load available models",
+                                  style: TextStyle(
+                                    fontFamily: AppTheme.fontUI,
+                                    fontSize: 12,
+                                    color: isDark
+                                        ? const Color(0xFF888888)
+                                        : AppTheme.textMuted,
+                                  ),
+                                ),
+                              ),
+                            ],
+                          ),
                         ),
-                        items: _availableModels
-                            .map((m) => DropdownMenuItem(
-                                  value: m,
-                                  child: Text(m),
-                                ))
-                            .toList(),
-                        onChanged: (val) {
-                          if (val != null) {
-                            setState(() => _selectedModel = val);
-                          }
-                        },
-                      ),
+                      ] else ...[
+                        Container(
+                          decoration: BoxDecoration(
+                            color: isDark
+                                ? const Color(0xFF202020)
+                                : const Color(0xFFF5F2EB),
+                            borderRadius: BorderRadius.circular(12),
+                            border: Border.all(
+                              color: _modelMenuOpen
+                                  ? (isDark
+                                      ? const Color(0xFF2DD4BF)
+                                      : const Color(0xFF2D6A4F))
+                                  : borderColor,
+                              width: _modelMenuOpen ? 1.5 : 1.0,
+                            ),
+                          ),
+                          child: Column(
+                            children: [
+                              InkWell(
+                                onTap: () {
+                                  setState(() {
+                                    _modelMenuOpen = !_modelMenuOpen;
+                                    _providerMenuOpen = false;
+                                  });
+                                },
+                                borderRadius: BorderRadius.circular(12),
+                                child: Padding(
+                                  padding: const EdgeInsets.symmetric(
+                                      horizontal: 14, vertical: 12),
+                                  child: Row(
+                                    children: [
+                                      Expanded(
+                                        child: Text(
+                                          _selectedModel ?? 'Select a model',
+                                          style: TextStyle(
+                                            fontFamily: AppTheme.fontUI,
+                                            fontSize: 14,
+                                            fontWeight: FontWeight.w600,
+                                            color: isDark
+                                                ? const Color(0xFFF3F3F3)
+                                                : AppTheme.textPrimary,
+                                          ),
+                                        ),
+                                      ),
+                                      Icon(
+                                        _modelMenuOpen
+                                            ? Icons.keyboard_arrow_up_rounded
+                                            : Icons.keyboard_arrow_down_rounded,
+                                        color: isDark
+                                            ? const Color(0xFF888888)
+                                            : AppTheme.textMuted,
+                                      ),
+                                    ],
+                                  ),
+                                ),
+                              ),
+                              if (_modelMenuOpen) ...[
+                                Divider(
+                                  height: 1,
+                                  thickness: 1,
+                                  color: borderColor,
+                                ),
+                                ConstrainedBox(
+                                  constraints:
+                                      const BoxConstraints(maxHeight: 220),
+                                  child: ListView.separated(
+                                    shrinkWrap: true,
+                                    padding: const EdgeInsets.symmetric(
+                                        vertical: 4),
+                                    itemCount: _models.length,
+                                    separatorBuilder: (_, __) => Divider(
+                                      height: 1,
+                                      thickness: 0.5,
+                                      color: isDark
+                                          ? const Color(0xFF272727)
+                                          : const Color(0xFFECE7DE),
+                                    ),
+                                    itemBuilder: (ctx, idx) {
+                                      final m = _models[idx];
+                                      final selected = m.id == _selectedModel;
+                                      return ListTile(
+                                        dense: true,
+                                        contentPadding:
+                                            const EdgeInsets.symmetric(
+                                                horizontal: 14, vertical: 2),
+                                        title: Text(
+                                          m.name,
+                                          style: TextStyle(
+                                            fontFamily: AppTheme.fontUI,
+                                            fontSize: 13,
+                                            fontWeight: selected
+                                                ? FontWeight.w700
+                                                : FontWeight.w500,
+                                            color: selected
+                                                ? (isDark
+                                                    ? const Color(0xFF2DD4BF)
+                                                    : const Color(0xFF2D6A4F))
+                                                : (isDark
+                                                    ? Colors.white
+                                                    : AppTheme.ink),
+                                          ),
+                                        ),
+                                        subtitle: Text(
+                                          m.id,
+                                          style: TextStyle(
+                                            fontFamily: AppTheme.fontUI,
+                                            fontSize: 11,
+                                            color: isDark
+                                                ? const Color(0xFF888888)
+                                                : AppTheme.textMuted,
+                                          ),
+                                        ),
+                                        trailing: selected
+                                          ? Icon(
+                                              Icons.check_rounded,
+                                              size: 16,
+                                              color: isDark
+                                                  ? const Color(0xFF2DD4BF)
+                                                  : const Color(0xFF2D6A4F),
+                                            )
+                                          : null,
+                                        onTap: () {
+                                          setState(() {
+                                            _selectedModel = m.id;
+                                            _modelMenuOpen = false;
+                                          });
+                                        },
+                                      );
+                                    },
+                                  ),
+                                ),
+                              ],
+                            ],
+                          ),
+                        ),
+                      ],
                       const SizedBox(height: 16),
 
                       // Test feedback banner
@@ -631,14 +930,12 @@ class _BYOKSettingsSheetState extends State<BYOKSettingsSheet> {
                         children: [
                           Expanded(
                             child: OutlinedButton(
-                              onPressed: _testing ? null : _testConnection,
+                              onPressed: _testing ? null : _testConnectionAndFetchLiveModels,
                               style: OutlinedButton.styleFrom(
                                 padding:
                                     const EdgeInsets.symmetric(vertical: 14),
                                 side: BorderSide(
-                                  color: isDark
-                                      ? const Color(0xFF333333)
-                                      : AppTheme.border,
+                                  color: borderColor,
                                 ),
                                 shape: RoundedRectangleBorder(
                                   borderRadius: BorderRadius.circular(12),

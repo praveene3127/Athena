@@ -1338,6 +1338,11 @@ class ApiClient {
     String? baseUrl,
   }) async {
     final pKey = provider.toLowerCase();
+    final cleanKey = (apiKey ?? '').trim();
+
+    if (pKey != 'custom' && (cleanKey.isEmpty || cleanKey.contains('...'))) {
+      return const [];
+    }
 
     // 1. Try companion backend
     if (AppConfig.apiBaseUrl.isNotEmpty) {
@@ -1346,12 +1351,12 @@ class ApiClient {
           '/api/settings/fetch-models',
           data: {
             'provider': provider,
-            if (apiKey != null) 'api_key': apiKey,
+            if (cleanKey.isNotEmpty) 'api_key': cleanKey,
             if (baseUrl != null) 'base_url': baseUrl,
           },
           options: Options(
-            sendTimeout: const Duration(seconds: 3),
-            receiveTimeout: const Duration(seconds: 4),
+            sendTimeout: const Duration(seconds: 4),
+            receiveTimeout: const Duration(seconds: 6),
           ),
         );
         final rawList =
@@ -1367,14 +1372,6 @@ class ApiClient {
 
     // 2. Direct on-device models discovery for Gemini
     if (pKey == 'gemini') {
-      final cleanKey = (apiKey ?? '').trim();
-      final List<AIModelOption> defaultGemini = const [
-        AIModelOption(id: 'gemini-2.5-flash', name: 'Gemini 2.5 Flash'),
-        AIModelOption(id: 'gemini-2.5-pro', name: 'Gemini 2.5 Pro'),
-        AIModelOption(id: 'gemini-2.0-flash', name: 'Gemini 2.0 Flash'),
-      ];
-      if (cleanKey.isEmpty) return defaultGemini;
-
       try {
         final client = Dio(BaseOptions(
           connectTimeout: const Duration(seconds: 5),
@@ -1412,13 +1409,13 @@ class ApiClient {
           if (models.isNotEmpty) return models;
         }
       } catch (_) {}
-      return defaultGemini;
+      return const [];
     }
 
     // 3. Direct on-device models discovery for other providers
     final res = await directTestProvider(
       provider: provider,
-      apiKey: apiKey,
+      apiKey: cleanKey,
       baseUrl: baseUrl,
     );
     final rawList = res['models'] as List? ?? [];
@@ -1432,26 +1429,6 @@ class ApiClient {
         }
         return AIModelOption(id: m.toString(), name: m.toString());
       }).toList();
-    }
-
-    if (pKey == 'groq') {
-      return const [
-        AIModelOption(
-            id: 'llama-3.3-70b-versatile', name: 'Llama 3.3 70B Versatile'),
-        AIModelOption(id: 'llama-3.1-8b-instant', name: 'Llama 3.1 8B Instant'),
-      ];
-    } else if (pKey == 'openai') {
-      return const [
-        AIModelOption(id: 'gpt-4o-mini', name: 'GPT-4o Mini'),
-        AIModelOption(id: 'gpt-4o', name: 'GPT-4o'),
-      ];
-    } else if (pKey == 'anthropic') {
-      return const [
-        AIModelOption(
-            id: 'claude-3-5-haiku-20241022', name: 'Claude 3.5 Haiku'),
-        AIModelOption(
-            id: 'claude-3-5-sonnet-20241022', name: 'Claude 3.5 Sonnet'),
-      ];
     }
 
     return const [];
@@ -1506,11 +1483,7 @@ class ApiClient {
         );
         sw.stop();
         if (genResp.statusCode == 200) {
-          List<Map<String, dynamic>> models = [
-            {'id': 'gemini-2.5-flash', 'name': 'Gemini 2.5 Flash'},
-            {'id': 'gemini-2.5-pro', 'name': 'Gemini 2.5 Pro'},
-            {'id': 'gemini-2.0-flash', 'name': 'Gemini 2.0 Flash'},
-          ];
+          List<Map<String, dynamic>> models = [];
           try {
             final modelsUrl =
                 'https://generativelanguage.googleapis.com/v1beta/models?key=$cleanKey';
@@ -1581,16 +1554,40 @@ class ApiClient {
         );
         sw.stop();
         if (resp.statusCode == 200) {
+          final List<Map<String, dynamic>> models = [];
+          try {
+            final mResp = await client.get(
+              'https://api.anthropic.com/v1/models',
+              options: Options(
+                headers: {
+                  'x-api-key': cleanKey,
+                  'anthropic-version': '2023-06-01',
+                  'Accept': 'application/json',
+                },
+              ),
+            );
+            if (mResp.statusCode == 200 && mResp.data is Map) {
+              final rawModels = (mResp.data as Map)['data'] as List? ?? [];
+              for (final item in rawModels) {
+                if (item is! Map) continue;
+                final mid = item['id']?.toString() ?? '';
+                if (mid.isNotEmpty) {
+                  models.add({
+                    'id': mid,
+                    'name': item['display_name'] ?? mid,
+                  });
+                }
+              }
+            }
+          } catch (_) {}
+
           return {
             'ok': true,
             'valid': true,
             'status': 'success',
             'latency_ms': sw.elapsedMilliseconds,
             'message': 'Connected to Anthropic Claude!',
-            'models': [
-              {'id': 'claude-3-5-haiku-20241022', 'name': 'Claude 3.5 Haiku'},
-              {'id': 'claude-3-5-sonnet-20241022', 'name': 'Claude 3.5 Sonnet'},
-            ],
+            'models': models,
           };
         }
       } else {

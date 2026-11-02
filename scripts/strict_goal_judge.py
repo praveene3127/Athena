@@ -138,6 +138,20 @@ def gate_1_monorepo_audit():
         fail_gate(1, "Monorepo Structure Audit", f"AGENTS.md is too short ({agents_lines} lines < 50).")
     print(f"  + AGENTS.md verified ({agents_lines} lines >= 50).")
 
+    # 4. Law 5 Verification: Zero Static AI Models in BYOK Settings UI
+    byok_sheet_path = os.path.join(APP_DIR, "lib", "features", "settings", "widgets", "byok_settings_sheet.dart")
+    if os.path.isfile(byok_sheet_path):
+        with open(byok_sheet_path, "r", encoding="utf-8", errors="ignore") as f:
+            sheet_content = f.read()
+        prohibited_static_models = [
+            "gemini-2.5-flash", "gemini-2.5-pro", "gemini-2.0-flash",
+            "gpt-4o", "claude-3-5", "llama-3.3"
+        ]
+        for m in prohibited_static_models:
+            if f"'{m}'" in sheet_content or f'"{m}"' in sheet_content:
+                fail_gate(1, "Zero Static AI Models Audit", f"Prohibited static model ID '{m}' found in byok_settings_sheet.dart. Models must be discovered live via API.")
+    print("  + Law 5 verified: Zero hardcoded static model arrays in byok_settings_sheet.dart.")
+
     pass_gate(1, "Monorepo Structure & Root Cleanliness Audit")
 
 
