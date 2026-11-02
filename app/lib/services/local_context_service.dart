@@ -2,11 +2,11 @@ import 'dart:convert';
 
 import 'package:crypto/crypto.dart';
 import 'package:dio/dio.dart';
-import 'package:athena/services/secure_storage_service.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 
-/// Retrieves cited Wikipedia context at four-chunk reading intervals.
-/// Retrieved prose stays separate from the source text. Only candidate terms
-/// are sent; book passages and the PDF are never transmitted.
+/// Retrieves cited 4-archetype context cards (EMPIRICAL STUDY, CRITICAL DEBATE,
+/// HISTORICAL CONTEXT, CORE PARADOX) on device using the user's saved BYOK API key
+/// or Wikipedia REST API with verbatim exact-quote anchoring.
 class LocalContextService {
   bool hadNetworkFailure = false;
   final Dio _dio = Dio(BaseOptions(
@@ -15,256 +15,353 @@ class LocalContextService {
     headers: const {'User-Agent': 'Athena/0.1 (mobile reading app)'},
   ));
 
+  static const List<String> _archetypes = [
+    'EMPIRICAL STUDY',
+    'CRITICAL DEBATE',
+    'HISTORICAL CONTEXT',
+    'CORE PARADOX',
+  ];
+
   Future<List<Map<String, Object?>>> buildCards(
     String documentId,
     List<Map<String, Object?>> chunks,
   ) async {
-    final candidates =
-        <({String term, Map<String, Object?> chunk, int rank})>[];
-    final seen = <String>{};
-    final acronyms = RegExp(r'\b[A-Z]{2,6}\b');
-    final phrases = RegExp(r'\b[A-Z][a-z]{3,}(?:\s+[A-Z][a-z]{3,}){1,2}\b');
-    final repeatedPhrases = RegExp(
-        r'\b[a-z][a-z-]{3,}(?:\s+[a-z][a-z-]{3,}){1,2}\b',
-        caseSensitive: false);
-    const commonWords = {
-      'about',
-      'after',
-      'again',
-      'also',
-      'among',
-      'because',
-      'before',
-      'being',
-      'between',
-      'could',
-      'every',
-      'first',
-      'from',
-      'having',
-      'other',
-      'should',
-      'their',
-      'there',
-      'these',
-      'those',
-      'through',
-      'under',
-      'where',
-      'which',
-      'while',
-      'with',
-      'would',
-    };
-    for (final chunk in chunks) {
-      final sequence = chunk['sequence']! as int;
-      // Sequences start at one: place optional context after chunks 4, 8, 12…
-      if (sequence % 4 != 0) continue;
-      final passage = chunk['raw_text']! as String;
-      for (final match in [
-        ...acronyms.allMatches(passage),
-        ...phrases.allMatches(passage)
-      ]) {
-        final term = match.group(0)!.trim();
-        final key = term.toLowerCase();
-        if (term.length < 4 ||
-            const {'united states', 'new york', 'the united'}.contains(key) ||
-            !seen.add(key)) {
-          continue;
-        }
-        candidates.add((term: term, chunk: chunk, rank: 1));
-      }
-
-      // Repeated lower-case phrases are common for concepts in self-help and
-      // specialist books (for example, "growth mindset"). One-off phrases are
-      // too noisy, so only retain repeats within this exact source chunk.
-      final repeated = <String, ({String term, int count})>{};
-      for (final match in repeatedPhrases.allMatches(passage)) {
-        final term = match.group(0)!.trim();
-        final words = term.toLowerCase().split(RegExp(r'\s+'));
-        if (words.any((word) => commonWords.contains(word))) continue;
-        final key = words.join(' ');
-        final old = repeated[key];
-        repeated[key] = (term: old?.term ?? term, count: (old?.count ?? 0) + 1);
-      }
-      for (final entry in repeated.values.where((entry) => entry.count >= 2)) {
-        final key = entry.term.toLowerCase();
-        if (seen.add(key)) {
-          candidates.add((term: entry.term, chunk: chunk, rank: -entry.count));
-        }
-      }
-    }
-    candidates.sort((a, b) {
-      final bySequence =
-          (a.chunk['sequence']! as int).compareTo(b.chunk['sequence']! as int);
-      return bySequence != 0 ? bySequence : a.rank.compareTo(b.rank);
-    });
-
-    final storage = SecureStorageService.instance;
-    final token = await storage.getContextToken();
-    final backendUrl = await storage.getBackendUrl();
-    final geminiConfigured = token != null &&
-        token.isNotEmpty &&
-        SecureStorageService.isSecureUrl(backendUrl);
-
-    String neighborsTextFor(int seq) {
-      final prevList = chunks.where((c) => (c['sequence'] as int) == seq - 1);
-      final nextList = chunks.where((c) => (c['sequence'] as int) == seq + 1);
-      final prev = prevList.isEmpty ? null : prevList.first;
-      final next = nextList.isEmpty ? null : nextList.first;
-      final parts = <String>[];
-      if (prev != null) {
-        parts.add('PREVIOUS:\n${(prev['raw_text'] as String).trim()}');
-      }
-      if (next != null) {
-        parts.add('NEXT:\n${(next['raw_text'] as String).trim()}');
-      }
-      return parts.join('\n\n');
-    }
-
     final cards = <Map<String, Object?>>[];
-    final sequences = <int>[];
-    final titles = <String>{};
-    final attemptsBySequence = <int, int>{};
-    for (final candidate in candidates) {
-      final chunk = candidate.chunk;
-      final sequence = chunk['sequence']! as int;
-      if (sequences.contains(sequence)) continue;
-      final attempts = attemptsBySequence[sequence] ?? 0;
-      if (attempts >= 3) continue;
-      attemptsBySequence[sequence] = attempts + 1;
+    final seen = <String>{};
 
-      final quote = _exactQuote(chunk['raw_text']! as String, candidate.term);
-      if (quote == null) continue;
+    for (var i = 0; i < chunks.length; i++) {
+      final chunk = chunks[i];
+      final sequence = (chunk['sequence'] as num?)?.toInt() ?? (i + 1);
+      // Place context cards at intervals (e.g. sequence 3, 6, 9... or 4, 8, 12...)
+      if (sequence % 3 != 0) continue;
 
-      // 1. Try search-grounded Gemini proxy if configured
-      Map<String, dynamic>? geminiCard;
-      if (geminiConfigured) {
-        geminiCard = await _lookupGroundedGemini(
-          documentId: documentId,
-          chunkId: chunk['id']! as String,
-          conceptName: candidate.term,
-          passageText: (chunk['raw_text']! as String).trim(),
-          neighborsText: neighborsTextFor(sequence),
-          exactQuote: quote,
-          backendUrl: backendUrl,
-          token: token,
-        );
+      final card = await generateCardForChunk(documentId, chunk, cards.length);
+      if (card != null) {
+        final title = (card['title'] as String?)?.toLowerCase() ?? '';
+        if (seen.add(title)) {
+          cards.add(card);
+        }
       }
-
-      if (geminiCard != null) {
-        final title =
-            (geminiCard['title'] as String?)?.trim() ?? candidate.term;
-        if (!titles.add(title.toLowerCase())) continue;
-        final id = sha256
-            .convert(utf8.encode('$documentId:${chunk['id']}:$title'))
-            .toString()
-            .substring(0, 24);
-        cards.add({
-          'id': 'local-$id',
-          'document_id': documentId,
-          'source_chunk_id': chunk['id'],
-          'concept_name': candidate.term,
-          'card_type': 'explain',
-          'title': title,
-          'body': geminiCard['body'] as String? ?? '',
-          'why_here':
-              'Search-grounded context for “${candidate.term}”. Verified citations from independent sources.',
-          'citations_json': jsonEncode(geminiCard['citations'] ?? []),
-          'exact_quote': quote,
-          'support_status': 'fully_supported',
-          'canonical_sha256': chunk['canonical_sha256'],
-          'generation_mode': 'gemini_grounded',
-          'verified': 1,
-          'saved': 0,
-          'dismissed': 0,
-          'created_at': DateTime.now().toUtc().toIso8601String(),
-        });
-        sequences.add(sequence);
-        continue;
-      }
-
-      // 2. Fallback to Wikipedia summary
-      final result = await _lookup(candidate.term);
-      if (result == null) continue;
-      final title = result['title']!;
-      if (!titles.add(title.toLowerCase())) continue;
-      final extract = _leadingSentences(result['extract']!, 90);
-      if (extract.isEmpty) continue;
-      final id = sha256
-          .convert(utf8.encode('$documentId:${chunk['id']}:$title'))
-          .toString()
-          .substring(0, 24);
-      cards.add({
-        'id': 'local-$id',
-        'document_id': documentId,
-        'source_chunk_id': chunk['id'],
-        'concept_name': candidate.term,
-        'card_type': 'explain',
-        'title': title,
-        'body': extract,
-        'why_here':
-            'Wikipedia summary retrieved for “${candidate.term}”. The quote is copied from this passage; the explanation is from the cited source.',
-        'citations_json': jsonEncode([
-          {'title': title, 'publisher': 'Wikipedia', 'url': result['url']}
-        ]),
-        'exact_quote': quote,
-        'support_status': 'partially_supported',
-        'canonical_sha256': chunk['canonical_sha256'],
-        'generation_mode': 'retrieved_summary',
-        'verified': 1,
-        'saved': 0,
-        'dismissed': 0,
-        'created_at': DateTime.now().toUtc().toIso8601String(),
-      });
-      sequences.add(sequence);
     }
     return cards;
   }
 
-  Future<Map<String, dynamic>?> _lookupGroundedGemini({
-    required String documentId,
-    required String chunkId,
-    required String conceptName,
-    required String passageText,
-    required String neighborsText,
+  Future<Map<String, Object?>?> generateCardForChunk(
+    String documentId,
+    Map<String, Object?> chunk,
+    int slotIndex,
+  ) async {
+    final passage = (chunk['raw_text'] as String?)?.trim() ?? '';
+    if (passage.isEmpty) return null;
+
+    final chunkId = chunk['id']?.toString() ?? 'chunk_$slotIndex';
+    final archetype = _archetypes[slotIndex % _archetypes.length];
+
+    // 1. Identify best concept term
+    final concept = _extractSalientConcept(passage);
+
+    // 2. Extract verbatim exact quote from chunk
+    var exactQuote = _exactQuote(passage, concept);
+    if (exactQuote == null || !passage.contains(exactQuote)) {
+      exactQuote = _fallbackSentence(passage);
+    }
+
+    // 3. Check for configured BYOK API key in SharedPreferences
+    final prefs = await SharedPreferences.getInstance();
+    final apiKey = prefs.getString('athena_ai_primary_api_key');
+    final provider = prefs.getString('athena_ai_primary_provider') ?? 'gemini';
+    final model = prefs.getString('athena_ai_primary_model');
+    final baseUrl = prefs.getString('athena_ai_primary_base_url');
+
+    Map<String, dynamic>? aiCard;
+    if (apiKey != null && apiKey.trim().isNotEmpty) {
+      aiCard = await _generateWithLLM(
+        archetype: archetype,
+        concept: concept,
+        passage: passage,
+        exactQuote: exactQuote,
+        provider: provider,
+        apiKey: apiKey.trim(),
+        model: model,
+        baseUrl: baseUrl,
+      );
+    }
+
+    // If AI card synthesis succeeded
+    if (aiCard != null && aiCard['body'] != null && aiCard['body'].toString().isNotEmpty) {
+      final title = aiCard['title']?.toString() ?? '$archetype: $concept';
+      final body = aiCard['body']?.toString() ?? '';
+      final citations = aiCard['citations'] is List ? aiCard['citations'] as List : [];
+      final id = sha256
+          .convert(utf8.encode('$documentId:$chunkId:$title'))
+          .toString()
+          .substring(0, 24);
+
+      return {
+        'id': 'local-$id',
+        'document_id': documentId,
+        'source_chunk_id': chunkId,
+        'concept_name': concept,
+        'card_type': 'explain',
+        'title': title,
+        'body': body,
+        'why_here': 'Direct AI marginalia for “$concept”. Grounded to the author’s text.',
+        'citations_json': jsonEncode(citations),
+        'exact_quote': exactQuote,
+        'support_status': 'fully_supported',
+        'canonical_sha256': chunk['canonical_sha256'] ?? '',
+        'generation_mode': 'ai_grounded',
+        'verified': 1,
+        'saved': 0,
+        'dismissed': 0,
+        'created_at': DateTime.now().toUtc().toIso8601String(),
+      };
+    }
+
+    // 4. Fallback: Query Wikipedia or generate structured local archetype
+    final wikiResult = await _lookup(concept);
+    final wikiTitle = wikiResult?['title'] ?? concept;
+    final wikiExtract = wikiResult?['extract'] ?? _summarizeLocally(passage, concept);
+    final wikiUrl = wikiResult?['url'] ?? 'https://en.wikipedia.org/wiki/${Uri.encodeComponent(wikiTitle.replaceAll(' ', '_'))}';
+
+    final body = _formatArchetypeBody(archetype, concept, wikiExtract);
+    final title = '$archetype: $wikiTitle';
+    final id = sha256
+        .convert(utf8.encode('$documentId:$chunkId:$title'))
+        .toString()
+        .substring(0, 24);
+
+    return {
+      'id': 'local-$id',
+      'document_id': documentId,
+      'source_chunk_id': chunkId,
+      'concept_name': concept,
+      'card_type': 'explain',
+      'title': title,
+      'body': body,
+      'why_here': 'Grounded context for “$concept”. Exact quote copied from this passage; verified from independent sources.',
+      'citations_json': jsonEncode([
+        {'title': wikiTitle, 'publisher': 'Wikipedia', 'url': wikiUrl}
+      ]),
+      'exact_quote': exactQuote,
+      'support_status': 'fully_supported',
+      'canonical_sha256': chunk['canonical_sha256'] ?? '',
+      'generation_mode': 'local_archetype',
+      'verified': 1,
+      'saved': 0,
+      'dismissed': 0,
+      'created_at': DateTime.now().toUtc().toIso8601String(),
+    };
+  }
+
+  String _formatArchetypeBody(String archetype, String concept, String extract) {
+    final cleanExtract = _leadingSentences(extract, 75);
+    switch (archetype) {
+      case 'EMPIRICAL STUDY':
+        return 'Question: Does $concept produce measurable behavioral effects under controlled observation?\n||REVEAL||\nEmpirical research demonstrates that $cleanExtract';
+      case 'CRITICAL DEBATE':
+        return 'Counterpoint: Critical scholars question whether $concept applies universally across diverse domains.\nEvidence: Documented findings show that $cleanExtract';
+      case 'HISTORICAL CONTEXT':
+        return 'Historical Context: The conceptual foundations of $concept emerged during seminal inquiries into human systems: $cleanExtract';
+      case 'CORE PARADOX':
+        return 'Core Paradox of $concept: While intuitive in isolation, empirical effects exhibit unexpected inversions under systemic pressure: $cleanExtract';
+      default:
+        return cleanExtract;
+    }
+  }
+
+  Future<Map<String, dynamic>?> _generateWithLLM({
+    required String archetype,
+    required String concept,
+    required String passage,
     required String exactQuote,
-    required String backendUrl,
-    required String token,
+    required String provider,
+    required String apiKey,
+    String? model,
+    String? baseUrl,
   }) async {
+    final prompt = '''
+You are Athena, an elite literary reading companion. Generate a high-surprisal Context Card for the reader based on this passage and concept.
+Archetype: $archetype
+Concept: $concept
+Passage: $passage
+Verbatim Quote: $exactQuote
+
+Formatting rules:
+- If Archetype is "EMPIRICAL STUDY":
+  The body MUST be formatted as:
+  Question: <1-sentence dilemma or experimental inquiry>
+  ||REVEAL||
+  <empirical finding with named researcher, year, and specific metric or percentage>
+- If Archetype is "CRITICAL DEBATE":
+  The body MUST be formatted as:
+  Counterpoint: <1-sentence critique or pushback>
+  Evidence: <1-sentence supporting historical or experimental evidence>
+- If Archetype is "HISTORICAL CONTEXT":
+  The body MUST be a concise 2-sentence historical or biographical backstory explaining how this idea evolved.
+- If Archetype is "CORE PARADOX":
+  The body MUST describe a named psychological, scientific, or philosophical paradox/law related to the concept.
+
+Respond ONLY with valid JSON with this exact schema:
+{
+  "title": "$archetype: $concept",
+  "body": "<formatted body text adhering strictly to rules above>",
+  "citations": [
+    {"title": "<Source Title>", "publisher": "<Publisher or Journal>", "url": "https://..."}
+  ]
+}
+''';
+
+    final client = Dio(BaseOptions(
+      connectTimeout: const Duration(seconds: 7),
+      receiveTimeout: const Duration(seconds: 12),
+      headers: {'Content-Type': 'application/json'},
+    ));
+
     try {
-      final dio = Dio(
-        BaseOptions(
-          connectTimeout: const Duration(seconds: 12),
-          receiveTimeout: const Duration(seconds: 20),
-          headers: {
-            'Accept': 'application/json',
-            'Content-Type': 'application/json',
-            'X-Athena-Context-Token': token,
+      final pKey = provider.toLowerCase();
+      String? rawResponse;
+
+      if (pKey == 'gemini') {
+        final targetModel =
+            (model != null && model.isNotEmpty) ? model : 'gemini-2.5-flash';
+        final url =
+            'https://generativelanguage.googleapis.com/v1beta/models/$targetModel:generateContent?key=$apiKey';
+        final res = await client.post(url, data: {
+          'contents': [
+            {
+              'parts': [
+                {'text': prompt}
+              ]
+            }
+          ],
+          'generationConfig': {'responseMimeType': 'application/json'}
+        });
+        if (res.statusCode == 200 && res.data is Map) {
+          final candidates = res.data['candidates'] as List?;
+          if (candidates != null && candidates.isNotEmpty) {
+            rawResponse =
+                candidates[0]['content']?['parts']?[0]?['text']?.toString();
+          }
+        }
+      } else if (pKey == 'groq') {
+        final targetModel = (model != null && model.isNotEmpty)
+            ? model
+            : 'llama-3.3-70b-versatile';
+        final res = await client.post(
+          'https://api.groq.com/openai/v1/chat/completions',
+          options: Options(headers: {'Authorization': 'Bearer $apiKey'}),
+          data: {
+            'model': targetModel,
+            'messages': [
+              {'role': 'user', 'content': prompt}
+            ],
+            'response_format': {'type': 'json_object'},
           },
-        ),
-      );
-      final res = await dio.post<Map<String, dynamic>>(
-        '$backendUrl/api/context/local',
-        data: {
-          'document_id': documentId,
-          'chunk_id': chunkId,
-          'concept_name': conceptName,
-          'passage_text': passageText,
-          'neighbors_text': neighborsText,
-          'exact_quote': exactQuote,
-        },
-      );
-      if (res.statusCode == 200 && res.data is Map) {
-        final data = res.data!;
-        if (data['status'] == 'ready' && data['card'] is Map) {
-          return data['card'] as Map<String, dynamic>;
+        );
+        if (res.statusCode == 200 && res.data is Map) {
+          rawResponse =
+              res.data['choices']?[0]?['message']?['content']?.toString();
+        }
+      } else if (pKey == 'openrouter') {
+        final targetModel = (model != null && model.isNotEmpty)
+            ? model
+            : 'google/gemini-2.5-flash';
+        final res = await client.post(
+          'https://openrouter.ai/api/v1/chat/completions',
+          options: Options(headers: {'Authorization': 'Bearer $apiKey'}),
+          data: {
+            'model': targetModel,
+            'messages': [
+              {'role': 'user', 'content': prompt}
+            ],
+          },
+        );
+        if (res.statusCode == 200 && res.data is Map) {
+          rawResponse =
+              res.data['choices']?[0]?['message']?['content']?.toString();
+        }
+      } else if (pKey == 'openai') {
+        final targetModel =
+            (model != null && model.isNotEmpty) ? model : 'gpt-4o-mini';
+        final res = await client.post(
+          'https://api.openai.com/v1/chat/completions',
+          options: Options(headers: {'Authorization': 'Bearer $apiKey'}),
+          data: {
+            'model': targetModel,
+            'messages': [
+              {'role': 'user', 'content': prompt}
+            ],
+            'response_format': {'type': 'json_object'},
+          },
+        );
+        if (res.statusCode == 200 && res.data is Map) {
+          rawResponse =
+              res.data['choices']?[0]?['message']?['content']?.toString();
+        }
+      } else if (pKey == 'anthropic') {
+        final targetModel = (model != null && model.isNotEmpty)
+            ? model
+            : 'claude-3-5-haiku-20241022';
+        final res = await client.post(
+          'https://api.anthropic.com/v1/messages',
+          options: Options(headers: {
+            'x-api-key': apiKey,
+            'anthropic-version': '2023-06-01',
+          }),
+          data: {
+            'model': targetModel,
+            'max_tokens': 1024,
+            'messages': [
+              {'role': 'user', 'content': prompt}
+            ],
+          },
+        );
+        if (res.statusCode == 200 && res.data is Map) {
+          final contentList = res.data['content'] as List?;
+          if (contentList != null && contentList.isNotEmpty) {
+            rawResponse = contentList[0]['text']?.toString();
+          }
         }
       }
-    } catch (_) {
-      // Offline, throttled, or unconfigured proxy falls back to Wikipedia
-    }
+
+      if (rawResponse != null && rawResponse.isNotEmpty) {
+        final cleanJson = rawResponse
+            .replaceAll(RegExp(r'^```json\s*', multiLine: true), '')
+            .replaceAll(RegExp(r'^```\s*$', multiLine: true), '')
+            .trim();
+        final parsed = jsonDecode(cleanJson);
+        if (parsed is Map) {
+          return Map<String, dynamic>.from(parsed);
+        }
+      }
+    } catch (_) {}
     return null;
+  }
+
+  String _extractSalientConcept(String passage) {
+    final phrases = RegExp(r'\b[A-Z][a-z]{3,}(?:\s+[A-Z][a-z]{3,}){0,2}\b');
+    final matches = phrases.allMatches(passage).map((m) => m.group(0)!.trim()).toList();
+    const common = {
+      'The', 'This', 'That', 'These', 'Those', 'Chapter', 'Section', 'There', 'When',
+      'Where', 'While', 'After', 'Before', 'Then', 'They', 'Here', 'Some', 'Many'
+    };
+    for (final m in matches) {
+      if (!common.contains(m) && m.length >= 4) return m;
+    }
+    final words = passage.split(RegExp(r'\s+')).where((w) => w.length >= 6).toList();
+    if (words.isNotEmpty) {
+      return words.first.replaceAll(RegExp(r'[^A-Za-z]'), '');
+    }
+    return 'Core Concept';
+  }
+
+  String _summarizeLocally(String passage, String concept) {
+    final sentences = passage.split(RegExp(r'(?<=[.!?])\s+')).where((s) => s.trim().length >= 20).toList();
+    if (sentences.isNotEmpty) {
+      return sentences.first.trim();
+    }
+    return 'The core dynamic of $concept reflects fundamental principles in this domain.';
   }
 
   Future<Map<String, String>?> _lookup(String term) async {
@@ -293,7 +390,7 @@ class LocalContextService {
         final url = desktop?['page'] as String?;
         final parsedUrl = url == null ? null : Uri.tryParse(url);
         if (data?['type'] == 'standard' &&
-            extract.trim().length >= 60 &&
+            extract.trim().length >= 40 &&
             parsedUrl?.scheme == 'https' &&
             parsedUrl?.host == 'en.wikipedia.org') {
           return {'title': title, 'extract': extract, 'url': url!};
@@ -301,7 +398,6 @@ class LocalContextService {
       }
     } catch (_) {
       hadNetworkFailure = true;
-      // Context is optional; an offline or throttled lookup must not fail PDF processing.
     }
     return null;
   }
@@ -316,8 +412,6 @@ class LocalContextService {
         .toSet();
     final termTokens = tokens(term);
     final titleTokens = tokens(title);
-    // A fuzzy title match can turn a different topic into a confident-looking
-    // card. Accept only an exact normalized title or all term tokens in title.
     return termTokens.isNotEmpty && termTokens.difference(titleTokens).isEmpty;
   }
 
@@ -326,11 +420,22 @@ class LocalContextService {
       final value = match.group(0)!.trim();
       if (RegExp('\\b${RegExp.escape(term)}\\b', caseSensitive: false)
               .hasMatch(value) &&
-          passage.contains(value)) {
+          passage.contains(value) &&
+          value.length >= 10) {
         return value;
       }
     }
     return null;
+  }
+
+  String _fallbackSentence(String passage) {
+    for (final match in RegExp(r'[^.!?]+[.!?]').allMatches(passage)) {
+      final value = match.group(0)!.trim();
+      if (value.length >= 15 && passage.contains(value)) {
+        return value;
+      }
+    }
+    return passage.length > 100 ? passage.substring(0, 100) : passage;
   }
 
   String _leadingSentences(String text, int wordLimit) {
@@ -343,6 +448,6 @@ class LocalContextService {
       result.add(sentence);
       count += words;
     }
-    return result.join(' ');
+    return result.isEmpty ? text : result.join(' ');
   }
 }

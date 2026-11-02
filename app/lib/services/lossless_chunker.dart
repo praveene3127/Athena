@@ -1,11 +1,76 @@
 import 'package:crypto/crypto.dart';
 import 'dart:convert';
 
+/// Normalizes spacing in extracted PDF/EPUB prose.
+/// Restores spaces after punctuation, quotes, splits camelCase/PascalCase,
+/// splits letter-digit boundaries, and collapses excessive whitespace.
+String sanitizeProseSpacing(String text) {
+  if (text.isEmpty) return text;
+  var result = text;
+
+  // 1. Space after punctuation if immediately followed by letter or quote:
+  // e.g. "candle.Headmaster" -> "candle. Headmaster", "Nolan,ahusky" -> "Nolan, ahusky"
+  result = result.replaceAllMapped(
+    RegExp(r'([.,!?;:])([A-Za-z“"‘\x27])'),
+    (m) => '${m[1]} ${m[2]}',
+  );
+
+  // 2. Space around paired ASCII quotes:
+  // e.g. 'said"Focus"and' -> 'said "Focus" and'
+  result = result.replaceAllMapped(
+    RegExp(r'([A-Za-z0-9])"([^"\n]+)"([A-Za-z0-9])'),
+    (m) => '${m[1]} "${m[2]}" ${m[3]}',
+  );
+
+  // 3. Space for curly quotes:
+  result = result.replaceAllMapped(
+    RegExp(r'([”’])([A-Za-z])'),
+    (m) => '${m[1]} ${m[2]}',
+  );
+  result = result.replaceAllMapped(
+    RegExp(r'([A-Za-z])([“‘])'),
+    (m) => '${m[1]} ${m[2]}',
+  );
+
+  // 4a. Split all-caps acronym/heading followed by capitalized word:
+  // e.g. "CONTENTSCover" -> "CONTENTS Cover", "PDFReader" -> "PDF Reader"
+  result = result.replaceAllMapped(
+    RegExp(r'([A-Z]{2,})([A-Z][a-z])'),
+    (m) => '${m[1]} ${m[2]}',
+  );
+
+  // 4b. Split camelCase / PascalCase fused tokens:
+  // e.g. "TitlePage" -> "Title Page", "ChapterOne" -> "Chapter One", "GaleNolan" -> "Gale Nolan"
+  result = result.replaceAllMapped(
+    RegExp(r'([a-z])([A-Z])'),
+    (m) => '${m[1]} ${m[2]}',
+  );
+
+  // 5. Split letter-digit and digit-letter boundaries (preserving 1st, 2nd, 3rd, 4th):
+  // e.g. "Chapter1" -> "Chapter 1", "1959the" -> "1959 the"
+  result = result.replaceAllMapped(
+    RegExp(r'([A-Za-z])(\d)'),
+    (m) => '${m[1]} ${m[2]}',
+  );
+  result = result.replaceAllMapped(
+    RegExp(r'(\d)(?!(?:st|nd|rd|th)\b)([A-Za-z])', caseSensitive: false),
+    (m) => '${m[1]} ${m[2]}',
+  );
+
+  // 6. Clean up horizontal spaces and line breaks
+  result = result.replaceAll(RegExp(r'[ \t]+'), ' ');
+  result = result.replaceAll(RegExp(r' *\n *'), '\n');
+  result = result.replaceAll(RegExp(r'\n{3,}'), '\n\n');
+
+  return result.trim();
+}
+
 /// Reproduces Athena's adaptive feed chunking rules on the device. Every
 /// returned range is a direct slice of canonicalText; no text is regenerated.
 class LosslessChunker {
   static const int _minWords = 25;
-  static const int _maxWords = 90;
+  static const int _maxWords = 75;
+  static const int _maxChars = 450;
 
   static final RegExp _continuationStart = RegExp(
     r'^(however|therefore|thus|moreover|furthermore|for example|for instance|as a result|in contrast|because|but|and|so|this|these|they|it)\b',
@@ -300,7 +365,9 @@ class LosslessChunker {
             index++;
             continue;
           }
-          final slices = _wordCount(body.text) > _maxWords
+          final isOversized =
+              body.text.length > _maxChars || _wordCount(body.text) > _maxWords;
+          final slices = isOversized
               ? _splitOversized(body.text)
               : [(0, body.text.length)];
           for (var part = 0; part < slices.length; part++) {
@@ -335,7 +402,9 @@ class LosslessChunker {
         continue;
       }
 
-      final slices = _wordCount(unit.text) > _maxWords
+      final isOversized =
+          unit.text.length > _maxChars || _wordCount(unit.text) > _maxWords;
+      final slices = isOversized
           ? _splitOversized(unit.text)
           : [(0, unit.text.length)];
       for (final slice in slices.indexed) {
@@ -360,44 +429,133 @@ class LosslessChunker {
   }
 
   List<(int, int)> _splitOversized(String text) {
-    final boundaries = _safeBoundaries(text);
-    if (boundaries.isEmpty) {
-      return _wordCount(text) > 200 ? _hardSplit(text) : [(0, text.length)];
+    if (text.length <= _maxChars && _wordCount(text) <= _maxWords) {
+      return [(0, text.length)];
     }
 
-    final pieces = <(int, int)>[];
-    var previous = 0;
-    for (final boundary in boundaries) {
-      pieces.add((previous, boundary));
-      previous = boundary;
-    }
-    if (previous < text.length) pieces.add((previous, text.length));
-
+    final pieces = _breakIntoSmallPieces(text);
     final packed = <(int, int)>[];
     var currentStart = 0;
     var currentEnd = 0;
-    for (final (partStart, partEnd) in pieces) {
-      final piece = text.substring(partStart, partEnd);
-      if (_wordCount(piece) > 200) {
-        if (currentEnd > currentStart) packed.add((currentStart, currentEnd));
-        for (final (start, end) in _hardSplit(piece)) {
-          packed.add((partStart + start, partStart + end));
-        }
-        currentStart = partEnd;
-        currentEnd = partEnd;
+
+    for (final piece in pieces) {
+      final pStart = piece.$1;
+      final pEnd = piece.$2;
+      if (currentEnd == currentStart) {
+        currentStart = pStart;
+        currentEnd = pEnd;
         continue;
       }
-      final currentWords = _wordCount(text.substring(currentStart, partEnd));
-      if (currentWords <= _maxWords) {
-        currentEnd = partEnd;
+      final candidateChars = pEnd - currentStart;
+      final candidateWords = _wordCount(text.substring(currentStart, pEnd));
+      if (candidateChars <= _maxChars && candidateWords <= _maxWords) {
+        currentEnd = pEnd;
       } else {
-        if (currentEnd > currentStart) packed.add((currentStart, currentEnd));
-        currentStart = partStart;
-        currentEnd = partEnd;
+        packed.add((currentStart, currentEnd));
+        currentStart = pStart;
+        currentEnd = pEnd;
       }
     }
-    if (currentEnd > currentStart) packed.add((currentStart, currentEnd));
+    if (currentEnd > currentStart) {
+      packed.add((currentStart, currentEnd));
+    }
     return packed.isEmpty ? [(0, text.length)] : packed;
+  }
+
+  List<(int, int)> _breakIntoSmallPieces(String text) {
+    final sentBoundaries = _safeBoundaries(text);
+    final sentenceSpans = <(int, int)>[];
+    var prev = 0;
+    for (final b in sentBoundaries) {
+      if (b > prev && b <= text.length) {
+        sentenceSpans.add((prev, b));
+        prev = b;
+      }
+    }
+    if (prev < text.length) {
+      sentenceSpans.add((prev, text.length));
+    }
+    if (sentenceSpans.isEmpty) {
+      sentenceSpans.add((0, text.length));
+    }
+
+    final clauseSpans = <(int, int)>[];
+    for (final span in sentenceSpans) {
+      final sStart = span.$1;
+      final sEnd = span.$2;
+      final sText = text.substring(sStart, sEnd);
+      if (sText.length <= _maxChars && _wordCount(sText) <= _maxWords) {
+        clauseSpans.add((sStart, sEnd));
+      } else {
+        final subSpans = _splitByClauses(sText);
+        for (final sub in subSpans) {
+          clauseSpans.add((sStart + sub.$1, sStart + sub.$2));
+        }
+      }
+    }
+
+    final finalPieces = <(int, int)>[];
+    for (final span in clauseSpans) {
+      final cStart = span.$1;
+      final cEnd = span.$2;
+      final cText = text.substring(cStart, cEnd);
+      if (cText.length <= _maxChars && _wordCount(cText) <= _maxWords) {
+        finalPieces.add((cStart, cEnd));
+      } else {
+        final subSpans = _splitByWordsOrChars(cText);
+        for (final sub in subSpans) {
+          finalPieces.add((cStart + sub.$1, cStart + sub.$2));
+        }
+      }
+    }
+
+    return finalPieces;
+  }
+
+  List<(int, int)> _splitByClauses(String text) {
+    final clausePattern = RegExp(r'([;:—–]|,\s+)');
+    final matches = clausePattern.allMatches(text).toList();
+    if (matches.isEmpty) return [(0, text.length)];
+
+    final result = <(int, int)>[];
+    var start = 0;
+    for (final m in matches) {
+      final end = m.end;
+      if (end > start) {
+        result.add((start, end));
+        start = end;
+      }
+    }
+    if (start < text.length) {
+      result.add((start, text.length));
+    }
+    return result;
+  }
+
+  List<(int, int)> _splitByWordsOrChars(String text) {
+    final result = <(int, int)>[];
+    var start = 0;
+    while (start < text.length) {
+      if (text.length - start <= _maxChars &&
+          _wordCount(text.substring(start)) <= _maxWords) {
+        result.add((start, text.length));
+        break;
+      }
+      var targetEnd = (start + _maxChars).clamp(start + 1, text.length);
+      var splitAt = -1;
+      for (var i = targetEnd; i > start + 30; i--) {
+        if (i < text.length && text[i - 1] == ' ') {
+          splitAt = i;
+          break;
+        }
+      }
+      if (splitAt == -1) {
+        splitAt = targetEnd;
+      }
+      result.add((start, splitAt));
+      start = splitAt;
+    }
+    return result.isEmpty ? [(0, text.length)] : result;
   }
 
   List<int> _safeBoundaries(String text) {
@@ -433,21 +591,6 @@ class LosslessChunker {
   bool _isLetter(int value) =>
       (value >= 65 && value <= 90) || (value >= 97 && value <= 122);
 
-  List<(int, int)> _hardSplit(String text) {
-    final starts = _word.allMatches(text).map((match) => match.start).toList();
-    if (starts.isEmpty) return [(0, text.length)];
-    final splits = <(int, int)>[];
-    var chunkStart = 0;
-    for (var index = _maxWords - 1;
-        index + 1 < starts.length;
-        index += _maxWords) {
-      final chunkEnd = starts[index + 1];
-      splits.add((chunkStart, chunkEnd));
-      chunkStart = chunkEnd;
-    }
-    if (chunkStart < text.length) splits.add((chunkStart, text.length));
-    return splits;
-  }
 
   double _boundaryPenalty(String left, String right, bool sameParagraph) {
     if (right.trim().isEmpty) return 0;
@@ -488,10 +631,16 @@ class LosslessChunker {
       var words = 0;
       for (var end = start; end < atoms.length; end++) {
         if (end > start && atoms[end].startsSection) break;
+        final spanChars = atoms[end].end - atoms[start].start;
+        if (spanChars > _maxChars && end > start) break;
         words += atoms[end].wordCount;
         if (words > _maxWords && end > start) break;
         final deviation = (words - targetWords) / targetWords;
         var chunkCost = deviation * deviation;
+        if (spanChars > _maxChars) {
+          final charOverflow = (spanChars - _maxChars) / _maxChars;
+          chunkCost += 12 * charOverflow * charOverflow;
+        }
         if (words < minimumWords && end + 1 < atoms.length) {
           final shortfall = (minimumWords - words) / minimumWords;
           chunkCost += 2 * shortfall * shortfall;

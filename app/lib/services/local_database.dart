@@ -190,6 +190,27 @@ class LocalDatabase {
     return Map<String, dynamic>.from(rows.first);
   }
 
+  Future<List<Map<String, dynamic>>> getChunks(String documentId) async {
+    final db = await database;
+    final rows = await db.query(
+      'reading_chunks',
+      where: 'document_id = ?',
+      whereArgs: [documentId],
+      orderBy: 'sequence ASC',
+    );
+    return rows.map((r) => Map<String, dynamic>.from(r)).toList();
+  }
+
+  Future<List<Map<String, dynamic>>> getCards(String documentId) async {
+    final db = await database;
+    final rows = await db.query(
+      'context_cards',
+      where: 'document_id = ? AND dismissed = 0',
+      whereArgs: [documentId],
+    );
+    return rows.map((r) => Map<String, dynamic>.from(r)).toList();
+  }
+
   Future<Map<String, dynamic>> getReaderData(String documentId) async {
     final db = await database;
     final docRows = await db.query('documents',
@@ -243,6 +264,8 @@ class LocalDatabase {
         items.add({
           'type': 'context_card',
           'id': card['id'],
+          'insert_after': card['source_chunk_id'],
+          'sequence': chunk['sequence'],
           'concept_name': card['concept_name'],
           'card_type': card['card_type'] ?? 'context',
           'title': card['title'] ?? '',

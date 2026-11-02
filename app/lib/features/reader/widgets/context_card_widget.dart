@@ -88,7 +88,7 @@ class _ContextCardWidgetState extends State<ContextCardWidget> {
       return (
         label: 'EMPIRICAL STUDY',
         icon: Icons.science_outlined,
-        color: const Color(0xFF10B981), // Emerald
+        color: const Color(0xFF2D6A4F), // Emerald #2D6A4F
       );
     }
     if (combined.contains('CRITICAL DEBATE') ||
@@ -100,7 +100,7 @@ class _ContextCardWidgetState extends State<ContextCardWidget> {
       return (
         label: 'CRITICAL DEBATE',
         icon: Icons.balance_outlined,
-        color: const Color(0xFFF43F5E), // Rose
+        color: const Color(0xFFC84B31), // Terracotta #C84B31
       );
     }
     if (combined.contains('CORE PARADOX') ||
@@ -110,7 +110,7 @@ class _ContextCardWidgetState extends State<ContextCardWidget> {
       return (
         label: 'CORE PARADOX',
         icon: Icons.auto_awesome_outlined,
-        color: const Color(0xFFD97706), // Rich Amber
+        color: const Color(0xFFB45309), // Ochre #B45309
       );
     }
     if (combined.contains('HISTORICAL CONTEXT') ||
@@ -123,7 +123,7 @@ class _ContextCardWidgetState extends State<ContextCardWidget> {
       return (
         label: 'HISTORICAL CONTEXT',
         icon: Icons.history_edu_outlined,
-        color: const Color(0xFF7C3AED), // Violet
+        color: const Color(0xFF1D3557), // Navy #1D3557
       );
     }
     return (
@@ -901,7 +901,7 @@ class _ContextCardWidgetState extends State<ContextCardWidget> {
             isMobile ? 12 : 16,
             8,
             isMobile ? 12 : 16,
-            widget.isFeedMode ? 68 : 10,
+            widget.isFeedMode ? 84 : 10,
           ),
           // Outer Shell (Doppelrand)
           padding: const EdgeInsets.all(4),
@@ -937,7 +937,7 @@ class _ContextCardWidgetState extends State<ContextCardWidget> {
       return SizedBox.expand(
         child: Center(
           child: SingleChildScrollView(
-            physics: const NeverScrollableScrollPhysics(),
+            physics: const BouncingScrollPhysics(),
             child: cardContainer,
           ),
         ),

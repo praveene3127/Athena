@@ -242,18 +242,30 @@ class _ReaderScreenState extends ConsumerState<ReaderScreen> {
     final cardsList = data['cards'] as List?;
 
     if (cardsList != null) {
+      final readerData = ref.read(readerDataProvider(widget.documentId)).value;
+      final chunks =
+          readerData?.items.where((it) => it.isReadingChunk).toList() ?? [];
+      final chunkSeqById = {for (final c in chunks) c.id: c.sequence ?? 0};
+
       for (final rawItem in cardsList) {
         if (rawItem is Map) {
           final cardJson = rawItem.map((k, v) => MapEntry(k.toString(), v));
 
           final card = ReaderItem.fromJson(cardJson);
 
-          int? seq = (cardJson['seq_num'] as num?)?.toInt() ??
+          int? seq;
+          if (card.insertAfter != null &&
+              chunkSeqById.containsKey(card.insertAfter)) {
+            final mapped = chunkSeqById[card.insertAfter]!;
+            if (mapped > 0) seq = mapped;
+          }
+          seq ??= (cardJson['seq_num'] as num?)?.toInt() ??
               (cardJson['sequence'] as num?)?.toInt() ??
               card.sequence;
 
           if (seq == null && card.insertAfter != null) {
-            final m = RegExp(r'-c(\d+)$').firstMatch(card.insertAfter!);
+            final m =
+                RegExp(r'(?:-c|_)(0*\d+)$').firstMatch(card.insertAfter!);
 
             if (m != null) {
               seq = int.tryParse(m.group(1)!);
@@ -602,6 +614,90 @@ class _ReaderScreenState extends ConsumerState<ReaderScreen> {
         ScaffoldMessenger.of(context).showSnackBar(
           const SnackBar(
             content: Text('Could not generate card. Check server connection.'),
+            backgroundColor: Color(0xFFD97706),
+            duration: Duration(seconds: 3),
+            behavior: SnackBarBehavior.floating,
+          ),
+        );
+      }
+    }
+  }
+
+  Future<void> _generateCardForCurrentChunk(ReaderItem chunk) async {
+    final seq = chunk.sequence ?? (_lastVisibleIndex + 1);
+    if (_cardsByChunkSeq.containsKey(seq)) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content:
+              Text('Context card already generated for this passage. Swipe up!'),
+          backgroundColor: Color(0xFF2D6A4F),
+          duration: Duration(seconds: 2),
+          behavior: SnackBarBehavior.floating,
+        ),
+      );
+      return;
+    }
+    HapticFeedback.mediumImpact();
+    ScaffoldMessenger.of(context).showSnackBar(
+      const SnackBar(
+        content: Row(
+          children: [
+            SizedBox(
+              width: 14,
+              height: 14,
+              child:
+                  CircularProgressIndicator(strokeWidth: 2, color: Colors.white),
+            ),
+            SizedBox(width: 12),
+            Text('Synthesizing AI Context Card...'),
+          ],
+        ),
+        duration: Duration(seconds: 4),
+        behavior: SnackBarBehavior.floating,
+      ),
+    );
+    try {
+      final client = ref.read(apiClientProvider);
+      final cardMap = await client.generateImmediateCard(
+        widget.documentId,
+        chunk.id,
+        seq,
+        chunk.rawText,
+      );
+      if (mounted) {
+        ScaffoldMessenger.of(context).hideCurrentSnackBar();
+        if (cardMap != null) {
+          final cardItem = ReaderItem.fromJson(cardMap);
+          setState(() {
+            _cardsByChunkSeq[seq] = cardItem;
+          });
+          ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(
+              content: Text('✨ Context Card ready! Swipe up to read.'),
+              backgroundColor: Color(0xFF2D6A4F),
+              duration: Duration(seconds: 3),
+              behavior: SnackBarBehavior.floating,
+            ),
+          );
+        } else {
+          ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(
+              content:
+                  Text('Could not generate card. Check connection or API key.'),
+              backgroundColor: Color(0xFFD97706),
+              duration: Duration(seconds: 3),
+              behavior: SnackBarBehavior.floating,
+            ),
+          );
+        }
+      }
+    } catch (_) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).hideCurrentSnackBar();
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content:
+                Text('Could not generate card. Check connection or API key.'),
             backgroundColor: Color(0xFFD97706),
             duration: Duration(seconds: 3),
             behavior: SnackBarBehavior.floating,
@@ -2536,36 +2632,32 @@ class _ReaderScreenState extends ConsumerState<ReaderScreen> {
           }
 
           // Seed cards from initial payload
+          final chunkSeqById = {for (final c in chunks) c.id: c.sequence ?? 0};
 
-          for (final it in items) {
-            if (it.isContextCard) {
-              int? seq = it.sequence;
-
-              if (seq == null && it.insertAfter != null) {
-                final m = RegExp(r'-c(\d+)$').firstMatch(it.insertAfter!);
-
-                if (m != null) seq = int.tryParse(m.group(1)!);
-              }
-
-              if (seq != null && !_cardsByChunkSeq.containsKey(seq)) {
-                _cardsByChunkSeq[seq] = it;
-              }
+          void registerCard(ReaderItem it) {
+            if (!it.isContextCard) return;
+            int? seq;
+            if (it.insertAfter != null &&
+                chunkSeqById.containsKey(it.insertAfter)) {
+              final mapped = chunkSeqById[it.insertAfter]!;
+              if (mapped > 0) seq = mapped;
+            }
+            seq ??= it.sequence;
+            if (seq == null && it.insertAfter != null) {
+              final m =
+                  RegExp(r'(?:-c|_)(0*\d+)$').firstMatch(it.insertAfter!);
+              if (m != null) seq = int.tryParse(m.group(1)!);
+            }
+            if (seq != null && seq > 0) {
+              _cardsByChunkSeq[seq] = it;
             }
           }
+
+          for (final it in items) {
+            registerCard(it);
+          }
           for (final it in data.cards) {
-            if (it.isContextCard) {
-              int? seq = it.sequence;
-
-              if (seq == null && it.insertAfter != null) {
-                final m = RegExp(r'-c(\d+)$').firstMatch(it.insertAfter!);
-
-                if (m != null) seq = int.tryParse(m.group(1)!);
-              }
-
-              if (seq != null && !_cardsByChunkSeq.containsKey(seq)) {
-                _cardsByChunkSeq[seq] = it;
-              }
-            }
+            registerCard(it);
           }
 
           // Feed mode item list (chunks interleaved with ready cards)
@@ -2919,59 +3011,68 @@ class _ReaderScreenState extends ConsumerState<ReaderScreen> {
                                         : '';
 
                                     return SizedBox.expand(
-                                      child: Center(
-                                        child: SingleChildScrollView(
-                                          physics: const NeverScrollableScrollPhysics(),
-                                        child: Column(
-                                          mainAxisSize: MainAxisSize.min,
-                                          crossAxisAlignment:
-                                              CrossAxisAlignment.stretch,
-                                          children: [
-                                            if (_showPreviouslyOnBanner &&
-                                                seq ==
-                                                    (_initialResumedIndex !=
-                                                            null
-                                                        ? (_initialResumedIndex! +
-                                                            1)
-                                                        : -1))
-                                              _buildPreviouslyOnBanner(chunks),
-                                            _buildZeigarnikIfEligible(
-                                                chunks, index, seq),
-                                            RepaintBoundary(
-                                              child: ChunkWidget(
-                                                chunk: item,
-                                                fontSize: proseSize,
-                                                fontFamily: _fontFamily,
-                                                lineHeight: proseHeight,
-                                                themeId: _themeId,
-                                                isFeedMode: true,
-                                                bionicFocusEnabled:
-                                                    _bionicFocusEnabled,
-                                                layoutWarning:
-                                                    data.layoutWarning,
-                                                onViewOriginalPage: () {
-                                                  final pageNum =
-                                                      _parsePageNumber(
-                                                          item.pageReference);
+                                      child: Padding(
+                                        padding: EdgeInsets.only(
+                                            bottom: 76.0 +
+                                                MediaQuery.paddingOf(context)
+                                                    .bottom),
+                                        child: Center(
+                                          child: SingleChildScrollView(
+                                            physics:
+                                                const BouncingScrollPhysics(),
+                                            child: Column(
+                                              mainAxisSize: MainAxisSize.min,
+                                              crossAxisAlignment:
+                                                  CrossAxisAlignment.stretch,
+                                              children: [
+                                                if (_showPreviouslyOnBanner &&
+                                                    seq ==
+                                                        (_initialResumedIndex !=
+                                                                null
+                                                            ? (_initialResumedIndex! +
+                                                                1)
+                                                            : -1))
+                                                  _buildPreviouslyOnBanner(chunks),
+                                                _buildZeigarnikIfEligible(
+                                                    chunks, index, seq),
+                                                RepaintBoundary(
+                                                  child: ChunkWidget(
+                                                    chunk: item,
+                                                    fontSize: proseSize,
+                                                    fontFamily: _fontFamily,
+                                                    lineHeight: proseHeight,
+                                                    themeId: _themeId,
+                                                    isFeedMode: true,
+                                                    bionicFocusEnabled:
+                                                        _bionicFocusEnabled,
+                                                    layoutWarning:
+                                                        data.layoutWarning,
+                                                    onViewOriginalPage: () {
+                                                      final pageNum =
+                                                          _parsePageNumber(
+                                                              item.pageReference);
 
-                                                  OriginalPageSheet.show(
-                                                    context,
-                                                    documentId:
-                                                        widget.documentId,
-                                                    pageNumber: pageNum,
-                                                    pageReference:
-                                                        item.pageReference,
-                                                    apiClient: apiClient,
-                                                  );
-                                                },
-                                                onAsk: () =>
-                                                    _openAskSheet(item),
-                                                onSaveQuote: ([text]) =>
-                                                    _saveUserQuote(item, text),
-                                                onDeepDive: () =>
-                                                    _deepDiveChunk(item),
-                                              ),
-                                            ),
+                                                      OriginalPageSheet.show(
+                                                        context,
+                                                        documentId:
+                                                            widget.documentId,
+                                                        pageNumber: pageNum,
+                                                        pageReference:
+                                                            item.pageReference,
+                                                        apiClient: apiClient,
+                                                      );
+                                                    },
+                                                    onAsk: () =>
+                                                        _openAskSheet(item),
+                                                    onSaveQuote: ([text]) =>
+                                                        _saveUserQuote(item, text),
+                                                    onDeepDive: () =>
+                                                        _deepDiveChunk(item),
+                                                    onGenerateCard: () =>
+                                                        _generateCardForCurrentChunk(
+                                                            item),
+                                                  ),
+                                                ),
                                             AnimatedSize(
                                               duration: const Duration(
                                                   milliseconds: 300),
@@ -3044,36 +3145,47 @@ class _ReaderScreenState extends ConsumerState<ReaderScreen> {
                                         ),
                                       ),
                                     ),
-                                  );
-                                  } else if (item.isContextCard) {
-                                    return RepaintBoundary(
-                                      child: ContextCardWidget(
-                                        card: item,
-                                        isFeedMode: true,
-                                        isBrainDeckSaved:
-                                            _isCardInBrainDeck(item.id),
-                                        onToggleBrainDeck: () =>
-                                            _toggleBrainDeck(
-                                          item,
-                                          data.title,
-                                          item.sequence ?? 1,
+                                  ),
+                                );
+                              } else if (item.isContextCard) {
+                                return SizedBox.expand(
+                                      child: Padding(
+                                        padding: EdgeInsets.only(
+                                            bottom: 76.0 +
+                                                MediaQuery.paddingOf(context)
+                                                    .bottom),
+                                        child: Center(
+                                          child: RepaintBoundary(
+                                            child: ContextCardWidget(
+                                              card: item,
+                                              isFeedMode: true,
+                                              isBrainDeckSaved:
+                                                  _isCardInBrainDeck(item.id),
+                                              onToggleBrainDeck: () =>
+                                                  _toggleBrainDeck(
+                                                item,
+                                                data.title,
+                                                item.sequence ?? 1,
+                                              ),
+                                              onToggleSave: () async {
+                                                final currentlySaved =
+                                                    item.saved ?? false;
+
+                                                if (currentlySaved) {
+                                                  await apiClient.unsaveCard(item.id);
+                                                } else {
+                                                  await apiClient.saveCard(item.id);
+                                                }
+
+                                                ref.invalidate(readerDataProvider(
+                                                    widget.documentId));
+                                              },
+                                              onDismiss: () => _dismissCard(item),
+                                              onAskAthena: () => _openAskSheetForCard(
+                                                  item, feedItems),
+                                            ),
+                                          ),
                                         ),
-                                        onToggleSave: () async {
-                                          final currentlySaved =
-                                              item.saved ?? false;
-
-                                          if (currentlySaved) {
-                                            await apiClient.unsaveCard(item.id);
-                                          } else {
-                                            await apiClient.saveCard(item.id);
-                                          }
-
-                                          ref.invalidate(readerDataProvider(
-                                              widget.documentId));
-                                        },
-                                        onDismiss: () => _dismissCard(item),
-                                        onAskAthena: () => _openAskSheetForCard(
-                                            item, feedItems),
                                       ),
                                     );
                                   }

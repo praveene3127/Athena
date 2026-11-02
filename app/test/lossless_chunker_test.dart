@@ -38,4 +38,58 @@ void main() {
             (chunk['start_offset']! as int) < (chunk['end_offset']! as int)),
         isTrue);
   });
+
+  test('sanitizeProseSpacing restores spacing across punctuation, quotes, and camelCase', () {
+    const rawFuesd = 'candle.HeadmasterGaleNolan,ahusky boy who carried banners.';
+    final sanitized = sanitizeProseSpacing(rawFuesd);
+    expect(sanitized, 'candle. Headmaster Gale Nolan, ahusky boy who carried banners.');
+
+    const tocFused = 'CONTENTSCover TitlePage Chapter1 Chapter2';
+    final sanitizedToc = sanitizeProseSpacing(tocFused);
+    expect(sanitizedToc, 'CONTENTS Cover Title Page Chapter 1 Chapter 2');
+
+    const quoteFused = 'He said"Focus"and walked;then paused.';
+    final sanitizedQuote = sanitizeProseSpacing(quoteFused);
+    expect(sanitizedQuote, 'He said "Focus" and walked; then paused.');
+  });
+
+  test('10,000-char continuous text satisfies hard 450-char ceiling while preserving 100% fidelity', () {
+    final sentences = List.generate(
+      150,
+      (i) => 'In observation study #${i + 1}, researcher Dr. Smith noted significant cognitive fidelity variations across participants. ',
+    );
+    final longSource = sentences.join();
+    expect(longSource.length, greaterThan(10000));
+
+    final spans = [
+      {
+        'start': 0,
+        'end': longSource.length,
+        'page_start': 1,
+        'page_end': 25,
+        'type': 'paragraph',
+      },
+    ];
+
+    final chunks = LosslessChunker().build(
+      documentId: 'large-corpus-doc',
+      canonicalText: longSource,
+      spans: spans,
+    );
+
+    expect(chunks, isNotEmpty);
+    // 100% byte-exact reconstruction
+    expect(chunks.map((c) => c['raw_text']).join(), longSource);
+
+    // Hard 450-character ceiling per chunk for single-screen mobile reading
+    for (final c in chunks) {
+      final raw = c['raw_text'] as String;
+      expect(raw.length, lessThanOrEqualTo(450),
+          reason: 'Chunk ${c['sequence']} exceeds 450 characters: ${raw.length} chars');
+    }
+
+    // Sequence integrity
+    expect(chunks.first['sequence'], 1);
+    expect(chunks.last['sequence'], chunks.length);
+  });
 }

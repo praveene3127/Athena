@@ -38,6 +38,10 @@ String _extractEpubText(List<int> bytes) {
                 RegExp(r'<script[^>]*>[\s\S]*?</script>',
                     caseSensitive: false),
                 ' ')
+            .replaceAll(
+                RegExp(r'</?(?:p|div|h[1-6]|br|hr|li|tr|blockquote|section|article)[^>]*>',
+                    caseSensitive: false),
+                '\n\n')
             .replaceAll(RegExp(r'<[^>]+>'), ' ')
             .replaceAll('&nbsp;', ' ')
             .replaceAll('&amp;', '&')
@@ -45,10 +49,19 @@ String _extractEpubText(List<int> bytes) {
             .replaceAll('&gt;', '>')
             .replaceAll('&quot;', '"')
             .replaceAll('&#39;', "'")
-            .replaceAll(RegExp(r'\s+'), ' ')
+            .replaceAll('&ldquo;', '“')
+            .replaceAll('&rdquo;', '”')
+            .replaceAll('&lsquo;', '‘')
+            .replaceAll('&rsquo;', '’')
+            .replaceAll('&mdash;', '—')
+            .replaceAll('&ndash;', '–')
+            .replaceAll('&hellip;', '…')
+            .replaceAll(RegExp(r'[ \t]+'), ' ')
+            .replaceAll(RegExp(r'\n{3,}'), '\n\n')
             .trim();
-        if (text.isNotEmpty) {
-          buffer.writeln(text);
+        final sanitized = sanitizeProseSpacing(text);
+        if (sanitized.isNotEmpty) {
+          buffer.writeln(sanitized);
           buffer.writeln();
         }
       }
@@ -90,35 +103,129 @@ _ParseDocumentResult _parseAndChunkDocumentInBackground(_ParseDocumentParams par
   final lowerName = fileName.toLowerCase();
   String canonicalText = '';
   int pageCount = 1;
+  final spans = <Map<String, dynamic>>[];
 
   if (lowerName.endsWith('.pdf')) {
     try {
       final PdfDocument pdfDoc = PdfDocument(inputBytes: bytes);
       pageCount = pdfDoc.pages.count;
       final PdfTextExtractor extractor = PdfTextExtractor(pdfDoc);
-      canonicalText = extractor.extractText();
+      final buffer = StringBuffer();
+      final frontMatterCutoff = (pageCount * 0.15).ceil().clamp(1, 15);
+
+      bool isTocOrFrontMatter(String text) {
+        final lower = text.toLowerCase().trim();
+        if (lower.isEmpty) return true;
+        final lines = text
+            .split('\n')
+            .map((l) => l.trim())
+            .where((l) => l.isNotEmpty)
+            .toList();
+        if (lines.isEmpty) return true;
+        if (lower.contains('table of contents') ||
+            lower.startsWith('contents') ||
+            lower.contains('\ncontents\n')) {
+          return true;
+        }
+        final chapterMatches =
+            RegExp(r'\bchapter\s+\d+\b', caseSensitive: false)
+                .allMatches(lower)
+                .length;
+        if (chapterMatches >= 4) return true;
+        if ((lower.contains('all rights reserved') ||
+                lower.contains('printed in the united states') ||
+                lower.contains('isbn:')) &&
+            lines.length < 20) {
+          return true;
+        }
+        return false;
+      }
+
+      for (int i = 0; i < pageCount; i++) {
+        final pageNum = i + 1;
+        String pageText = '';
+        try {
+          pageText = extractor.extractText(startPageIndex: i, endPageIndex: i);
+        } catch (_) {}
+
+        if (i < frontMatterCutoff && isTocOrFrontMatter(pageText)) {
+          continue;
+        }
+
+        final sanitizedPage = sanitizeProseSpacing(pageText).trim();
+        if (sanitizedPage.isEmpty) continue;
+
+        if (buffer.isNotEmpty) {
+          buffer.write('\n\n');
+        }
+        final pageStart = buffer.length;
+        buffer.write(sanitizedPage);
+        final pageEnd = buffer.length;
+
+        spans.add({
+          'start': pageStart,
+          'end': pageEnd,
+          'page_start': pageNum,
+          'page_end': pageNum,
+          'type': 'paragraph',
+        });
+      }
+
+      // If everything got filtered out, fallback to extracting all pages
+      if (buffer.isEmpty) {
+        for (int i = 0; i < pageCount; i++) {
+          final pageNum = i + 1;
+          String pageText = '';
+          try {
+            pageText =
+                extractor.extractText(startPageIndex: i, endPageIndex: i);
+          } catch (_) {}
+          final sanitizedPage = sanitizeProseSpacing(pageText).trim();
+          if (sanitizedPage.isEmpty) continue;
+
+          if (buffer.isNotEmpty) {
+            buffer.write('\n\n');
+          }
+          final pageStart = buffer.length;
+          buffer.write(sanitizedPage);
+          final pageEnd = buffer.length;
+
+          spans.add({
+            'start': pageStart,
+            'end': pageEnd,
+            'page_start': pageNum,
+            'page_end': pageNum,
+            'type': 'paragraph',
+          });
+        }
+      }
+
       pdfDoc.dispose();
+      canonicalText = buffer.toString().trim();
     } catch (_) {
       try {
-        canonicalText = utf8.decode(bytes, allowMalformed: true);
+        canonicalText =
+            sanitizeProseSpacing(utf8.decode(bytes, allowMalformed: true));
       } catch (_) {
-        canonicalText = String.fromCharCodes(bytes);
+        canonicalText = sanitizeProseSpacing(String.fromCharCodes(bytes));
       }
     }
   } else if (lowerName.endsWith('.epub')) {
     canonicalText = _extractEpubText(bytes);
     if (canonicalText.isEmpty) {
       try {
-        canonicalText = utf8.decode(bytes, allowMalformed: true);
+        canonicalText =
+            sanitizeProseSpacing(utf8.decode(bytes, allowMalformed: true));
       } catch (_) {
-        canonicalText = String.fromCharCodes(bytes);
+        canonicalText = sanitizeProseSpacing(String.fromCharCodes(bytes));
       }
     }
   } else {
     try {
-      canonicalText = utf8.decode(bytes, allowMalformed: true);
+      canonicalText =
+          sanitizeProseSpacing(utf8.decode(bytes, allowMalformed: true));
     } catch (_) {
-      canonicalText = String.fromCharCodes(bytes);
+      canonicalText = sanitizeProseSpacing(String.fromCharCodes(bytes));
     }
   }
 
@@ -127,18 +234,20 @@ _ParseDocumentResult _parseAndChunkDocumentInBackground(_ParseDocumentParams par
     canonicalText = 'Document: $fileName\n\nPreserved text content.';
   }
 
+  if (spans.isEmpty) {
+    spans.add({
+      'start': 0,
+      'end': canonicalText.length,
+      'page_start': 1,
+      'page_end': pageCount,
+      'type': 'paragraph',
+    });
+  }
+
   final chunkMaps = LosslessChunker().build(
     documentId: docId,
     canonicalText: canonicalText,
-    spans: [
-      {
-        'start': 0,
-        'end': canonicalText.length,
-        'page_start': 1,
-        'page_end': pageCount,
-        'type': 'paragraph',
-      },
-    ],
+    spans: spans,
   );
 
   return _ParseDocumentResult(
@@ -760,22 +869,148 @@ class ApiClient {
 
   Future<Map<String, dynamic>> syncReadingProgress(String id, int chunkIndex,
       {String readingMode = 'feed'}) async {
-    if (AppConfig.apiBaseUrl.isEmpty) {
-      return {'status': 'saved', 'chunk_index': chunkIndex};
+    if (AppConfig.hasActiveBackend && AppConfig.apiBaseUrl.isNotEmpty) {
+      try {
+        final response = await dio.post(
+          '/api/documents/$id/progress',
+          data: {'chunk_index': chunkIndex, 'reading_mode': readingMode},
+        );
+        if (response.data is Map<String, dynamic>) {
+          return response.data as Map<String, dynamic>;
+        }
+      } catch (_) {}
     }
+
+    // Standalone on-device mobile mode
+    if (!kIsWeb) {
+      try {
+        final db = LocalDatabase.instance;
+        final existingCards = await db.getCards(id);
+        final chunks = await db.getChunks(id);
+
+        final chunkSeqById = {
+          for (final c in chunks)
+            c['id']?.toString() ?? '':
+                (c['sequence'] as num?)?.toInt() ?? 0
+        };
+        final cardSeqs = <int>{};
+        for (final c in existingCards) {
+          final srcId = c['source_chunk_id']?.toString();
+          if (srcId != null && chunkSeqById.containsKey(srcId)) {
+            cardSeqs.add(chunkSeqById[srcId]!);
+          }
+        }
+
+        // Look in upcoming window [chunkIndex .. chunkIndex + 4]
+        Map<String, dynamic>? candidateChunk;
+        for (var seq = chunkIndex; seq <= chunkIndex + 4; seq++) {
+          if (!cardSeqs.contains(seq) && (seq % 3 == 0 || seq == chunkIndex)) {
+            final match =
+                chunks.where((c) => (c['sequence'] as num?)?.toInt() == seq);
+            if (match.isNotEmpty) {
+              candidateChunk = match.first;
+              break;
+            }
+          }
+        }
+
+        if (candidateChunk != null) {
+          final cSeq =
+              (candidateChunk['sequence'] as num?)?.toInt() ?? chunkIndex;
+          final newCard = await LocalContextService().generateCardForChunk(
+            id,
+            candidateChunk,
+            cSeq,
+          );
+          if (newCard != null) {
+            await db.insertCards([newCard]);
+          }
+        }
+
+        // Return all active cards mapped with sequence
+        final latestCards = await db.getCards(id);
+        final formattedCards = latestCards.map((c) {
+          final srcId = c['source_chunk_id']?.toString() ?? '';
+          final seq = chunkSeqById[srcId] ?? 0;
+          List citations = [];
+          if (c['citations_json'] != null) {
+            try {
+              citations = jsonDecode(c['citations_json'] as String) as List;
+            } catch (_) {}
+          }
+          return {
+            'type': 'context_card',
+            'id': c['id'],
+            'insert_after': srcId,
+            'sequence': seq,
+            'title': c['title'] ?? '',
+            'body': c['body'] ?? '',
+            'why_here': c['why_here'] ?? '',
+            'exact_quote': c['exact_quote'],
+            'support_status': c['support_status'] ?? 'fully_supported',
+            'generation_mode': c['generation_mode'] ?? 'grounded',
+            'saved': c['saved'] == 1,
+            'citations': citations,
+          };
+        }).toList();
+
+        return {
+          'status': 'ok',
+          'chunk_index': chunkIndex,
+          'cards': formattedCards,
+        };
+      } catch (_) {}
+    }
+
+    return {'status': 'saved', 'chunk_index': chunkIndex};
+  }
+
+  Future<Map<String, dynamic>?> generateImmediateCard(
+    String documentId,
+    String chunkId,
+    int sequence,
+    String rawText,
+  ) async {
     try {
-      final response = await dio.post(
-        '/api/documents/$id/progress',
-        data: {'chunk_index': chunkIndex, 'reading_mode': readingMode},
+      final chunk = {
+        'id': chunkId,
+        'sequence': sequence,
+        'raw_text': rawText,
+        'canonical_sha256': '',
+      };
+      final newCard = await LocalContextService().generateCardForChunk(
+        documentId,
+        chunk,
+        sequence,
       );
-      if (response.data is Map<String, dynamic>) {
-        return response.data as Map<String, dynamic>;
+      if (newCard != null) {
+        if (!kIsWeb) {
+          await LocalDatabase.instance.insertCards([newCard]);
+        }
+        List citations = [];
+        if (newCard['citations_json'] != null) {
+          try {
+            citations =
+                jsonDecode(newCard['citations_json'] as String) as List;
+          } catch (_) {}
+        }
+        return {
+          'type': 'context_card',
+          'id': newCard['id'],
+          'insert_after': chunkId,
+          'sequence': sequence,
+          'title': newCard['title'] ?? '',
+          'body': newCard['body'] ?? '',
+          'why_here': newCard['why_here'] ?? '',
+          'exact_quote': newCard['exact_quote'],
+          'support_status': newCard['support_status'] ?? 'fully_supported',
+          'generation_mode': newCard['generation_mode'] ?? 'grounded',
+          'saved': false,
+          'citations': citations,
+        };
       }
-      return {};
-    } catch (_) {
-      // Best-effort background progress sync; ignore offline drops
-      return {};
-    }
+    } catch (_) {}
+    return null;
   }
 
   Future<List<Map<String, dynamic>>> getChapters(String id) async {

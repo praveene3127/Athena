@@ -15,6 +15,7 @@ class ChunkWidget extends StatelessWidget {
   final VoidCallback onAsk;
   final void Function([String? selectedText])? onSaveQuote;
   final VoidCallback? onDeepDive;
+  final VoidCallback? onGenerateCard;
   final bool isFeedMode;
   final bool bionicFocusEnabled;
   final String? layoutWarning;
@@ -30,6 +31,7 @@ class ChunkWidget extends StatelessWidget {
     required this.onAsk,
     this.onSaveQuote,
     this.onDeepDive,
+    this.onGenerateCard,
     this.isFeedMode = true,
     this.bionicFocusEnabled = false,
     this.layoutWarning,
@@ -397,6 +399,37 @@ class ChunkWidget extends StatelessWidget {
               ],
             ),
           ),
+          if (onGenerateCard != null) ...[
+            const SizedBox(width: 8),
+            _TactilePillButton(
+              backgroundColor: theme.pillBackground,
+              borderColor: theme.borderColor,
+              onTap: () {
+                HapticFeedback.selectionClick();
+                onGenerateCard!();
+              },
+              child: Row(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  Icon(
+                    Icons.auto_awesome_rounded,
+                    size: 13,
+                    color: theme.accentColor,
+                  ),
+                  const SizedBox(width: 5),
+                  Text(
+                    'Context Card',
+                    style: TextStyle(
+                      fontFamily: AppTheme.fontUI,
+                      fontSize: 11.5,
+                      fontWeight: FontWeight.w600,
+                      color: theme.textColor,
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ],
           if (onSaveQuote != null) ...[
             const SizedBox(width: 8),
             _TactilePillButton(
@@ -515,7 +548,7 @@ class ChunkWidget extends StatelessWidget {
             isMobile ? 12 : 16,
             8,
             isMobile ? 12 : 16,
-            isFeedMode ? 68 : 10,
+            isFeedMode ? 84 : 10,
           ),
           // Outer Shell (Doppelrand)
           padding: const EdgeInsets.all(4),
