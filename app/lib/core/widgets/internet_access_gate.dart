@@ -110,10 +110,12 @@ class _InternetAccessGateState extends State<InternetAccessGate>
 
   @override
   Widget build(BuildContext context) {
-    // On web, CORS prevents external probes; allow child directly
-    if (kIsWeb) return widget.child;
-    if (_online) return widget.child;
+    // Standalone mobile app: Never block the user with an offline or companion setup gate on startup!
+    // Always render child directly so the app opens immediately into LibraryScreen.
+    return widget.child;
+  }
 
+  Widget buildOfflineScreen(BuildContext context) {
     final isDark = AppTheme.isDark(context);
 
     return Scaffold(

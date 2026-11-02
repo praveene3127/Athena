@@ -162,9 +162,9 @@ class LocalDatabase {
     final db = await database;
     final savedCards = await db.query('context_cards',
         where: 'document_id = ? AND saved = 1', whereArgs: [id]);
+    await db.delete('reading_chunks', where: 'document_id = ?', whereArgs: [id]);
+    await db.delete('document_pages', where: 'document_id = ?', whereArgs: [id]);
     if (savedCards.isNotEmpty) {
-      await db.delete('reading_chunks', where: 'document_id = ?', whereArgs: [id]);
-      await db.delete('document_pages', where: 'document_id = ?', whereArgs: [id]);
       await db.delete('context_cards',
           where: 'document_id = ? AND saved = 0', whereArgs: [id]);
       await db.update('documents', {
@@ -173,8 +173,21 @@ class LocalDatabase {
         'canonical_text': '',
       }, where: 'id = ?', whereArgs: [id]);
     } else {
+      await db.delete('context_cards', where: 'document_id = ?', whereArgs: [id]);
       await db.delete('documents', where: 'id = ?', whereArgs: [id]);
     }
+  }
+
+  Future<Map<String, dynamic>?> getChunk(String id) async {
+    final db = await database;
+    final rows = await db.query(
+      'reading_chunks',
+      where: 'id = ?',
+      whereArgs: [id],
+      limit: 1,
+    );
+    if (rows.isEmpty) return null;
+    return Map<String, dynamic>.from(rows.first);
   }
 
   Future<Map<String, dynamic>> getReaderData(String documentId) async {

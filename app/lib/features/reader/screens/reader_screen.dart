@@ -323,6 +323,7 @@ class _ReaderScreenState extends ConsumerState<ReaderScreen> {
   }
 
   void _setupSseStream() {
+    if (!AppConfig.hasActiveBackend) return;
     if (kIsWeb) {
       _webCardPollTimer?.cancel();
 
@@ -418,6 +419,7 @@ class _ReaderScreenState extends ConsumerState<ReaderScreen> {
 
   void _setReadingMode(String mode) {
     if (_readingMode == mode) return;
+    final oldMode = _readingMode;
     setState(() {
       _readingMode = mode;
     });
@@ -434,14 +436,43 @@ class _ReaderScreenState extends ConsumerState<ReaderScreen> {
         .catchError((_) => <String, dynamic>{});
 
     WidgetsBinding.instance.addPostFrameCallback((_) {
+      final readerData = ref.read(readerDataProvider(widget.documentId)).value;
+      if (readerData == null) return;
+      final rawItems = readerData.items;
+      final chunks = rawItems.where((it) => it.isReadingChunk).toList();
+      final feedItems = _getFeedItems(rawItems);
+
       if (mode == 'flow') {
+        int targetFlowIdx = _lastVisibleIndex;
+        if (oldMode == 'feed' && _lastVisibleIndex < feedItems.length) {
+          final feedItem = feedItems[_lastVisibleIndex];
+          final seq = feedItem.sequence;
+          if (seq != null) {
+            final chunkIdx = chunks.indexWhere((c) => c.sequence == seq);
+            if (chunkIdx >= 0) targetFlowIdx = chunkIdx;
+          }
+        }
+        _lastVisibleIndex = targetFlowIdx;
         if (_itemScrollController.isAttached) {
           _itemScrollController.jumpTo(
-              index: _lastVisibleIndex.clamp(0, 999999));
+              index: targetFlowIdx.clamp(
+                  0, (chunks.length - 1).clamp(0, 999999)));
         }
       } else {
+        int targetFeedIdx = _lastVisibleIndex;
+        if (oldMode == 'flow' && _lastVisibleIndex < chunks.length) {
+          final chunk = chunks[_lastVisibleIndex];
+          final seq = chunk.sequence;
+          if (seq != null) {
+            final feedIdx = feedItems
+                .indexWhere((f) => f.sequence == seq && f.isReadingChunk);
+            if (feedIdx >= 0) targetFeedIdx = feedIdx;
+          }
+        }
+        _lastVisibleIndex = targetFeedIdx;
         if (_pageController != null && _pageController!.hasClients) {
-          _pageController!.jumpToPage(_lastVisibleIndex);
+          _pageController!.jumpToPage(targetFeedIdx.clamp(
+              0, (feedItems.length - 1).clamp(0, 999999)));
         }
       }
     });

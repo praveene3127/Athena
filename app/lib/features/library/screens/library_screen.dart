@@ -11,7 +11,6 @@ import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import 'package:file_picker/file_picker.dart';
-import 'package:cross_file/cross_file.dart';
 
 import 'package:go_router/go_router.dart';
 
@@ -106,7 +105,7 @@ class _LibraryScreenState extends ConsumerState<LibraryScreen>
   }
 
   Future<void> _checkServerConnectionAndAutoDiscover() async {
-    if (kIsWeb) return;
+    if (kIsWeb || !AppConfig.isCustomServerConfigured) return;
     try {
       final client = ref.read(apiClientProvider);
       final health = await client.checkHealth();
@@ -120,16 +119,6 @@ class _LibraryScreenState extends ConsumerState<LibraryScreen>
         ref.invalidate(documentsProvider);
         _checkAIConfiguration();
         _checkForUpdates();
-        if (mounted) {
-          ScaffoldMessenger.of(context).showSnackBar(
-            SnackBar(
-              content: Text('Connected to Athena server at $found'),
-              backgroundColor: const Color(0xFF2D6A4F),
-              duration: const Duration(seconds: 2),
-              behavior: SnackBarBehavior.floating,
-            ),
-          );
-        }
       }
     } catch (_) {}
   }
@@ -916,34 +905,25 @@ class _LibraryScreenState extends ConsumerState<LibraryScreen>
 
   Future<void> _pickAndUpload() async {
     try {
+      // FilePicker: On mobile, loading massive PDFs via IPC byte arrays triggers Android Binder TransactionTooLargeException.
+      // Therefore, on mobile we use withReadStream: true and pass file.path directly;
+      // on web, browser sandbox requires withData: true.
       final result = await FilePicker.platform.pickFiles(
         type: FileType.custom,
         allowedExtensions: ['pdf', 'epub'],
-        withData: true,
+        withData: kIsWeb, // withData: true
+        withReadStream: !kIsWeb,
       );
 
       if (result == null || result.files.isEmpty) return;
 
       final file = result.files.first;
 
-      List<int>? fileBytes = file.bytes;
-      String? filePath;
-      if (!kIsWeb) {
-        try {
-          filePath = file.path;
-        } catch (_) {
-          filePath = null;
-        }
-      }
+      final String? filePath = kIsWeb ? null : file.path;
+      final List<int>? fileBytes = kIsWeb ? file.bytes : null;
+      final Stream<List<int>>? fileStream = kIsWeb ? null : file.readStream;
 
-      if (fileBytes == null && filePath != null && filePath.isNotEmpty && !kIsWeb) {
-        try {
-          final xf = XFile(filePath);
-          fileBytes = await xf.readAsBytes();
-        } catch (_) {}
-      }
-
-      if (fileBytes == null && (filePath == null || filePath.isEmpty)) {
+      if (fileBytes == null && (filePath == null || filePath.isEmpty) && fileStream == null) {
         if (mounted) {
           ScaffoldMessenger.of(context).showSnackBar(
             const SnackBar(
@@ -961,7 +941,7 @@ class _LibraryScreenState extends ConsumerState<LibraryScreen>
       final client = ref.read(apiClientProvider);
 
       final docId = await client.uploadDocument(
-        fileBytes != null ? Stream.value(fileBytes) : null,
+        fileStream ?? (fileBytes != null ? Stream.value(fileBytes) : null),
         fileBytes?.length ?? file.size,
         file.name,
         filePath: filePath,
@@ -970,7 +950,13 @@ class _LibraryScreenState extends ConsumerState<LibraryScreen>
 
       ref.invalidate(documentsProvider);
 
-      if (mounted) context.push('/processing/$docId');
+      if (mounted) {
+        if (AppConfig.apiBaseUrl.isEmpty) {
+          context.push('/reader/$docId');
+        } else {
+          context.push('/processing/$docId');
+        }
+      }
     } on AppError catch (e) {
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
@@ -1212,7 +1198,7 @@ class _LibraryScreenState extends ConsumerState<LibraryScreen>
     final docsState = ref.watch(documentsProvider);
 
     docsState.whenData((docs) {
-      final hasProcessing = docs.any((d) => !d.isReady && !d.isFailed);
+      final hasProcessing = docs.any((d) => d.isProcessing);
 
       if (hasProcessing && _pollTimer == null) {
         int pollCount = 0;
@@ -1338,45 +1324,46 @@ class _LibraryScreenState extends ConsumerState<LibraryScreen>
                             },
                           ),
 
-                          // Server connection setup button
+                          // Server connection setup button (hidden on standalone mobile)
+                          if (kIsWeb || AppConfig.isCustomServerConfigured) ...[
+                            InkWell(
+                              onTap: () async {
+                                HapticFeedback.selectionClick();
 
-                          InkWell(
-                            onTap: () async {
-                              HapticFeedback.selectionClick();
+                                final changed =
+                                    await context.push<bool>('/settings');
 
-                              final changed =
-                                  await context.push<bool>('/settings');
+                                if (changed == true) {
+                                  ref.invalidate(documentsProvider);
 
-                              if (changed == true) {
-                                ref.invalidate(documentsProvider);
+                                  _checkAIConfiguration();
 
-                                _checkAIConfiguration();
-
-                                _checkForUpdates();
-                              }
-                            },
-                            borderRadius: BorderRadius.circular(20),
-                            child: Container(
-                              padding: const EdgeInsets.all(7),
-                              margin: const EdgeInsets.only(right: 8),
-                              decoration: BoxDecoration(
-                                color: isDark
-                                    ? const Color(0xFF202020)
-                                    : AppTheme.surfaceWarm,
-                                borderRadius: BorderRadius.circular(20),
-                                border: Border.all(
+                                  _checkForUpdates();
+                                }
+                              },
+                              borderRadius: BorderRadius.circular(20),
+                              child: Container(
+                                padding: const EdgeInsets.all(7),
+                                margin: const EdgeInsets.only(right: 8),
+                                decoration: BoxDecoration(
                                   color: isDark
-                                      ? const Color(0xFF2E2E2E)
-                                      : AppTheme.border,
+                                      ? const Color(0xFF202020)
+                                      : AppTheme.surfaceWarm,
+                                  borderRadius: BorderRadius.circular(20),
+                                  border: Border.all(
+                                    color: isDark
+                                        ? const Color(0xFF2E2E2E)
+                                        : AppTheme.border,
+                                  ),
+                                ),
+                                child: Icon(
+                                  Icons.dns_outlined,
+                                  size: 16,
+                                  color: AppTheme.inkOf(context),
                                 ),
                               ),
-                              child: Icon(
-                                Icons.dns_outlined,
-                                size: 16,
-                                color: AppTheme.inkOf(context),
-                              ),
                             ),
-                          ),
+                          ],
 
                           InkWell(
                             onTap: () => BYOKSettingsSheet.show(

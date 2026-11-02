@@ -1,6 +1,8 @@
 import 'dart:async';
 import 'dart:convert';
 
+import 'package:archive/archive.dart';
+import 'package:cross_file/cross_file.dart';
 import 'package:dio/dio.dart';
 import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:shared_preferences/shared_preferences.dart';
@@ -13,6 +15,49 @@ import 'package:syncfusion_flutter_pdf/pdf.dart';
 import 'package:athena/services/local_context_service.dart';
 import 'package:athena/services/local_database.dart';
 import 'package:athena/services/lossless_chunker.dart';
+
+String _extractEpubText(List<int> bytes) {
+  try {
+    final archive = ZipDecoder().decodeBytes(bytes);
+    final buffer = StringBuffer();
+    final htmlFiles = archive.files.where((f) {
+      final n = f.name.toLowerCase();
+      return f.isFile &&
+          (n.endsWith('.xhtml') || n.endsWith('.html') || n.endsWith('.htm'));
+    }).toList();
+
+    for (final file in htmlFiles) {
+      final raw = file.content;
+      if (raw is List<int>) {
+        final content = utf8.decode(raw, allowMalformed: true);
+        final text = content
+            .replaceAll(
+                RegExp(r'<style[^>]*>[\s\S]*?</style>', caseSensitive: false),
+                ' ')
+            .replaceAll(
+                RegExp(r'<script[^>]*>[\s\S]*?</script>',
+                    caseSensitive: false),
+                ' ')
+            .replaceAll(RegExp(r'<[^>]+>'), ' ')
+            .replaceAll('&nbsp;', ' ')
+            .replaceAll('&amp;', '&')
+            .replaceAll('&lt;', '<')
+            .replaceAll('&gt;', '>')
+            .replaceAll('&quot;', '"')
+            .replaceAll('&#39;', "'")
+            .replaceAll(RegExp(r'\s+'), ' ')
+            .trim();
+        if (text.isNotEmpty) {
+          buffer.writeln(text);
+          buffer.writeln();
+        }
+      }
+    }
+    return buffer.toString().trim();
+  } catch (_) {
+    return '';
+  }
+}
 
 class ApiClient {
   final Dio dio;
@@ -90,6 +135,12 @@ class ApiClient {
   // --- Documents ---
 
   Future<List<Map<String, dynamic>>> listDocuments() async {
+    // 1. In standalone mobile mode, read directly from SQLite
+    if (AppConfig.apiBaseUrl.isEmpty && !kIsWeb) {
+      final localDocs = await LocalDatabase.instance.listDocuments();
+      return localDocs;
+    }
+
     try {
       final response = await dio
           .get('/api/documents')
@@ -98,23 +149,33 @@ class ApiClient {
       _cacheDocumentsLocally(list);
       return list;
     } catch (_) {
+      if (!kIsWeb) {
+        final localDocs = await LocalDatabase.instance.listDocuments();
+        if (localDocs.isNotEmpty) {
+          return localDocs;
+        }
+      }
       final cached = await _loadCachedDocuments();
       if (cached.isNotEmpty) {
         return cached;
       }
       if (!kIsWeb) {
-        try {
-          final found = await LanDiscovery.discoverServer(timeoutMs: 600);
-          if (found != null && found.isNotEmpty) {
-            await AppConfig.setBaseUrl(found);
-            final retryResp = await dio
-                .get('/api/documents')
-                .timeout(const Duration(seconds: 3));
-            final list = (retryResp.data as List).cast<Map<String, dynamic>>();
-            _cacheDocumentsLocally(list);
-            return list;
-          }
-        } catch (_) {}
+        if (AppConfig.isCustomServerConfigured) {
+          try {
+            final found = await LanDiscovery.discoverServer(timeoutMs: 600);
+            if (found != null && found.isNotEmpty) {
+              await AppConfig.setBaseUrl(found);
+              final retryResp = await dio
+                  .get('/api/documents')
+                  .timeout(const Duration(seconds: 3));
+              final list = (retryResp.data as List).cast<Map<String, dynamic>>();
+              _cacheDocumentsLocally(list);
+              return list;
+            }
+          } catch (_) {}
+        }
+        // In standalone mode, return empty library without nagging
+        return [];
       }
       throw AppError(
         code: 'NETWORK_ERROR',
@@ -242,6 +303,11 @@ class ApiClient {
       await for (final chunk in fileStream) {
         bytes.addAll(chunk);
       }
+    } else if (filePath != null && filePath.isNotEmpty) {
+      try {
+        final xf = XFile(filePath);
+        bytes.addAll(await xf.readAsBytes());
+      } catch (_) {}
     }
 
     if (bytes.isEmpty) {
@@ -264,14 +330,23 @@ class ApiClient {
         pdfDoc.dispose();
       } catch (_) {
         try {
-          canonicalText = utf8.decode(bytes);
+          canonicalText = utf8.decode(bytes, allowMalformed: true);
+        } catch (_) {
+          canonicalText = String.fromCharCodes(bytes);
+        }
+      }
+    } else if (lowerName.endsWith('.epub')) {
+      canonicalText = _extractEpubText(bytes);
+      if (canonicalText.isEmpty) {
+        try {
+          canonicalText = utf8.decode(bytes, allowMalformed: true);
         } catch (_) {
           canonicalText = String.fromCharCodes(bytes);
         }
       }
     } else {
       try {
-        canonicalText = utf8.decode(bytes);
+        canonicalText = utf8.decode(bytes, allowMalformed: true);
       } catch (_) {
         canonicalText = String.fromCharCodes(bytes);
       }
@@ -498,7 +573,16 @@ class ApiClient {
   Future<void> _cacheDocumentsLocally(List<Map<String, dynamic>> list) async {
     try {
       final prefs = await SharedPreferences.getInstance();
-      await prefs.setString('cached_documents_list', jsonEncode(list));
+      final existingLocal = await _loadCachedDocuments();
+      final merged = <Map<String, dynamic>>[...list];
+      for (final local in existingLocal) {
+        final id = local['id']?.toString();
+        if (id != null &&
+            (id.startsWith('doc_') || !merged.any((m) => m['id'] == id))) {
+          merged.add(local);
+        }
+      }
+      await prefs.setString('cached_documents_list', jsonEncode(merged));
       if (!kIsWeb) {
         for (final doc in list) {
           final docId = doc['id']?.toString();
@@ -666,7 +750,20 @@ class ApiClient {
     return '${AppConfig.apiBaseUrl}/api/documents/$docId/pages/$pageNumber/image';
   }
 
-  Future<String?> localPdfPath(String documentId) async => null;
+  Future<String?> localPdfPath(String documentId) async {
+    if (!kIsWeb) {
+      try {
+        final doc = await LocalDatabase.instance.getDocument(documentId);
+        final path = doc?['file_path']?.toString();
+        if (path != null && path.isNotEmpty && !path.startsWith('local://')) {
+          final xf = XFile(path);
+          final len = await xf.length();
+          if (len > 0) return path;
+        }
+      } catch (_) {}
+    }
+    return null;
+  }
 
   Future<Map<String, dynamic>> fetchVibeCheck(
       String docId, int chunkIndex) async {
@@ -840,15 +937,46 @@ class ApiClient {
   }
 
   Future<List<Map<String, dynamic>>> getSavedCards() async {
-    if (AppConfig.apiBaseUrl.isEmpty) {
-      return await LocalDatabase.instance.getSavedCards();
+    final List<Map<String, dynamic>> result = [];
+    if (!kIsWeb) {
+      try {
+        final local = await LocalDatabase.instance.getSavedCards();
+        result.addAll(local);
+      } catch (_) {}
     }
+
     try {
-      final response = await dio.get('/api/saved');
-      return (response.data as List).cast<Map<String, dynamic>>();
-    } on DioException catch (e) {
-      throw _handleDioError(e);
+      final prefs = await SharedPreferences.getInstance();
+      final savedNotesRaw = prefs.getString('athena_saved_notes_v1');
+      if (savedNotesRaw != null && savedNotesRaw.isNotEmpty) {
+        final List decoded = jsonDecode(savedNotesRaw) as List;
+        for (final item in decoded) {
+          if (item is Map) {
+            final map = Map<String, dynamic>.from(item);
+            if (!result.any((r) => r['id'] == map['id'])) {
+              result.add(map);
+            }
+          }
+        }
+      }
+    } catch (_) {}
+
+    if (AppConfig.hasActiveBackend) {
+      try {
+        final response = await dio.get('/api/saved');
+        final backendCards =
+            (response.data as List).cast<Map<String, dynamic>>();
+        for (final card in backendCards) {
+          if (!result.any((r) => r['id'] == card['id'])) {
+            result.add(card);
+          }
+        }
+      } catch (_) {
+        // Backend offline — return locally gathered saved cards
+      }
     }
+
+    return result;
   }
 
   // --- Ask (Phase 6) ---
@@ -860,7 +988,7 @@ class ApiClient {
     String? selectedText,
     String? passageText,
   }) async {
-    // 1. Try companion engine backend
+    // 1. Try companion engine backend if configured
     if (AppConfig.apiBaseUrl.isNotEmpty) {
       try {
         final response = await dio.post(
@@ -890,7 +1018,18 @@ class ApiClient {
       } catch (_) {}
     }
 
-    // 2. On-device fallback via configured Gemini or AI key
+    // 2. Fetch passage text from LocalDatabase if needed
+    var textForPrompt = passageText ?? selectedText ?? '';
+    if (textForPrompt.isEmpty && !kIsWeb) {
+      try {
+        final chunk = await LocalDatabase.instance.getChunk(chunkId);
+        if (chunk != null) {
+          textForPrompt = chunk['raw_text']?.toString() ?? '';
+        }
+      } catch (_) {}
+    }
+
+    // 3. On-device fallback via configured Gemini or AI key directly over HTTPS
     try {
       final prefs = await SharedPreferences.getInstance();
       final key = prefs.getString('athena_ai_primary_api_key') ?? '';
@@ -899,49 +1038,110 @@ class ApiClient {
       final model =
           prefs.getString('athena_ai_primary_model') ?? 'gemini-2.5-flash';
 
-      if (key.isNotEmpty && provider == 'gemini') {
+      if (key.isNotEmpty) {
         final prompt =
             'You are Athena, a thoughtful literary reading companion.\n'
-            '${selectedText != null ? "Selected Context: $selectedText\n\n" : (passageText != null ? "Passage: $passageText\n\n" : "")}'
+            '${selectedText != null ? "Selected Context: $selectedText\n\n" : (textForPrompt.isNotEmpty ? "Passage: $textForPrompt\n\n" : "")}'
             'User Question: $question\n\n'
             'Please provide a clear, concise (under 120 words), insightful explanation directly answering the question.';
-        final effectiveModel = model.isNotEmpty ? model : 'gemini-2.5-flash';
-        final url =
-            'https://generativelanguage.googleapis.com/v1beta/models/$effectiveModel:generateContent?key=$key';
-        final resp = await Dio().post(
-          url,
-          data: {
-            'contents': [
-              {
-                'parts': [
-                  {'text': prompt}
-                ]
-              }
-            ]
-          },
-          options: Options(receiveTimeout: const Duration(seconds: 15)),
-        );
-        if (resp.statusCode == 200 && resp.data is Map) {
-          final cand = (resp.data['candidates'] as List?)?.firstOrNull;
-          final part =
-              (cand?['content']?['parts'] as List?)?.firstOrNull;
-          final text = part?['text']?.toString() ?? '';
-          if (text.isNotEmpty) {
-            return {
-              'status': 'ok',
-              'answer': text.trim(),
-              'citations': [],
-              'source': 'direct_gemini',
-            };
+
+        if (provider == 'gemini') {
+          final effectiveModel = model.isNotEmpty ? model : 'gemini-2.5-flash';
+          final url =
+              'https://generativelanguage.googleapis.com/v1beta/models/$effectiveModel:generateContent?key=$key';
+          final resp = await Dio().post(
+            url,
+            data: {
+              'contents': [
+                {
+                  'parts': [
+                    {'text': prompt}
+                  ]
+                }
+              ]
+            },
+            options: Options(receiveTimeout: const Duration(seconds: 15)),
+          );
+          if (resp.statusCode == 200 && resp.data is Map) {
+            final cand = (resp.data['candidates'] as List?)?.firstOrNull;
+            final part =
+                (cand?['content']?['parts'] as List?)?.firstOrNull;
+            final text = part?['text']?.toString() ?? '';
+            if (text.isNotEmpty) {
+              return {
+                'status': 'ok',
+                'answer': text.trim(),
+                'citations': [],
+                'source': 'direct_gemini',
+              };
+            }
+          }
+        } else if (provider == 'groq' ||
+            provider == 'openrouter' ||
+            provider == 'openai' ||
+            provider == 'custom') {
+          String compUrl;
+          if (provider == 'groq') {
+            compUrl = 'https://api.groq.com/openai/v1/chat/completions';
+          } else if (provider == 'openai') {
+            compUrl = 'https://api.openai.com/v1/chat/completions';
+          } else if (provider == 'openrouter') {
+            compUrl = 'https://openrouter.ai/api/v1/chat/completions';
+          } else {
+            final b = (prefs.getString('athena_ai_primary_base_url') ??
+                    'https://api.openai.com/v1')
+                .replaceAll(RegExp(r'/+$'), '');
+            compUrl = b.endsWith('/chat/completions')
+                ? b
+                : '$b/chat/completions';
+          }
+
+          final resp = await Dio().post(
+            compUrl,
+            data: {
+              'model': model.isNotEmpty
+                  ? model
+                  : (provider == 'groq'
+                      ? 'llama-3.3-70b-versatile'
+                      : 'gpt-4o-mini'),
+              'messages': [
+                {
+                  'role': 'system',
+                  'content':
+                      'You are Athena, a thoughtful literary reading companion.'
+                },
+                {'role': 'user', 'content': prompt},
+              ],
+              'max_tokens': 200,
+            },
+            options: Options(
+              headers: {
+                'Authorization': 'Bearer $key',
+                'Content-Type': 'application/json',
+              },
+              receiveTimeout: const Duration(seconds: 15),
+            ),
+          );
+          if (resp.statusCode == 200 && resp.data is Map) {
+            final choice = (resp.data['choices'] as List?)?.firstOrNull;
+            final text = choice?['message']?['content']?.toString() ?? '';
+            if (text.isNotEmpty) {
+              return {
+                'status': 'ok',
+                'answer': text.trim(),
+                'citations': [],
+                'source': 'direct_$provider',
+              };
+            }
           }
         }
       }
     } catch (_) {}
 
-    // 3. Grounded passage fallback
+    // 4. Grounded passage fallback
     final rawText = (selectedText != null && selectedText.isNotEmpty)
         ? selectedText
-        : (passageText ?? '');
+        : textForPrompt;
     if (rawText.isNotEmpty) {
       final sentences = rawText
           .split(RegExp(r'(?<=[.!?])\s+'))
@@ -1089,6 +1289,8 @@ class ApiClient {
     String? apiKey,
     String? baseUrl,
   }) async {
+    final pKey = provider.toLowerCase();
+
     // 1. Try companion backend
     if (AppConfig.apiBaseUrl.isNotEmpty) {
       try {
@@ -1115,7 +1317,57 @@ class ApiClient {
       } catch (_) {}
     }
 
-    // 2. Direct on-device models discovery
+    // 2. Direct on-device models discovery for Gemini
+    if (pKey == 'gemini') {
+      final cleanKey = (apiKey ?? '').trim();
+      final List<AIModelOption> defaultGemini = const [
+        AIModelOption(id: 'gemini-2.5-flash', name: 'Gemini 2.5 Flash'),
+        AIModelOption(id: 'gemini-2.5-pro', name: 'Gemini 2.5 Pro'),
+        AIModelOption(id: 'gemini-2.0-flash', name: 'Gemini 2.0 Flash'),
+      ];
+      if (cleanKey.isEmpty) return defaultGemini;
+
+      try {
+        final client = Dio(BaseOptions(
+          connectTimeout: const Duration(seconds: 5),
+          receiveTimeout: const Duration(seconds: 6),
+        ));
+        final mResp = await client.get(
+            'https://generativelanguage.googleapis.com/v1beta/models?key=$cleanKey');
+        if (mResp.statusCode == 200 && mResp.data is Map) {
+          final rawModels = (mResp.data as Map)['models'] as List? ?? [];
+          final List<AIModelOption> models = [];
+          for (final item in rawModels) {
+            if (item is! Map) continue;
+            final mName = item['name']?.toString() ?? '';
+            final slug =
+                mName.startsWith('models/') ? mName.substring(7) : mName;
+            final methods =
+                (item['supportedGenerationMethods'] as List?)?.cast<String>() ??
+                    [];
+            if (methods.isNotEmpty && !methods.contains('generateContent')) {
+              continue;
+            }
+            final low = slug.toLowerCase();
+            if (low.contains('embedding') ||
+                low.contains('tts') ||
+                low.contains('whisper') ||
+                low.contains('aqa') ||
+                low.contains('imagen')) {
+              continue;
+            }
+            models.add(AIModelOption(
+              id: slug,
+              name: item['displayName'] ?? slug,
+            ));
+          }
+          if (models.isNotEmpty) return models;
+        }
+      } catch (_) {}
+      return defaultGemini;
+    }
+
+    // 3. Direct on-device models discovery for other providers
     final res = await directTestProvider(
       provider: provider,
       apiKey: apiKey,
@@ -1134,7 +1386,26 @@ class ApiClient {
       }).toList();
     }
 
-    // 3. Never return static hardcoded models without API key verification
+    if (pKey == 'groq') {
+      return const [
+        AIModelOption(
+            id: 'llama-3.3-70b-versatile', name: 'Llama 3.3 70B Versatile'),
+        AIModelOption(id: 'llama-3.1-8b-instant', name: 'Llama 3.1 8B Instant'),
+      ];
+    } else if (pKey == 'openai') {
+      return const [
+        AIModelOption(id: 'gpt-4o-mini', name: 'GPT-4o Mini'),
+        AIModelOption(id: 'gpt-4o', name: 'GPT-4o'),
+      ];
+    } else if (pKey == 'anthropic') {
+      return const [
+        AIModelOption(
+            id: 'claude-3-5-haiku-20241022', name: 'Claude 3.5 Haiku'),
+        AIModelOption(
+            id: 'claude-3-5-sonnet-20241022', name: 'Claude 3.5 Sonnet'),
+      ];
+    }
+
     return const [];
   }
 
@@ -1169,70 +1440,75 @@ class ApiClient {
 
     try {
       if (pKey == 'gemini') {
-        // Query Google Gemini API directly to recognize all valid models for this API key
-        final modelsUrl =
-            'https://generativelanguage.googleapis.com/v1beta/models?key=$cleanKey';
-        final mResp = await client.get(modelsUrl);
+        final targetModel = (model != null && model.isNotEmpty) ? model : 'gemini-2.5-flash';
+        final genUrl =
+            'https://generativelanguage.googleapis.com/v1beta/models/$targetModel:generateContent?key=$cleanKey';
+        final genResp = await client.post(
+          genUrl,
+          data: {
+            'contents': [
+              {
+                'parts': [
+                  {'text': 'Say OK'}
+                ]
+              }
+            ]
+          },
+          options: Options(headers: {'Content-Type': 'application/json'}),
+        );
         sw.stop();
-        if (mResp.statusCode == 200 && mResp.data is Map) {
-          final rawModels =
-              (mResp.data as Map)['models'] as List? ?? [];
-          final List<Map<String, dynamic>> models = [];
-          for (final item in rawModels) {
-            if (item is! Map) continue;
-            final mName = item['name']?.toString() ?? '';
-            final slug = mName.startsWith('models/')
-                ? mName.substring(7)
-                : mName;
-            final methods =
-                (item['supportedGenerationMethods'] as List?)
-                        ?.cast<String>() ??
-                    [];
-            if (methods.isNotEmpty &&
-                !methods.contains('generateContent')) {
-              continue;
+        if (genResp.statusCode == 200) {
+          List<Map<String, dynamic>> models = [
+            {'id': 'gemini-2.5-flash', 'name': 'Gemini 2.5 Flash'},
+            {'id': 'gemini-2.5-pro', 'name': 'Gemini 2.5 Pro'},
+            {'id': 'gemini-2.0-flash', 'name': 'Gemini 2.0 Flash'},
+          ];
+          try {
+            final modelsUrl =
+                'https://generativelanguage.googleapis.com/v1beta/models?key=$cleanKey';
+            final mResp = await client.get(modelsUrl);
+            if (mResp.statusCode == 200 && mResp.data is Map) {
+              final rawModels =
+                  (mResp.data as Map)['models'] as List? ?? [];
+              final List<Map<String, dynamic>> fetched = [];
+              for (final item in rawModels) {
+                if (item is! Map) continue;
+                final mName = item['name']?.toString() ?? '';
+                final slug = mName.startsWith('models/')
+                    ? mName.substring(7)
+                    : mName;
+                final methods =
+                    (item['supportedGenerationMethods'] as List?)
+                            ?.cast<String>() ??
+                        [];
+                if (methods.isNotEmpty &&
+                    !methods.contains('generateContent')) {
+                  continue;
+                }
+                final low = slug.toLowerCase();
+                if (low.contains('embedding') ||
+                    low.contains('tts') ||
+                    low.contains('whisper') ||
+                    low.contains('aqa') ||
+                    low.contains('imagen')) {
+                  continue;
+                }
+                fetched.add({
+                  'id': slug,
+                  'name': item['displayName'] ?? slug,
+                });
+              }
+              if (fetched.isNotEmpty) models = fetched;
             }
-            final low = slug.toLowerCase();
-            if (low.contains('embedding') ||
-                low.contains('tts') ||
-                low.contains('whisper') ||
-                low.contains('aqa') ||
-                low.contains('imagen')) {
-              continue;
-            }
-            models.add({
-              'id': slug,
-              'name': item['displayName'] ?? slug,
-            });
-          }
-
-          if (models.isEmpty) {
-            return {
-              'ok': false,
-              'valid': false,
-              'status': 'error',
-              'latency_ms': sw.elapsedMilliseconds,
-              'message': 'No text generation models found for this API key.',
-              'models': [],
-            };
-          }
+          } catch (_) {}
 
           return {
             'ok': true,
             'valid': true,
             'status': 'success',
             'latency_ms': sw.elapsedMilliseconds,
-            'message': 'Connected to Google Gemini! Recognized ${models.length} models.',
+            'message': 'Connected to Google Gemini!',
             'models': models,
-          };
-        } else {
-          return {
-            'ok': false,
-            'valid': false,
-            'status': 'error',
-            'latency_ms': sw.elapsedMilliseconds,
-            'message': 'Gemini returned HTTP ${mResp.statusCode}',
-            'models': [],
           };
         }
       } else if (pKey == 'anthropic') {

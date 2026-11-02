@@ -141,6 +141,11 @@ class _ProcessingScreenState extends ConsumerState<ProcessingScreen>
 
         if (status.isDone) {
           _pollTimer?.cancel();
+          if (status.isReady) {
+            Future.delayed(const Duration(milliseconds: 300), () {
+              if (mounted) context.go('/reader/${widget.documentId}');
+            });
+          }
         }
       }
     } on AppError catch (_) {
@@ -226,7 +231,7 @@ class _ProcessingScreenState extends ConsumerState<ProcessingScreen>
     final isDark = Theme.of(context).brightness == Brightness.dark;
     final stageIdx = _currentStageIndex();
     final percent = _status?.percent ?? 0;
-    final isReady = (_status?.isReady ?? false) && percent >= 100;
+    final isReady = _status?.isReady ?? false;
     final isDone = isReady;
     final isFailed = _status?.isFailed ?? false;
     final isUnsupported = _status?.isUnsupported ?? false;

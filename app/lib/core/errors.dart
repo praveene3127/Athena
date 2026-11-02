@@ -23,7 +23,7 @@ class AppError implements Exception {
   };
 
   @override
-  String toString() => message.isNotEmpty ? message : getDisplayMessage(code);
+  String toString() => message;
 
   static String getDisplayMessage(String code, [String? fallback]) {
     return userMessages[code] ??

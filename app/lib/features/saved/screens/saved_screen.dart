@@ -104,7 +104,7 @@ final savedCardsProvider =
                 chunkId: '',
                 sequence: (item['chunkSeq'] as num?)?.toInt() ?? 1,
                 pageReference: 'Saved Note',
-                cardType: 'explain',
+                cardType: item['cardType']?.toString() ?? 'user_highlight',
                 title: item['title']?.toString() ?? '',
                 body: item['body']?.toString() ?? '',
                 citations: ((item['citations'] as List?) ?? [])

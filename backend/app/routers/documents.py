@@ -709,6 +709,7 @@ def get_reader(
             "reading_mode": saved_reading_mode,
         },
         "items": items,
+        "chunks": [it for it in items if it.get("type") == "reading_chunk"],
         "cards": all_cards,
     }
 

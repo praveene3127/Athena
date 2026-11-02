@@ -1,4 +1,5 @@
-import 'package:flutter/foundation.dart' show kIsWeb;
+import 'package:flutter/foundation.dart'
+    show kIsWeb, defaultTargetPlatform, TargetPlatform;
 import 'package:shared_preferences/shared_preferences.dart';
 
 class AppConfig {
@@ -13,6 +14,11 @@ class AppConfig {
   );
 
   static const String nativeFallback = 'http://127.0.0.1:8000';
+
+  static bool get hasActiveBackend =>
+      kIsWeb ||
+      (_runtimeBaseUrl != null && _runtimeBaseUrl!.isNotEmpty) ||
+      _configured.isNotEmpty;
 
   static bool get isCustomServerConfigured =>
       _runtimeBaseUrl != null && _runtimeBaseUrl!.isNotEmpty;
@@ -57,16 +63,19 @@ class AppConfig {
   /// Web: same-origin whenever the page is not a raw loopback compile default.
   /// LAN IPs and tunnels always use [origin]. Loopback (`localhost` / `127.0.0.1`)
   /// also uses [origin] so `:8000` and the `:8080` forwarder hit `/api/health`.
-  /// Native: saved Server URL, then `--dart-define`, then USB loopback.
+  /// Native: saved Server URL, then `--dart-define`, then on mobile standalone mode (empty string),
+  /// or USB loopback when testing/specified.
   static String resolveBaseUrl({
     required bool isWeb,
     required String host,
     required String origin,
     String? runtime,
     String configured = '',
+    bool isMobile = false,
   }) {
     if (runtime != null && runtime.isNotEmpty) return runtime;
     if (configured.isNotEmpty) return configured;
+    if (isMobile) return '';
     if (isWeb) {
       final cleanOrigin = origin.trim();
       if (cleanOrigin.isEmpty || cleanOrigin == 'null') {
@@ -91,12 +100,16 @@ class AppConfig {
         host = Uri.base.host;
       } catch (_) {}
     }
+    final isMobile = !kIsWeb &&
+        (defaultTargetPlatform == TargetPlatform.android ||
+            defaultTargetPlatform == TargetPlatform.iOS);
     return resolveBaseUrl(
       isWeb: kIsWeb,
       host: host,
       origin: origin,
       runtime: _runtimeBaseUrl,
       configured: _configured,
+      isMobile: isMobile,
     );
   }
 
