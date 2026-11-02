@@ -12,6 +12,11 @@ import re
 from collections import Counter
 from typing import Any, Dict, List, Tuple
 
+try:
+    from athena_rust_core import rust_hybrid_bm25_search as _rust_bm25_search
+except ImportError:
+    _rust_bm25_search = None
+
 
 def _tokenize(text: str) -> List[str]:
     """Tokenizes text into lowercase alphanumeric words."""
@@ -38,6 +43,7 @@ class BM25Index:
         """Fits index on a list of (doc_id, text) tuples."""
         self.doc_ids = []
         self.doc_lengths = []
+        self.doc_texts = [text for _, text in docs]
         self.term_freqs = []
         self.doc_freqs = Counter()
         self.num_docs = len(docs)
@@ -64,6 +70,16 @@ class BM25Index:
         """Scores all indexed documents against query using BM25."""
         if self.num_docs == 0:
             return []
+
+        if _rust_bm25_search is not None and getattr(self, "doc_texts", None) and len(self.doc_texts) == self.num_docs:
+            try:
+                ranked = _rust_bm25_search(self.doc_texts, query, self.num_docs)
+                score_map = dict(ranked)
+                results = [(self.doc_ids[i], score_map.get(i, 0.0)) for i in range(self.num_docs)]
+                results.sort(key=lambda x: x[1], reverse=True)
+                return results
+            except Exception:
+                pass
 
         query_tokens = _tokenize(query)
         if not query_tokens:
@@ -92,6 +108,29 @@ class BM25Index:
         results = [(self.doc_ids[i], scores[i]) for i in range(self.num_docs)]
         results.sort(key=lambda x: x[1], reverse=True)
         return results
+
+
+def search_fts5(document_id: str, query: str, top_k: int = 20) -> List[Tuple[str, float]]:
+    """Runs BM25 query directly inside SQLite C engine using FTS5 virtual table."""
+    try:
+        from app.db import engine
+        from sqlalchemy import text
+        clean_q = re.sub(r'[^\w\s]', ' ', query).strip()
+        if not clean_q:
+            return []
+        terms = [t for t in clean_q.split() if t]
+        match_expr = " OR ".join(f'"{t}"*' for t in terms)
+        with engine.connect() as conn:
+            stmt = text(
+                "SELECT chunk_id, bm25(reading_chunks_fts) as score "
+                "FROM reading_chunks_fts "
+                "WHERE document_id = :doc_id AND reading_chunks_fts MATCH :match_expr "
+                "ORDER BY score LIMIT :top_k"
+            )
+            rows = conn.execute(stmt, {"doc_id": document_id, "match_expr": match_expr, "top_k": top_k}).fetchall()
+            return [(r[0], -float(r[1])) for r in rows]
+    except Exception:
+        return []
 
 
 class DenseRetriever:

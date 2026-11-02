@@ -7,6 +7,19 @@ logger = logging.getLogger("athena.providers")
 
 DEFAULT_TIMEOUT = 12.0
 
+_shared_async_client: Optional[httpx.AsyncClient] = None
+
+def get_shared_async_client() -> httpx.AsyncClient:
+    global _shared_async_client
+    if _shared_async_client is None or _shared_async_client.is_closed:
+        _shared_async_client = httpx.AsyncClient(
+            timeout=DEFAULT_TIMEOUT,
+            follow_redirects=True,
+            limits=httpx.Limits(max_keepalive_connections=10, max_connections=20),
+            http2=True,
+        )
+    return _shared_async_client
+
 PROVIDER_CONFIGS = {
     "openrouter": {
         "name": "OpenRouter",
@@ -130,20 +143,20 @@ async def fetch_provider_models(
             params["key"] = clean_key
 
     try:
-        async with httpx.AsyncClient(timeout=DEFAULT_TIMEOUT, follow_redirects=True) as client:
-            resp = await client.get(endpoint, headers=headers, params=params)
-            if resp.status_code == 200:
-                data = resp.json()
-                parsed = _parse_models_response(provider_key, data)
-                if parsed:
-                    return parsed
-            else:
-                logger.warning(
-                    "Dynamic model fetch for %s failed with HTTP %s: %s",
-                    provider_key,
-                    resp.status_code,
-                    resp.text[:200],
-                )
+        client = get_shared_async_client()
+        resp = await client.get(endpoint, headers=headers, params=params)
+        if resp.status_code == 200:
+            data = resp.json()
+            parsed = _parse_models_response(provider_key, data)
+            if parsed:
+                return parsed
+        else:
+            logger.warning(
+                "Dynamic model fetch for %s failed with HTTP %s: %s",
+                provider_key,
+                resp.status_code,
+                resp.text[:200],
+            )
     except Exception as exc:
         logger.warning("Dynamic model fetch for %s encountered error: %s", provider_key, exc)
 
@@ -236,25 +249,25 @@ async def test_provider_model(
         # 1. First test credentials via official models catalog
         models_url = f"https://generativelanguage.googleapis.com/v1beta/models?key={clean_key}"
         try:
-            async with httpx.AsyncClient(timeout=DEFAULT_TIMEOUT) as client:
-                resp = await client.get(models_url)
-                latency_ms = int((time.perf_counter() - t0) * 1000)
-                if resp.status_code == 200:
-                    data = resp.json()
-                    live_models = _parse_models_response("gemini", data)
-                    return {
-                        "ok": True,
-                        "latency_ms": latency_ms,
-                        "message": f"Verified ({len(live_models)} models discovered)",
-                        "models": live_models,
-                    }
-                else:
-                    return {
-                        "ok": False,
-                        "latency_ms": latency_ms,
-                        "message": f"Gemini error {resp.status_code}: {resp.text[:120]}",
-                        "models": [],
-                    }
+            client = get_shared_async_client()
+            resp = await client.get(models_url)
+            latency_ms = int((time.perf_counter() - t0) * 1000)
+            if resp.status_code == 200:
+                data = resp.json()
+                live_models = _parse_models_response("gemini", data)
+                return {
+                    "ok": True,
+                    "latency_ms": latency_ms,
+                    "message": f"Verified ({len(live_models)} models discovered)",
+                    "models": live_models,
+                }
+            else:
+                return {
+                    "ok": False,
+                    "latency_ms": latency_ms,
+                    "message": f"Gemini error {resp.status_code}: {resp.text[:120]}",
+                    "models": [],
+                }
         except Exception as e:
             return {"ok": False, "latency_ms": 0, "message": f"Connection failed: {str(e)}", "models": []}
 
@@ -272,24 +285,24 @@ async def test_provider_model(
             "messages": [{"role": "user", "content": "ping"}],
         }
         try:
-            async with httpx.AsyncClient(timeout=DEFAULT_TIMEOUT) as client:
-                resp = await client.post(url, headers=headers, json=payload)
-                latency_ms = int((time.perf_counter() - t0) * 1000)
-                if resp.status_code == 200:
-                    live_models = await fetch_provider_models("anthropic", clean_key, base_url)
-                    return {
-                        "ok": True,
-                        "latency_ms": latency_ms,
-                        "message": "Connection verified",
-                        "models": live_models,
-                    }
-                else:
-                    return {
-                        "ok": False,
-                        "latency_ms": latency_ms,
-                        "message": f"Anthropic error {resp.status_code}: {resp.text[:120]}",
-                        "models": [],
-                    }
+            client = get_shared_async_client()
+            resp = await client.post(url, headers=headers, json=payload)
+            latency_ms = int((time.perf_counter() - t0) * 1000)
+            if resp.status_code == 200:
+                live_models = await fetch_provider_models("anthropic", clean_key, base_url)
+                return {
+                    "ok": True,
+                    "latency_ms": latency_ms,
+                    "message": "Connection verified",
+                    "models": live_models,
+                }
+            else:
+                return {
+                    "ok": False,
+                    "latency_ms": latency_ms,
+                    "message": f"Anthropic error {resp.status_code}: {resp.text[:120]}",
+                    "models": [],
+                }
         except Exception as e:
             return {"ok": False, "latency_ms": 0, "message": f"Connection failed: {str(e)}", "models": []}
 
@@ -302,19 +315,19 @@ async def test_provider_model(
             headers["Authorization"] = f"Bearer {clean_key}"
 
         try:
-            async with httpx.AsyncClient(timeout=DEFAULT_TIMEOUT) as client:
-                resp = await client.get(models_endpoint, headers=headers)
-                latency_ms = int((time.perf_counter() - t0) * 1000)
-                if resp.status_code == 200:
-                    data = resp.json()
-                    live_models = _parse_models_response(provider_key, data)
-                    return {
-                        "ok": True,
-                        "latency_ms": latency_ms,
-                        "message": f"Verified ({len(live_models)} models discovered)",
-                        "models": live_models,
-                    }
-                elif resp.status_code in (401, 403):
+            client = get_shared_async_client()
+            resp = await client.get(models_endpoint, headers=headers)
+            latency_ms = int((time.perf_counter() - t0) * 1000)
+            if resp.status_code == 200:
+                data = resp.json()
+                live_models = _parse_models_response(provider_key, data)
+                return {
+                    "ok": True,
+                    "latency_ms": latency_ms,
+                    "message": f"Verified ({len(live_models)} models discovered)",
+                    "models": live_models,
+                }
+            elif resp.status_code in (401, 403):
                     return {
                         "ok": False,
                         "latency_ms": latency_ms,

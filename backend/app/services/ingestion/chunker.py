@@ -14,6 +14,11 @@ from typing import Any, Dict, List, Tuple
 from app.services.ingestion.canonical import find_safe_sentence_boundaries
 from app.services.ingestion.arrangement import classify_block, UnitType
 
+try:
+    from athena_rust_core import rust_plan_feed_chunks as _rust_plan_feed_chunks
+except ImportError:
+    _rust_plan_feed_chunks = None
+
 
 _FEED_MIN_WORDS = 25
 _FEED_MAX_WORDS = 90
@@ -352,6 +357,27 @@ def _plan_feed_chunks(
     """Choose contiguous atom ranges with a bounded, low-variance reading cadence."""
     if not atoms:
         return []
+
+    if _rust_plan_feed_chunks is not None:
+        try:
+            atom_starts = [int(a["start"]) for a in atoms]
+            atom_ends = [int(a["end"]) for a in atoms]
+            atom_words = [int(a["word_count"]) for a in atoms]
+            atom_para_ids = [int(a["paragraph_id"]) for a in atoms]
+            atom_is_sentence = [bool(a.get("boundary_after") == "sentence") for a in atoms]
+            atom_starts_section = [bool(a.get("starts_section", False)) for a in atoms]
+            return _rust_plan_feed_chunks(
+                canonical_text,
+                atom_starts,
+                atom_ends,
+                atom_words,
+                atom_para_ids,
+                atom_is_sentence,
+                atom_starts_section,
+                int(target_words),
+            )
+        except Exception:
+            pass
 
     min_words = max(_FEED_MIN_WORDS, int(target_words * 0.55))
     costs = [float("inf")] * (len(atoms) + 1)

@@ -655,6 +655,14 @@ class _ReaderScreenState extends ConsumerState<ReaderScreen> {
           setState(() {
             _cardsByChunkSeq[seq] = cardItem;
           });
+          WidgetsBinding.instance.addPostFrameCallback((_) {
+            if (mounted && _readingMode == 'feed' && _pageController != null && _pageController!.hasClients) {
+              _pageController!.nextPage(
+                duration: const Duration(milliseconds: 350),
+                curve: Curves.easeInOutCubic,
+              );
+            }
+          });
           ScaffoldMessenger.of(context).showSnackBar(
             const SnackBar(
               content: Text('✨ Context Card ready! Swipe up to read.'),
@@ -783,7 +791,7 @@ class _ReaderScreenState extends ConsumerState<ReaderScreen> {
     }
   }
 
-  static List<String> _splitChunkIntoMicroBeats(String text, {int maxChars = 460}) {
+  static List<String> _splitChunkIntoMicroBeats(String text, {int maxChars = 380}) {
     if (text.length <= maxChars) return [text];
 
     final sentences = text.split(RegExp(r'(?<=[.!?])\s+'));
@@ -816,7 +824,7 @@ class _ReaderScreenState extends ConsumerState<ReaderScreen> {
       currentBeat.write(trimmed);
     }
     if (currentBeat.isNotEmpty) {
-      if (beats.isNotEmpty && currentBeat.length < 100 && (beats.last.length + currentBeat.length + 1) <= maxChars + 80) {
+      if (beats.isNotEmpty && currentBeat.length < 80 && (beats.last.length + currentBeat.length + 1) <= maxChars + 60) {
         beats[beats.length - 1] = '${beats.last} ${currentBeat.toString().trim()}';
       } else {
         beats.add(currentBeat.toString().trim());
@@ -827,12 +835,32 @@ class _ReaderScreenState extends ConsumerState<ReaderScreen> {
 
   List<ReaderItem> _getFeedItems(List<ReaderItem> rawItems) {
     final chunks = rawItems.where((it) => it.isReadingChunk).toList();
+    final rawCards = rawItems.where((it) => it.isContextCard).toList();
+    final chunkSeqById = {for (final c in chunks) c.id: c.sequence ?? 0};
+
+    final cardsBySeq = <int, List<ReaderItem>>{};
+    final assignedCardIds = <String>{};
+
+    for (final card in rawCards) {
+      final seq = (card.insertAfter != null ? chunkSeqById[card.insertAfter] : null) ?? card.sequence;
+      if (seq != null && seq > 0) {
+        cardsBySeq.putIfAbsent(seq, () => []).add(card);
+        assignedCardIds.add(card.id);
+      }
+    }
+    for (final entry in _cardsByChunkSeq.entries) {
+      cardsBySeq.putIfAbsent(entry.key, () => []).add(entry.value);
+      assignedCardIds.add(entry.value.id);
+    }
+
+    final unassignedCards = rawCards.where((c) => !assignedCardIds.contains(c.id)).toList();
+    int unassignedIdx = 0;
 
     final feedItems = <ReaderItem>[];
 
     for (final chunk in chunks) {
       final raw = chunk.rawText;
-      final beats = _splitChunkIntoMicroBeats(raw, maxChars: 460);
+      final beats = _splitChunkIntoMicroBeats(raw, maxChars: 380);
       if (beats.length <= 1) {
         feedItems.add(chunk);
       } else {
@@ -849,12 +877,18 @@ class _ReaderScreenState extends ConsumerState<ReaderScreen> {
 
       final seq = chunk.sequence ?? 0;
 
-      final card = _cardsByChunkSeq[seq];
-
-      if (card != null &&
-          _showContextCards &&
-          !_dismissedCardIds.contains(card.id)) {
-        feedItems.add(card);
+      final matchedCards = cardsBySeq[seq];
+      if (matchedCards != null && _showContextCards) {
+        for (final card in matchedCards) {
+          if (!_dismissedCardIds.contains(card.id)) {
+            feedItems.add(card);
+          }
+        }
+      } else if (_showContextCards && unassignedIdx < unassignedCards.length && (seq % 3 == 0 || seq == 2)) {
+        final card = unassignedCards[unassignedIdx++];
+        if (!_dismissedCardIds.contains(card.id)) {
+          feedItems.add(card);
+        }
       }
     }
 
@@ -2716,9 +2750,7 @@ class _ReaderScreenState extends ConsumerState<ReaderScreen> {
 
                     return KeyEventResult.ignored;
                   },
-                  child: Stack(
-                    children: [
-                      _readingMode == 'flow'
+                  child: _readingMode == 'flow'
                           ? ScrollablePositionedList.builder(
                               itemScrollController: _itemScrollController,
                               itemPositionsListener: _itemPositionsListener,
@@ -3015,17 +3047,16 @@ class _ReaderScreenState extends ConsumerState<ReaderScreen> {
                                         ? (feedItems[index + 1].title ?? 'AI Marginalia')
                                         : '';
 
-                                    return SizedBox.expand(
-                                      child: Padding(
-                                        padding: EdgeInsets.only(
-                                            bottom: 76.0 +
-                                                MediaQuery.paddingOf(context)
-                                                    .bottom),
-                                        child: Center(
-                                          child: SingleChildScrollView(
-                                            physics:
-                                                const ClampingScrollPhysics(),
-                                            child: Column(
+                                    return RepaintBoundary(
+                                      child: SizedBox.expand(
+                                        child: Padding(
+                                          padding: const EdgeInsets.symmetric(
+                                              horizontal: 16, vertical: 8),
+                                          child: Center(
+                                            child: SingleChildScrollView(
+                                              physics:
+                                                  const NeverScrollableScrollPhysics(),
+                                              child: Column(
                                               mainAxisSize: MainAxisSize.min,
                                               crossAxisAlignment:
                                                   CrossAxisAlignment.stretch,
@@ -3151,166 +3182,163 @@ class _ReaderScreenState extends ConsumerState<ReaderScreen> {
                                       ),
                                     ),
                                   ),
-                                );
-                              } else if (item.isContextCard) {
-                                return SizedBox.expand(
-                                      child: Padding(
-                                        padding: EdgeInsets.only(
-                                            bottom: 76.0 +
-                                                MediaQuery.paddingOf(context)
-                                                    .bottom),
-                                        child: Center(
-                                          child: RepaintBoundary(
-                                            child: ContextCardWidget(
-                                              card: item,
-                                              themeId: _themeId,
-                                              isFeedMode: true,
-                                              isBrainDeckSaved:
-                                                  _isCardInBrainDeck(item.id),
-                                              onToggleBrainDeck: () =>
-                                                  _toggleBrainDeck(
-                                                item,
-                                                data.title,
-                                                item.sequence ?? 1,
-                                              ),
-                                              onToggleSave: () async {
-                                                final currentlySaved =
-                                                    item.saved ?? false;
-
-                                                if (currentlySaved) {
-                                                  await apiClient.unsaveCard(item.id);
-                                                } else {
-                                                  await apiClient.saveCard(item.id);
-                                                }
-
-                                                ref.invalidate(readerDataProvider(
-                                                    widget.documentId));
-                                              },
-                                              onDismiss: () => _dismissCard(item),
-                                              onAskAthena: () => _openAskSheetForCard(
-                                                  item, feedItems),
-                                            ),
-                                          ),
+                                ),
+                              );
+                            } else if (item.isContextCard) {
+                              return RepaintBoundary(
+                                child: SizedBox.expand(
+                                  child: Padding(
+                                    padding: const EdgeInsets.symmetric(
+                                        horizontal: 16, vertical: 8),
+                                    child: Center(
+                                      child: ContextCardWidget(
+                                        card: item,
+                                        themeId: _themeId,
+                                        isFeedMode: true,
+                                        isBrainDeckSaved:
+                                            _isCardInBrainDeck(item.id),
+                                        onToggleBrainDeck: () =>
+                                            _toggleBrainDeck(
+                                          item,
+                                          data.title,
+                                          item.sequence ?? 1,
                                         ),
+                                        onToggleSave: () async {
+                                          final currentlySaved =
+                                              item.saved ?? false;
+
+                                          if (currentlySaved) {
+                                            await apiClient.unsaveCard(item.id);
+                                          } else {
+                                            await apiClient.saveCard(item.id);
+                                          }
+
+                                          ref.invalidate(readerDataProvider(
+                                              widget.documentId));
+                                        },
+                                        onDismiss: () => _dismissCard(item),
+                                        onAskAthena: () => _openAskSheetForCard(
+                                            item, feedItems),
                                       ),
-                                    );
-                                  }
-
-                                  return const SizedBox.shrink();
-                                },
-                              ),
-                            ),
-
-                      // Single Minimal Bottom Pill: < 1 / 857 >
-
-                      Positioned(
-                        bottom: 12 + MediaQuery.paddingOf(context).bottom,
-                        left: 0,
-                        right: 0,
-                        child: Center(
-                          child: Container(
-                            padding: const EdgeInsets.symmetric(
-                                horizontal: 10, vertical: 5),
-                            decoration: BoxDecoration(
-                              color: theme.isDark
-                                  ? const Color(0xFF1E221E)
-                                  : const Color(0xFF141714),
-                              borderRadius: BorderRadius.circular(6),
-                              border: Border.all(
-                                color: Colors.white.withValues(alpha: 0.16),
-                                width: 1.0,
-                              ),
-                              boxShadow: const [
-                                BoxShadow(
-                                  color: Color(0x38000000),
-                                  blurRadius: 22,
-                                  offset: Offset(0, 6),
+                                    ),
+                                  ),
                                 ),
-                              ],
-                            ),
-                            child: Row(
-                              mainAxisSize: MainAxisSize.min,
-                              children: [
-                                IconButton(
-                                  icon: const Icon(Icons.chevron_left_rounded,
-                                      color: Colors.white, size: 22),
-                                  tooltip:
-                                      'Previous card (Up Arrow / Scroll Up)',
-                                  padding: EdgeInsets.zero,
-                                  constraints: const BoxConstraints(
-                                      minWidth: 44, minHeight: 44),
-                                  onPressed: _lastVisibleIndex > 0
-                                      ? _previousCard
-                                      : null,
-                                ),
-                                const SizedBox(width: 4),
-                                Builder(
-                                  builder: (context) {
-                                    final currentItem =
-                                        (_lastVisibleIndex >= 0 &&
-                                                _lastVisibleIndex <
-                                                    feedItems.length)
-                                            ? feedItems[_lastVisibleIndex]
-                                            : null;
+                              );
+                            }
 
-                                    final String counterLabel;
-
-                                    if (currentItem != null &&
-                                        currentItem.isReadingChunk) {
-                                      final currentSeq = currentItem.sequence ??
-                                          (_lastVisibleIndex + 1);
-
-                                      counterLabel =
-                                          '$currentSeq / ${chunks.length}';
-                                    } else if (currentItem != null &&
-                                        currentItem.isContextCard) {
-                                      final targetSeq =
-                                          currentItem.sequence ?? '';
-
-                                      counterLabel = targetSeq != ''
-                                          ? 'Context · #$targetSeq'
-                                          : 'Context';
-                                    } else {
-                                      counterLabel =
-                                          '${(_lastVisibleIndex + 1).clamp(1, feedItems.length)} / ${feedItems.length}';
-                                    }
-
-                                    return Text(
-                                      counterLabel,
-                                      style: const TextStyle(
-                                        color: Colors.white,
-                                        fontWeight: FontWeight.w700,
-                                        fontSize: 12,
-                                        letterSpacing: 0.3,
-                                      ),
-                                    );
-                                  },
-                                ),
-                                const SizedBox(width: 4),
-                                IconButton(
-                                  icon: const Icon(Icons.chevron_right_rounded,
-                                      color: Colors.white, size: 22),
-                                  tooltip:
-                                      'Next card (Down Arrow / Space / Scroll Down)',
-                                  padding: EdgeInsets.zero,
-                                  constraints: const BoxConstraints(
-                                      minWidth: 44, minHeight: 44),
-                                  onPressed:
-                                      _lastVisibleIndex < feedItems.length
-                                          ? () => _nextCard(feedItems.length)
-                                          : null,
-                                ),
-                              ],
-                            ),
-                          ),
+                            return const SizedBox.shrink();
+                          },
                         ),
                       ),
-                    ],
+          ),
+        ),
+
+        // Single Minimal Bottom Pill: < 1 / 857 > (Dedicated non-overlapping footer)
+        SafeArea(
+          top: false,
+          child: Padding(
+            padding: const EdgeInsets.only(bottom: 8.0, top: 4.0),
+            child: Center(
+              child: Container(
+                padding: const EdgeInsets.symmetric(
+                    horizontal: 10, vertical: 5),
+                decoration: BoxDecoration(
+                  color: theme.isDark
+                      ? const Color(0xFF1E221E)
+                      : const Color(0xFF141714),
+                  borderRadius: BorderRadius.circular(6),
+                  border: Border.all(
+                    color: Colors.white.withValues(alpha: 0.16),
+                    width: 1.0,
                   ),
+                  boxShadow: const [
+                    BoxShadow(
+                      color: Color(0x38000000),
+                      blurRadius: 22,
+                      offset: Offset(0, 6),
+                    ),
+                  ],
+                ),
+                child: Row(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    IconButton(
+                      icon: const Icon(Icons.chevron_left_rounded,
+                          color: Colors.white, size: 22),
+                      tooltip:
+                          'Previous card (Up Arrow / Scroll Up)',
+                      padding: EdgeInsets.zero,
+                      constraints: const BoxConstraints(
+                          minWidth: 44, minHeight: 44),
+                      onPressed: _lastVisibleIndex > 0
+                          ? _previousCard
+                          : null,
+                    ),
+                    const SizedBox(width: 4),
+                    Builder(
+                      builder: (context) {
+                        final currentItem =
+                            (_lastVisibleIndex >= 0 &&
+                                    _lastVisibleIndex <
+                                        feedItems.length)
+                                ? feedItems[_lastVisibleIndex]
+                                : null;
+
+                        final String counterLabel;
+
+                        if (currentItem != null &&
+                            currentItem.isReadingChunk) {
+                          final currentSeq = currentItem.sequence ??
+                              (_lastVisibleIndex + 1);
+
+                          counterLabel =
+                              '$currentSeq / ${chunks.length}';
+                        } else if (currentItem != null &&
+                            currentItem.isContextCard) {
+                          final targetSeq =
+                              currentItem.sequence ?? '';
+
+                          counterLabel = targetSeq != ''
+                              ? 'Context · #$targetSeq'
+                              : 'Context';
+                        } else {
+                          counterLabel =
+                              '${(_lastVisibleIndex + 1).clamp(1, feedItems.length)} / ${feedItems.length}';
+                        }
+
+                        return Text(
+                          counterLabel,
+                          style: const TextStyle(
+                            color: Colors.white,
+                            fontWeight: FontWeight.w700,
+                            fontSize: 12,
+                            letterSpacing: 0.3,
+                          ),
+                        );
+                      },
+                    ),
+                    const SizedBox(width: 4),
+                    IconButton(
+                      icon: const Icon(Icons.chevron_right_rounded,
+                          color: Colors.white, size: 22),
+                      tooltip:
+                          'Next card (Down Arrow / Space / Scroll Down)',
+                      padding: EdgeInsets.zero,
+                      constraints: const BoxConstraints(
+                          minWidth: 44, minHeight: 44),
+                      onPressed:
+                          _lastVisibleIndex < feedItems.length
+                              ? () => _nextCard(feedItems.length)
+                              : null,
+                    ),
+                  ],
                 ),
               ),
-            ],
-          );
+            ),
+          ),
+        ),
+      ],
+    );
         },
         loading: () => const Center(
           child: Column(

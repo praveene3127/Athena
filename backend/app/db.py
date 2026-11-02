@@ -56,12 +56,26 @@ def _ensure_indexes() -> None:
         conn.execute(text("CREATE INDEX IF NOT EXISTS idx_cards_doc_chunk ON context_cards(document_id, source_chunk_id)"))
 
 
+def _ensure_fts() -> None:
+    """Creates SQLite C-engine FTS5 virtual table for sub-millisecond lexical search."""
+    from sqlalchemy import text
+    with engine.begin() as conn:
+        try:
+            conn.execute(text(
+                "CREATE VIRTUAL TABLE IF NOT EXISTS reading_chunks_fts "
+                "USING fts5(chunk_id UNINDEXED, document_id UNINDEXED, sequence UNINDEXED, section_title, raw_text, tokenize='porter unicode61');"
+            ))
+        except Exception:
+            pass
+
+
 def init_db() -> None:
     """Creates all database tables defined in SQLModel metadata and ensures performance indexes."""
     import app.models  # noqa: F401
     SQLModel.metadata.create_all(engine)
     _migrate_columns()
     _ensure_indexes()
+    _ensure_fts()
 
 
 

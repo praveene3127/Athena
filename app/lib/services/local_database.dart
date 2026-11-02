@@ -226,6 +226,8 @@ class LocalDatabase {
     final cards = cardRows.map((r) => Map<String, dynamic>.from(r)).toList();
 
     final items = <Map<String, dynamic>>[];
+    final assignedCardIds = <String>{};
+
     for (final chunk in chunks) {
       final pagesJson = chunk['source_pages_json'] as String?;
       List pages = [];
@@ -253,8 +255,9 @@ class LocalDatabase {
       });
 
       final matchingCards =
-          cards.where((c) => c['source_chunk_id'] == chunk['id']);
+          cards.where((c) => c['source_chunk_id'] == chunk['id']).toList();
       for (final card in matchingCards) {
+        assignedCardIds.add(card['id'] as String);
         List citations = [];
         if (card['citations_json'] != null) {
           try {
@@ -280,6 +283,43 @@ class LocalDatabase {
       }
     }
 
+    // Interleave any remaining unassigned cards every 3 chunks so no card is orphaned
+    final unassigned = cards.where((c) => !assignedCardIds.contains(c['id'])).toList();
+    if (unassigned.isNotEmpty && items.isNotEmpty) {
+      int cardIdx = 0;
+      for (int i = 0; i < items.length && cardIdx < unassigned.length; i++) {
+        if (items[i]['type'] == 'reading_chunk') {
+          final seq = items[i]['sequence'] as int? ?? 1;
+          if (seq % 3 == 0 || seq == 2) {
+            final card = unassigned[cardIdx++];
+            List citations = [];
+            if (card['citations_json'] != null) {
+              try {
+                citations = jsonDecode(card['citations_json'] as String) as List;
+              } catch (_) {}
+            }
+            items.insert(i + 1, {
+              'type': 'context_card',
+              'id': card['id'],
+              'insert_after': items[i]['id'],
+              'sequence': seq,
+              'concept_name': card['concept_name'],
+              'card_type': card['card_type'] ?? 'context',
+              'title': card['title'] ?? '',
+              'body': card['body'] ?? '',
+              'why_here': card['why_here'] ?? '',
+              'exact_quote': card['exact_quote'],
+              'support_status': card['support_status'] ?? 'fully_supported',
+              'generation_mode': card['generation_mode'] ?? 'grounded',
+              'saved': card['saved'] == 1,
+              'citations': citations,
+            });
+            i++; // skip over inserted card
+          }
+        }
+      }
+    }
+
     final docMap = docRows.isNotEmpty
         ? Map<String, dynamic>.from(docRows.first)
         : <String, dynamic>{};
@@ -302,6 +342,24 @@ class LocalDatabase {
     final db = await database;
     final rows = await db.query('context_cards',
         where: 'saved = 1 AND dismissed = 0', orderBy: 'created_at DESC');
+    return rows.map((r) => Map<String, dynamic>.from(r)).toList();
+  }
+
+  Future<List<Map<String, dynamic>>> searchChunks(
+    String documentId,
+    String query, {
+    int limit = 10,
+  }) async {
+    final db = await database;
+    final cleanQ = query.trim();
+    if (cleanQ.isEmpty) return [];
+    final rows = await db.query(
+      'reading_chunks',
+      where: 'document_id = ? AND raw_text LIKE ?',
+      whereArgs: [documentId, '%$cleanQ%'],
+      limit: limit,
+      orderBy: 'sequence ASC',
+    );
     return rows.map((r) => Map<String, dynamic>.from(r)).toList();
   }
 

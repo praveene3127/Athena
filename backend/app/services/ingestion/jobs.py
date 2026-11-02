@@ -167,6 +167,26 @@ def process_document_job(doc_id: str) -> None:
                 session.add(chunk_row)
             session.commit()
 
+            # Sync to SQLite C-engine FTS5 virtual table
+            try:
+                from sqlalchemy import text
+                session.execute(text("DELETE FROM reading_chunks_fts WHERE document_id = :doc_id"), {"doc_id": doc_id})
+                for cd in chunk_dicts:
+                    session.execute(
+                        text("INSERT INTO reading_chunks_fts (chunk_id, document_id, sequence, section_title, raw_text) "
+                             "VALUES (:chunk_id, :document_id, :sequence, :section_title, :raw_text)"),
+                        {
+                            "chunk_id": cd["id"],
+                            "document_id": doc_id,
+                            "sequence": cd["sequence"],
+                            "section_title": cd.get("section_title") or "",
+                            "raw_text": cd["raw_text"],
+                        }
+                    )
+                session.commit()
+            except Exception:
+                pass
+
             # Build page to chunk index mapping and save TOC chapters
             raw_toc = extracted.get("raw_toc", [])
             if not raw_toc and extracted.get("printed_toc"):

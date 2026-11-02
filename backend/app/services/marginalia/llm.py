@@ -104,6 +104,19 @@ def verify_grounding(body: str, extract: str) -> bool:
     return True
 
 
+_shared_llm_http_client: Optional[httpx.Client] = None
+
+def get_shared_llm_http_client() -> httpx.Client:
+    global _shared_llm_http_client
+    if _shared_llm_http_client is None or _shared_llm_http_client.is_closed:
+        _shared_llm_http_client = httpx.Client(
+            timeout=LLM_TIMEOUT_S,
+            limits=httpx.Limits(max_keepalive_connections=10, max_connections=20),
+            http2=True,
+        )
+    return _shared_llm_http_client
+
+
 class AnthropicAdapter:
     """Lightweight adapter allowing Anthropic API to be invoked via OpenAI chat.completions signature."""
     def __init__(self, api_key: str):
@@ -136,31 +149,31 @@ class AnthropicAdapter:
             "anthropic-version": "2023-06-01",
             "content-type": "application/json",
         }
-        with httpx.Client(timeout=LLM_TIMEOUT_S) as http_client:
-            resp = http_client.post("https://api.anthropic.com/v1/messages", headers=headers, json=payload)
-            if resp.status_code != 200:
-                raise openai.APIStatusError(
-                    message=f"Anthropic error {resp.status_code}: {resp.text}",
-                    response=None,
-                    body=None,
-                )
-            data = resp.json()
-            content_blocks = data.get("content", [])
-            text = "".join(b.get("text", "") for b in content_blocks if b.get("type") == "text")
+        http_client = get_shared_llm_http_client()
+        resp = http_client.post("https://api.anthropic.com/v1/messages", headers=headers, json=payload)
+        if resp.status_code != 200:
+            raise openai.APIStatusError(
+                message=f"Anthropic error {resp.status_code}: {resp.text}",
+                response=None,
+                body=None,
+            )
+        data = resp.json()
+        content_blocks = data.get("content", [])
+        text = "".join(b.get("text", "") for b in content_blocks if b.get("type") == "text")
 
-            class _SimpleMessage:
-                def __init__(self, t):
-                    self.content = t
+        class _SimpleMessage:
+            def __init__(self, t):
+                self.content = t
 
-            class _SimpleChoice:
-                def __init__(self, t):
-                    self.message = _SimpleMessage(t)
+        class _SimpleChoice:
+            def __init__(self, t):
+                self.message = _SimpleMessage(t)
 
-            class _SimpleResponse:
-                def __init__(self, t):
-                    self.choices = [_SimpleChoice(t)]
+        class _SimpleResponse:
+            def __init__(self, t):
+                self.choices = [_SimpleChoice(t)]
 
-            return _SimpleResponse(text)
+        return _SimpleResponse(text)
 
 
 def create_provider_client(provider: str, api_key: str, base_url: Optional[str] = None):

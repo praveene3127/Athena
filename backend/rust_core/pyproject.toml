@@ -1,0 +1,19 @@
+[build-system]
+requires = ["maturin>=1.5,<2.0"]
+build-backend = "maturin"
+
+[project]
+name = "athena_rust_core"
+version = "0.1.0"
+description = "Athena high-performance pure-Rust text processing engine"
+readme = "README.md"
+requires-python = ">=3.10"
+classifiers = [
+    "Programming Language :: Rust",
+    "Programming Language :: Python :: Implementation :: CPython",
+]
+
+[tool.maturin]
+features = ["pyo3/extension-module"]
+module-name = "athena_rust_core"
+

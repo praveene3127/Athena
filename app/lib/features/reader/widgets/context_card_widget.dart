@@ -944,7 +944,7 @@ class _ContextCardWidgetState extends State<ContextCardWidget> {
     if (widget.isFeedMode) {
       return Center(
         child: SingleChildScrollView(
-          physics: const ClampingScrollPhysics(),
+          physics: const NeverScrollableScrollPhysics(),
           child: cardContainer,
         ),
       );

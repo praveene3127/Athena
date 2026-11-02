@@ -11,6 +11,13 @@ from typing import List, Set, Tuple
 
 from .novelty import _get_embedder, _get_proto_vectors, _cosine_similarity
 
+try:
+    from athena_rust_core import rust_self_heal_prose_text as _rust_self_heal
+    from athena_rust_core import rust_heal_pages_parallel as _rust_heal_pages_parallel
+except ImportError:
+    _rust_self_heal = None
+    _rust_heal_pages_parallel = None
+
 logger = logging.getLogger(__name__)
 
 # Valid Roman numerals to protect from repetition stripping
@@ -387,6 +394,8 @@ def split_fused_kerning_words(text: str) -> str:
         return ""
 
     text = re.sub(r"([;:,!?])(?=[A-Za-z])", r"\1 ", text)
+    text = re.sub(r"(\.{2,})(?=[A-Za-z0-9])", r"\1 ", text)
+    text = re.sub(r"(?<=[A-Za-z0-9])(\.{2,})", r" \1", text)
     text = re.sub(r"([a-zA-Z]+)([\'’\u2019](?:s|t|ll|re|ve|d|m))([a-zA-Z]+)", r"\1\2 \3", text)
     text = re.sub(r"([a-z]{2,})([A-Z][a-z]+)", r"\1 \2", text)
 
@@ -424,7 +433,10 @@ def split_fused_kerning_words(text: str) -> str:
             contraction_suffix = m_contr.group(1)
             core = core[:m_contr.start()]
 
-        if not core or core[0].isupper() or len(core) < 12 or is_valid_single_word(core):
+        is_all_caps = core.isupper() and len(core) > 1
+        is_capitalized = bool(core and core[0].isupper() and not is_all_caps)
+
+        if not core or is_all_caps or len(core) < 12 or is_valid_single_word(core):
             rebuilt.append(raw_w)
             continue
 
@@ -439,7 +451,9 @@ def split_fused_kerning_words(text: str) -> str:
             and "".join(parts).lower() == core.lower()
         ):
             rebuilt_parts = []
-            for p in parts:
+            for idx, p in enumerate(parts):
+                if idx == 0 and is_capitalized:
+                    p = p.capitalize()
                 if p.lower() in derivational_suffixes and rebuilt_parts:
                     rebuilt_parts[-1] += p
                 else:
@@ -462,11 +476,31 @@ def self_heal_prose_text(text: str) -> str:
     """
     if not text:
         return ""
+    if _rust_self_heal is not None:
+        try:
+            return _rust_self_heal(text)
+        except Exception as e:
+            logger.debug("Rust core self-heal fallback: %s", e)
     text = clean_block_hygiene(text)
     text = dehyphenate_line_wraps(text)
     text = strip_superscript_footnote_callouts(text)
     text = split_fused_kerning_words(text)
     return re.sub(r"[ \t]+", " ", text).strip()
+
+
+def heal_pages_parallel(pages: List[str]) -> List[str]:
+    """
+    Cleans and heals multiple page text blocks in parallel using Rust rayon data-parallelism
+    or fast single-pass Python fallbacks.
+    """
+    if not pages:
+        return []
+    if _rust_heal_pages_parallel is not None:
+        try:
+            return _rust_heal_pages_parallel(pages)
+        except Exception as e:
+            logger.debug("Rust heal_pages_parallel fallback: %s", e)
+    return [self_heal_prose_text(p) for p in pages]
 
 
 def audit_chunk_quality(text: str) -> dict:

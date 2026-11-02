@@ -1,5 +1,6 @@
 import 'dart:async';
 import 'dart:convert';
+import 'dart:isolate';
 
 import 'package:archive/archive.dart';
 import 'package:cross_file/cross_file.dart';
@@ -550,14 +551,22 @@ class ApiClient {
       );
     }
 
-    final parseResult = await compute(
-      _parseAndChunkDocumentInBackground,
-      _ParseDocumentParams(
-        bytes: bytes,
-        fileName: fileName,
-        docId: docId,
-      ),
-    );
+    final parseResult = kIsWeb
+        ? await compute(
+            _parseAndChunkDocumentInBackground,
+            _ParseDocumentParams(
+              bytes: bytes,
+              fileName: fileName,
+              docId: docId,
+            ),
+          )
+        : await Isolate.run(() => _parseAndChunkDocumentInBackground(
+            _ParseDocumentParams(
+              bytes: bytes,
+              fileName: fileName,
+              docId: docId,
+            ),
+          ));
 
     final canonicalText = parseResult.canonicalText;
     final pageCount = parseResult.pageCount;
@@ -819,9 +828,12 @@ class ApiClient {
   Future<void> _cacheReaderLocally(
       String docId, Map<String, dynamic> data) async {
     try {
-      final prefs = await SharedPreferences.getInstance();
-      await prefs.setString('reader_cache_$docId', jsonEncode(data));
-      if (!kIsWeb) {
+      if (kIsWeb) {
+        final prefs = await SharedPreferences.getInstance();
+        await prefs.setString('reader_cache_$docId', jsonEncode(data));
+      } else {
+        // Native mobile: SQLite (LocalDatabase.instance) is single source of truth.
+        // Prevents giant JSON writes in SharedPreferences from freezing UI thread.
         final rawChunks = (data['chunks'] as List?) ??
             ((data['items'] as List?)
                 ?.where((it) => it is Map && it['type'] == 'reading_chunk')
@@ -886,17 +898,17 @@ class ApiClient {
 
   Future<Map<String, dynamic>?> _loadCachedReader(String docId) async {
     try {
-      final prefs = await SharedPreferences.getInstance();
-      final raw = prefs.getString('reader_cache_$docId');
-      if (raw != null && raw.isNotEmpty) {
-        return Map<String, dynamic>.from(jsonDecode(raw) as Map);
-      }
       if (!kIsWeb) {
         final dbData = await LocalDatabase.instance.getReaderData(docId);
         final chunks = dbData['chunks'] as List?;
         if (chunks != null && chunks.isNotEmpty) {
           return dbData;
         }
+      }
+      final prefs = await SharedPreferences.getInstance();
+      final raw = prefs.getString('reader_cache_$docId');
+      if (raw != null && raw.isNotEmpty) {
+        return Map<String, dynamic>.from(jsonDecode(raw) as Map);
       }
     } catch (_) {}
     return null;

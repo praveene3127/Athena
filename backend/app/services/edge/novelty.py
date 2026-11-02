@@ -73,7 +73,20 @@ def _get_proto_vectors():
         return None
 
 
+try:
+    from athena_rust_core import rust_cosine_similarity as _rust_cosine_similarity
+    from athena_rust_core import rust_check_slop_phrase as _rust_check_slop_phrase
+except ImportError:
+    _rust_cosine_similarity = None
+    _rust_check_slop_phrase = None
+
+
 def _cosine_similarity(v1, v2) -> float:
+    if _rust_cosine_similarity is not None:
+        try:
+            return float(_rust_cosine_similarity(list(v1), list(v2)))
+        except Exception:
+            pass
     import numpy as np
     dot = np.dot(v1, v2)
     norm1 = np.linalg.norm(v1)
@@ -172,6 +185,19 @@ def evaluate_card_novelty(
         }
 
     # 1. Banned Generic Slop Phrases Check
+    if _rust_check_slop_phrase is not None:
+        try:
+            slop_match = _rust_check_slop_phrase(body_clean)
+            if slop_match:
+                return {
+                    "passed": False,
+                    "new_entity_count": 0,
+                    "echo_similarity": 1.0,
+                    "reason": f"Contains banned generic slop phrase: '{slop_match}'",
+                }
+        except Exception:
+            pass
+
     body_lower = body_clean.lower()
     for phrase in BANNED_GENERIC_SLOP_PHRASES:
         if phrase in body_lower:

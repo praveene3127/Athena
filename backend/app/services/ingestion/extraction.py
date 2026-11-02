@@ -257,7 +257,8 @@ def extract_document_content(
                     for block_idx, block in enumerate(ocr_page_blocks[page_idx])
                 ]
             else:
-                raw_blocks = page.get_text("blocks", sort=True)
+                mupdf_flags = pymupdf.TEXT_PRESERVE_LIGATURES | pymupdf.TEXT_PRESERVE_WHITESPACE | pymupdf.TEXT_DEHYPHENATE
+                raw_blocks = page.get_text("blocks", sort=True, flags=mupdf_flags)
                 text_blocks = [b for b in raw_blocks if len(b) >= 7 and b[6] == 0]
 
             page_char_count = 0

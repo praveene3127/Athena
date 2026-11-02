@@ -6,7 +6,7 @@ import re
 import urllib.parse
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Optional
+from typing import Any, Optional, Tuple
 import httpx
 
 from app.config import (
@@ -42,6 +42,22 @@ def title_matches(term: str, title: str) -> bool:
     return ratio >= 0.75
 
 
+_shared_wiki_http_client: Optional[httpx.Client] = None
+
+def get_shared_wikipedia_http_client(user_agent: Optional[str] = None, timeout: float = WIKI_TIMEOUT_S) -> httpx.Client:
+    global _shared_wiki_http_client
+    if _shared_wiki_http_client is None or _shared_wiki_http_client.is_closed:
+        ua = user_agent or f"Athena/0.1 (hackathon; contact: {WIKI_CONTACT})"
+        _shared_wiki_http_client = httpx.Client(
+            headers={"User-Agent": ua},
+            timeout=timeout,
+            follow_redirects=True,
+            limits=httpx.Limits(max_keepalive_connections=10, max_connections=20),
+            http2=True,
+        )
+    return _shared_wiki_http_client
+
+
 class WikipediaClient:
     def __init__(
         self,
@@ -56,14 +72,10 @@ class WikipediaClient:
         self.timeout = timeout
         self._client = client
 
-    def _get_client(self) -> httpx.Client:
+    def _get_client(self) -> Tuple[httpx.Client, bool]:
         if self._client is not None:
-            return self._client
-        return httpx.Client(
-            headers={"User-Agent": self.user_agent},
-            timeout=self.timeout,
-            follow_redirects=True,
-        )
+            return self._client, False
+        return get_shared_wikipedia_http_client(self.user_agent, self.timeout), False
 
     def _cache_path(self, term: str) -> Path:
         normalized = term.strip().lower()
@@ -111,8 +123,7 @@ class WikipediaClient:
         return result
 
     def _lookup_online(self, term: str) -> Optional[dict[str, Any]]:
-        client = self._get_client()
-        should_close = self._client is None
+        client, should_close = self._get_client()
 
         try:
             # 1. Search Wikipedia API for top 3 candidates

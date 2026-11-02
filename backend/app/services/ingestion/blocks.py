@@ -346,10 +346,11 @@ def extract_document_structure(
     for page_idx in range(total_pages):
         page = doc[page_idx]
         page_override = (page_blocks_overrides or {}).get(page_idx)
+        mupdf_flags = pymupdf.TEXT_PRESERVE_LIGATURES | pymupdf.TEXT_PRESERVE_WHITESPACE | pymupdf.TEXT_DEHYPHENATE
         page_dict = (
             {"blocks": page_override}
             if page_override is not None
-            else page.get_text("dict")
+            else page.get_text("dict", flags=mupdf_flags)
         )
         p_blocks: List[Dict[str, Any]] = []
 
