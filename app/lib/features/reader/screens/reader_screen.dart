@@ -407,7 +407,13 @@ class _ReaderScreenState extends ConsumerState<ReaderScreen> {
     final topItem = positions.where((pos) => pos.itemTrailingEdge > 0).reduce(
         (min, pos) => pos.itemLeadingEdge < min.itemLeadingEdge ? pos : min);
     if (topItem.index != _lastVisibleIndex) {
-      _lastVisibleIndex = topItem.index;
+      if (mounted) {
+        setState(() {
+          _lastVisibleIndex = topItem.index;
+        });
+      } else {
+        _lastVisibleIndex = topItem.index;
+      }
       _saveDebounce?.cancel();
       _saveDebounce = Timer(const Duration(milliseconds: 600), () async {
         final prefs = await SharedPreferences.getInstance();
@@ -431,7 +437,6 @@ class _ReaderScreenState extends ConsumerState<ReaderScreen> {
 
   void _setReadingMode(String mode) {
     if (_readingMode == mode) return;
-    final oldMode = _readingMode;
     setState(() {
       _readingMode = mode;
     });
@@ -451,40 +456,19 @@ class _ReaderScreenState extends ConsumerState<ReaderScreen> {
       final readerData = ref.read(readerDataProvider(widget.documentId)).value;
       if (readerData == null) return;
       final rawItems = readerData.items;
-      final chunks = rawItems.where((it) => it.isReadingChunk).toList();
       final feedItems = _getFeedItems(rawItems);
+      if (feedItems.isEmpty) return;
+
+      final targetIdx = _lastVisibleIndex.clamp(0, feedItems.length - 1);
+      _lastVisibleIndex = targetIdx;
 
       if (mode == 'flow') {
-        int targetFlowIdx = _lastVisibleIndex;
-        if (oldMode == 'feed' && _lastVisibleIndex < feedItems.length) {
-          final feedItem = feedItems[_lastVisibleIndex];
-          final seq = feedItem.sequence;
-          if (seq != null) {
-            final chunkIdx = chunks.indexWhere((c) => c.sequence == seq);
-            if (chunkIdx >= 0) targetFlowIdx = chunkIdx;
-          }
-        }
-        _lastVisibleIndex = targetFlowIdx;
         if (_itemScrollController.isAttached) {
-          _itemScrollController.jumpTo(
-              index: targetFlowIdx.clamp(
-                  0, (chunks.length - 1).clamp(0, 999999)));
+          _itemScrollController.jumpTo(index: targetIdx);
         }
       } else {
-        int targetFeedIdx = _lastVisibleIndex;
-        if (oldMode == 'flow' && _lastVisibleIndex < chunks.length) {
-          final chunk = chunks[_lastVisibleIndex];
-          final seq = chunk.sequence;
-          if (seq != null) {
-            final feedIdx = feedItems
-                .indexWhere((f) => f.sequence == seq && f.isReadingChunk);
-            if (feedIdx >= 0) targetFeedIdx = feedIdx;
-          }
-        }
-        _lastVisibleIndex = targetFeedIdx;
         if (_pageController != null && _pageController!.hasClients) {
-          _pageController!.jumpToPage(targetFeedIdx.clamp(
-              0, (feedItems.length - 1).clamp(0, 999999)));
+          _pageController!.jumpToPage(targetIdx);
         }
       }
     });
@@ -888,20 +872,40 @@ class _ReaderScreenState extends ConsumerState<ReaderScreen> {
   }
 
   void _nextCard(int total) {
-    if (_lastVisibleIndex < total) {
-      _pageController?.nextPage(
-        duration: const Duration(milliseconds: 300),
-        curve: Curves.easeOutCubic,
-      );
+    if (_readingMode == 'flow') {
+      if (_lastVisibleIndex < total - 1 && _itemScrollController.isAttached) {
+        _itemScrollController.scrollTo(
+          index: _lastVisibleIndex + 1,
+          duration: const Duration(milliseconds: 300),
+          curve: Curves.easeOutCubic,
+        );
+      }
+    } else {
+      if (_lastVisibleIndex < total - 1) {
+        _pageController?.nextPage(
+          duration: const Duration(milliseconds: 300),
+          curve: Curves.easeOutCubic,
+        );
+      }
     }
   }
 
   void _previousCard() {
-    if (_lastVisibleIndex > 0) {
-      _pageController?.previousPage(
-        duration: const Duration(milliseconds: 300),
-        curve: Curves.easeOutCubic,
-      );
+    if (_readingMode == 'flow') {
+      if (_lastVisibleIndex > 0 && _itemScrollController.isAttached) {
+        _itemScrollController.scrollTo(
+          index: _lastVisibleIndex - 1,
+          duration: const Duration(milliseconds: 300),
+          curve: Curves.easeOutCubic,
+        );
+      }
+    } else {
+      if (_lastVisibleIndex > 0) {
+        _pageController?.previousPage(
+          duration: const Duration(milliseconds: 300),
+          curve: Curves.easeOutCubic,
+        );
+      }
     }
   }
 
@@ -2800,6 +2804,7 @@ class _ReaderScreenState extends ConsumerState<ReaderScreen> {
                                     ),
                                     child: ContextCardWidget(
                                       card: item,
+                                      themeId: _themeId,
                                       isFeedMode: false,
                                       isBrainDeckSaved:
                                           _isCardInBrainDeck(item.id),
@@ -3019,7 +3024,7 @@ class _ReaderScreenState extends ConsumerState<ReaderScreen> {
                                         child: Center(
                                           child: SingleChildScrollView(
                                             physics:
-                                                const BouncingScrollPhysics(),
+                                                const ClampingScrollPhysics(),
                                             child: Column(
                                               mainAxisSize: MainAxisSize.min,
                                               crossAxisAlignment:
@@ -3158,6 +3163,7 @@ class _ReaderScreenState extends ConsumerState<ReaderScreen> {
                                           child: RepaintBoundary(
                                             child: ContextCardWidget(
                                               card: item,
+                                              themeId: _themeId,
                                               isFeedMode: true,
                                               isBrainDeckSaved:
                                                   _isCardInBrainDeck(item.id),

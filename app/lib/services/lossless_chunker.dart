@@ -8,10 +8,20 @@ String sanitizeProseSpacing(String text) {
   if (text.isEmpty) return text;
   var result = text;
 
-  // 1. Space after punctuation if immediately followed by letter or quote:
+  // 1a. Space after punctuation if immediately followed by letter or quote:
   // e.g. "candle.Headmaster" -> "candle. Headmaster", "Nolan,ahusky" -> "Nolan, ahusky"
   result = result.replaceAllMapped(
     RegExp(r'([.,!?;:])([A-Za-z“"‘\x27])'),
+    (m) => '${m[1]} ${m[2]}',
+  );
+
+  // 1b. Space around ellipsis followed by letters: "boys...hesaid" -> "boys... hesaid"
+  result = result.replaceAllMapped(
+    RegExp(r'(\.{2,})([A-Za-z“"‘\x27])'),
+    (m) => '${m[1]} ${m[2]}',
+  );
+  result = result.replaceAllMapped(
+    RegExp(r'([A-Za-z])(\.{2,})'),
     (m) => '${m[1]} ${m[2]}',
   );
 
@@ -62,7 +72,369 @@ String sanitizeProseSpacing(String text) {
   result = result.replaceAll(RegExp(r' *\n *'), '\n');
   result = result.replaceAll(RegExp(r'\n{3,}'), '\n\n');
 
+  // 7. Split fused lowercase tokens caused by PDF kerning / justification space drops
+  // e.g. "Thefourboyswhocarriedbannersmarchedsolemnlytothedais" -> "The four boys who carried banners marched solemnly to the dais"
+  result = result.split('\n').map((line) {
+    return line.split(' ').map(_segmentFusedWord).join(' ');
+  }).join('\n');
+
   return result.trim();
+}
+
+const Set<String> _scientificCompounds = {
+  'neuroplasticity',
+  'electromagnetism',
+  'thermodynamics',
+  'photosynthesis',
+  'crystallography',
+  'biotechnology',
+  'paleontology',
+  'socioeconomic',
+  'cardiovascular',
+  'counterintuitive',
+  'understanding',
+  'notwithstanding',
+  'nevertheless',
+  'straightforward',
+  'groundbreaking',
+  'infrastructure',
+  'representative',
+  'responsibility',
+  'characteristic',
+  'simultaneously',
+  'telecommunications',
+  'interchangeable',
+  'congratulations',
+  'superintendent',
+  'acknowledgment',
+  'institutional',
+};
+
+const Set<String> _singleDictionaryWords = {
+  'headmaster',
+  'dramatically',
+  'expectantly',
+  'procession',
+  'concluded',
+  'knowledge',
+  'gentlemen',
+  'applauded',
+  'politely',
+  'gentleman',
+  'banners',
+  'solemnly',
+  'lighted',
+  'sixties',
+  'watching',
+  'pointing',
+  'stepped',
+  'carried',
+  'followed',
+  'elderly',
+  'proudly',
+  'standing',
+  'understanding',
+  'conversation',
+  'immediately',
+  'particular',
+  'particularly',
+  'circumstance',
+  'circumstances',
+  'opportunity',
+  'opportunities',
+  'information',
+  'development',
+  'experience',
+  'experiences',
+  'government',
+  'difference',
+  'differences',
+  'important',
+  'impossible',
+  'everything',
+  'everyone',
+  'something',
+  'someone',
+  'anything',
+  'anyone',
+  'themselves',
+  'ourselves',
+  'yourself',
+  'yourselves',
+  'himself',
+  'herself',
+  'itself',
+  'another',
+  'together',
+  'without',
+  'throughout',
+  'however',
+  'therefore',
+  'furthermore',
+  'moreover',
+  'meanwhile',
+  'otherwise',
+  'sometimes',
+  'somewhere',
+  'anywhere',
+  'everywhere',
+  'nowhere',
+  'already',
+  'always',
+  'almost',
+  'around',
+  'against',
+  'between',
+  'behind',
+  'beyond',
+  'beside',
+  'besides',
+  'before',
+  'beneath',
+  'during',
+  'across',
+  'toward',
+  'towards',
+  'inside',
+  'outside',
+  'within',
+  'because',
+  'although',
+  'though',
+  'through',
+  'enough',
+  'several',
+  'certain',
+  'certainly',
+  'perhaps',
+  'probably',
+  'actually',
+  'finally',
+  'suddenly',
+  'quickly',
+  'slowly',
+  'quietly',
+  'loudly',
+  'clearly',
+  'really',
+  'simply',
+  'easily',
+  'hardly',
+  'nearly',
+  'deeply',
+  'greatly',
+  'highly',
+  'widely',
+  'surely',
+};
+
+final Set<String> _fusedDictWords = <String>{
+  ..._scientificCompounds,
+  ..._singleDictionaryWords,
+  'a', 'about', 'above', 'across', 'act', 'acts', 'action', 'actions', 'after',
+  'again', 'against', 'age', 'ago', 'air', 'all', 'almost', 'alone', 'along',
+  'already', 'also', 'although', 'always', 'am', 'among', 'an', 'and',
+  'another', 'answer', 'answered', 'any', 'anyone', 'anything', 'appear',
+  'appeared', 'applaud', 'applauded', 'applause', 'are', 'area', 'arm', 'arms',
+  'army', 'around', 'art', 'as', 'ask', 'asked', 'asking', 'at', 'audience',
+  'away', 'back', 'bad', 'banner', 'banners', 'be', 'beat', 'beautiful',
+  'beauty', 'became', 'because', 'become', 'becomes', 'becoming', 'been',
+  'before', 'began', 'begin', 'behind', 'being', 'believe', 'believed', 'best',
+  'better', 'between', 'beyond', 'big', 'bill', 'bit', 'black', 'blood', 'blue',
+  'board', 'body', 'book', 'books', 'born', 'both', 'boy', 'boys', 'break',
+  'bring', 'brings', 'brother', 'brought', 'build', 'built', 'but', 'by',
+  'call', 'called', 'calling', 'came', 'can', 'candle', 'cannot', 'car', 'care',
+  'carried', 'carry', 'carrying', 'case', 'cause', 'certain', 'certainly',
+  'change', 'changed', 'child', 'children', 'church', 'city', 'clear',
+  'clearly', 'close', 'closed', 'cold', 'come', 'comes', 'coming', 'complete',
+  'conclude', 'concluded', 'conclusion', 'consider', 'control', 'cost',
+  'could', 'country', 'course', 'court', 'cover', 'covered', 'cry', 'cried',
+  'cut', 'dais', 'dark', 'darkness', 'day', 'days', 'dead', 'deal', 'death',
+  'decide', 'decided', 'deep', 'deeply', 'did', 'die', 'died', 'difference',
+  'different', 'do', 'does', 'doing', 'done', 'door', 'doors', 'down',
+  'dramatic', 'dramatically', 'draw', 'dream', 'drive', 'drop', 'dropped',
+  'due', 'during', 'each', 'early', 'earth', 'easy', 'easily', 'eat', 'edge',
+  'education', 'effect', 'effort', 'eight', 'either', 'elderly', 'else', 'end',
+  'ended', 'ending', 'enough', 'even', 'evening', 'ever', 'every', 'everyone',
+  'everything', 'evidence', 'exact', 'exactly', 'expect', 'expected',
+  'expectantly', 'experience', 'eye', 'eyes', 'face', 'faces', 'faced', 'fact',
+  'facts', 'fall', 'fell', 'family', 'far', 'fast', 'father', 'fear', 'feel',
+  'feeling', 'felt', 'few', 'field', 'fight', 'figure', 'find', 'finds',
+  'finding', 'fine', 'fire', 'first', 'five', 'floor', 'focus', 'follow',
+  'followed', 'following', 'food', 'foot', 'feet', 'for', 'force', 'form',
+  'formed', 'forward', 'found', 'four', 'free', 'friend', 'friends', 'from',
+  'front', 'full', 'fully', 'further', 'future', 'gale', 'game', 'gave',
+  'general', 'gentle', 'gentleman', 'gentlemen', 'get', 'gets', 'getting',
+  'girl', 'girls', 'give', 'gives', 'given', 'giving', 'go', 'goes', 'going',
+  'gone', 'god', 'good', 'got', 'gotten', 'great', 'greatly', 'green',
+  'ground', 'group', 'grow', 'grew', 'grown', 'had', 'hair', 'half', 'hand',
+  'hands', 'handed', 'happen', 'happened', 'happy', 'hard', 'has', 'have',
+  'having', 'he', 'head', 'heads', 'headmaster', 'hear', 'heard', 'hearing',
+  'heart', 'heat', 'heavy', 'heavily', 'held', 'help', 'helped', 'her', 'here',
+  'herself', 'high', 'highly', 'hill', 'him', 'himself', 'his', 'history',
+  'hit', 'hold', 'holding', 'home', 'hope', 'hoped', 'hot', 'hour', 'hours',
+  'house', 'houses', 'how', 'however', 'huge', 'human', 'hundred', 'husky',
+  'husband', 'i', 'idea', 'ideas', 'if', 'ill', 'image', 'imagine', 'imagined',
+  'important', 'in', 'inside', 'instead', 'interest', 'into', 'is', 'issue',
+  'it', 'its', 'itself', 'job', 'join', 'joined', 'just', 'keep', 'keeping',
+  'kept', 'key', 'kid', 'kids', 'kill', 'killed', 'kind', 'knew', 'know',
+  'knows', 'known', 'knowing', 'knowledge', 'ladies', 'lady', 'land',
+  'language', 'large', 'last', 'lasted', 'late', 'later', 'laugh', 'laughed',
+  'law', 'lay', 'lead', 'leading', 'led', 'learn', 'learned', 'least', 'leave',
+  'leaving', 'left', 'leg', 'legs', 'less', 'let', 'letter', 'letters', 'level',
+  'lie', 'lies', 'lying', 'life', 'lives', 'light', 'lights', 'lighted',
+  'lighting', 'like', 'liked', 'likely', 'line', 'lines', 'list', 'listen',
+  'listened', 'little', 'live', 'lived', 'living', 'local', 'long',
+  'longer', 'look', 'looks', 'looked', 'looking', 'lose', 'lost', 'lot', 'lots',
+  'loud', 'loudly', 'love', 'loved', 'low', 'lower', 'made', 'main', 'mainly',
+  'major', 'make', 'makes', 'making', 'man', 'men', 'many', 'march', 'marched',
+  'marching', 'mark', 'marked', 'matter', 'matters', 'may', 'maybe', 'me',
+  'mean', 'means', 'meant', 'meet', 'meets', 'meeting', 'met', 'member',
+  'members', 'might', 'mind', 'minds', 'minute', 'minutes', 'miss', 'missed',
+  'moment', 'moments', 'money', 'month', 'months', 'more', 'morning', 'most',
+  'mostly', 'mother', 'move', 'moves', 'moved', 'moving', 'much', 'music',
+  'must', 'my', 'myself', 'name', 'names', 'named', 'near', 'nearly', 'need',
+  'needs', 'needed', 'never', 'new', 'next', 'night', 'nights', 'nine', 'no',
+  'nolan', 'none', 'nor', 'not', 'note', 'notes', 'noted', 'nothing', 'notice',
+  'noticed', 'now', 'number', 'numbers', 'of', 'off', 'often', 'oh', 'old',
+  'older', 'oldest', 'on', 'once', 'one', 'ones', 'only', 'open', 'opened',
+  'opening', 'or', 'order', 'ordered', 'other', 'others', 'our', 'ours',
+  'ourselves', 'out', 'outside', 'over', 'own', 'owned', 'owner', 'page',
+  'pages', 'paper', 'part', 'parts', 'pass', 'passes', 'passed', 'passing',
+  'past', 'pay', 'paid', 'paying', 'people', 'person', 'place', 'places',
+  'placed', 'plan', 'plans', 'planned', 'play', 'played', 'playing', 'podium',
+  'point', 'points', 'pointed', 'pointing', 'polite', 'politely', 'poor',
+  'power', 'present', 'process', 'procession', 'proud', 'proudly', 'problem',
+  'problems', 'put', 'puts', 'putting', 'question', 'questions', 'quick',
+  'quickly', 'quiet', 'quietly', 'quite', 'rather', 'read', 'reading', 'real',
+  'really', 'reason', 'reasons', 'receive', 'received', 'red', 'remain',
+  'remained', 'remember', 'remembered', 'report', 'reported', 'rest', 'return',
+  'returned', 'right', 'rights', 'room', 'rooms', 'round', 'run', 'running',
+  'ran', 'said', 'same', 'saw', 'say', 'says', 'saying', 'school', 'schools',
+  'see', 'sees', 'seeing', 'seen', 'seem', 'seems', 'seemed', 'seeming',
+  'self', 'send', 'sends', 'sending', 'sent', 'set', 'sets', 'setting',
+  'several', 'shall', 'she', 'short', 'should', 'show', 'shows', 'showed',
+  'shown', 'showing', 'side', 'sides', 'sight', 'simple', 'simply', 'since',
+  'sit', 'sits', 'sitting', 'sat', 'six', 'sixty', 'sixties', 'small',
+  'smaller', 'so', 'solemn', 'solemnly', 'some', 'someone', 'something',
+  'sometimes', 'son', 'sons', 'soon', 'sound', 'sounds', 'sounded', 'speak',
+  'speaks', 'speaking', 'spoke', 'spoken', 'special', 'stand', 'stands',
+  'standing', 'stood', 'start', 'starts', 'started', 'starting', 'state',
+  'states', 'stated', 'stay', 'stays', 'stayed', 'staying', 'step', 'steps',
+  'stepped', 'stepping', 'still', 'stop', 'stops', 'stopped', 'stopping',
+  'story', 'stories', 'strong', 'strongly', 'student', 'students', 'study',
+  'studies', 'studied', 'studying', 'such', 'sudden', 'suddenly', 'sure',
+  'surely', 'table', 'tables', 'take', 'takes', 'taking', 'took', 'taken',
+  'talk', 'talks', 'talked', 'talking', 'tall', 'teach', 'teaches',
+  'teaching', 'taught', 'teacher', 'teachers', 'tell', 'tells', 'telling',
+  'told', 'ten', 'than', 'thank', 'thanked', 'thanks', 'that', 'the', 'their',
+  'theirs', 'them', 'themselves', 'then', 'there', 'therefore', 'these',
+  'they', 'thing', 'things', 'think', 'thinks', 'thinking', 'thought',
+  'thoughts', 'this', 'those', 'though', 'three', 'through', 'throughout',
+  'thus', 'time', 'times', 'to', 'today', 'together', 'too', 'top', 'toward',
+  'towards', 'town', 'towns', 'true', 'truly', 'truth', 'try', 'tries',
+  'tried', 'trying', 'turn', 'turns', 'turned', 'turning', 'two', 'twelve',
+  'twenty', 'under', 'understand', 'understands', 'understood',
+  'understanding', 'until', 'up', 'upon', 'us', 'use', 'uses', 'used',
+  'using', 'usual', 'usually', 'very', 'view', 'views', 'voice', 'voices',
+  'wait', 'waits', 'waited', 'waiting', 'walk', 'walks', 'walked', 'walking',
+  'wall', 'walls', 'want', 'wants', 'wanted', 'wanting', 'war', 'wars',
+  'watch', 'watches', 'watched', 'watching', 'water', 'way', 'ways', 'we',
+  'week', 'weeks', 'well', 'went', 'were', 'what', 'whatever', 'when',
+  'where', 'whether', 'which', 'while', 'white', 'who', 'whom', 'whose', 'why',
+  'wide', 'widely', 'will', 'willing', 'would', 'with', 'within', 'without',
+  'woman', 'women', 'word', 'words', 'work', 'works', 'worked', 'working',
+  'world', 'worlds', 'year', 'years', 'yes', 'yet', 'you', 'young', 'your',
+  'yours', 'yourself', 'yourselves'
+};
+
+const Set<String> _topRankWords = {
+  'the', 'a', 'to', 'of', 'and', 'in', 'is', 'it', 'he', 'was', 'for', 'on',
+  'are', 'as', 'with', 'his', 'they', 'at', 'be', 'this', 'have', 'from',
+  'or', 'one', 'had', 'by', 'word', 'but', 'not', 'what', 'all', 'were',
+  'we', 'when', 'your', 'can', 'said', 'there', 'who', 'man', 'men', 'boys',
+  'boy', 'into', 'out', 'up', 'so', 'see', 'no', 'way', 'could', 'my', 'than',
+  'first', 'been', 'its', 'now', 'find', 'day', 'did', 'get', 'come', 'made',
+  'part', 'an'
+};
+
+String _segmentFusedWord(String rawWord) {
+  if (rawWord.isEmpty) return rawWord;
+
+  // Separate leading punctuation
+  int start = 0;
+  while (start < rawWord.length && !RegExp(r'[A-Za-z]').hasMatch(rawWord[start])) {
+    start++;
+  }
+  // Separate trailing punctuation
+  int end = rawWord.length;
+  while (end > start && !RegExp(r'[A-Za-z]').hasMatch(rawWord[end - 1])) {
+    end--;
+  }
+
+  if (end - start < 12) return rawWord;
+
+  final prefixPunct = rawWord.substring(0, start);
+  final core = rawWord.substring(start, end);
+  final suffixPunct = rawWord.substring(end);
+
+  // If word has internal hyphens or slashes, keep intact
+  if (core.contains('-') || core.contains('/')) return rawWord;
+
+  final lower = core.toLowerCase();
+
+  // Guard scientific terms and recognized single dictionary words
+  if (_scientificCompounds.contains(lower) || _singleDictionaryWords.contains(lower)) {
+    return rawWord;
+  }
+
+  final segments = _wordBreakDP(lower);
+  if (segments == null || segments.length <= 1) {
+    return rawWord;
+  }
+
+  // Preserve capitalization if first character was capitalized
+  final isFirstUpper = core[0] == core[0].toUpperCase() && core[0] != core[0].toLowerCase();
+  final resultWords = <String>[];
+  for (int i = 0; i < segments.length; i++) {
+    var seg = segments[i];
+    if (i == 0 && isFirstUpper && seg.isNotEmpty) {
+      seg = seg[0].toUpperCase() + seg.substring(1);
+    }
+    resultWords.add(seg);
+  }
+
+  return '$prefixPunct${resultWords.join(' ')}$suffixPunct';
+}
+
+List<String>? _wordBreakDP(String s) {
+  final n = s.length;
+  final dp = List<List<String>?>.filled(n + 1, null);
+  final costs = List<int>.filled(n + 1, 999999);
+  dp[0] = [];
+  costs[0] = 0;
+
+  for (int i = 1; i <= n; i++) {
+    final minJ = (i - 22) < 0 ? 0 : i - 22;
+    for (int j = i - 1; j >= minJ; j--) {
+      if (dp[j] != null) {
+        final sub = s.substring(j, i);
+        if (_fusedDictWords.contains(sub)) {
+          int wordWeight = _topRankWords.contains(sub) ? 1 : 3;
+          if (sub.length == 1 && sub != 'a' && sub != 'i') {
+            wordWeight = 50;
+          }
+          final newCost = costs[j] + wordWeight;
+          if (newCost < costs[i]) {
+            costs[i] = newCost;
+            dp[i] = [...dp[j]!, sub];
+          }
+        }
+      }
+    }
+  }
+
+  return dp[n];
 }
 
 /// Reproduces Athena's adaptive feed chunking rules on the device. Every

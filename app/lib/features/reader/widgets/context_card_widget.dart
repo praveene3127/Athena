@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:url_launcher/url_launcher.dart';
 import 'package:athena/core/theme/theme.dart';
+import 'package:athena/core/theme/reader_theme.dart';
 import 'package:athena/models/document.dart';
 import 'package:athena/core/widgets/athena_avatar.dart';
 import 'package:athena/core/widgets/athena_logo.dart';
@@ -17,6 +18,7 @@ class ContextCardWidget extends StatefulWidget {
   final bool isFeedMode;
   final bool isBrainDeckSaved;
   final VoidCallback? onToggleBrainDeck;
+  final String themeId;
 
   const ContextCardWidget({
     super.key,
@@ -27,6 +29,7 @@ class ContextCardWidget extends StatefulWidget {
     this.isFeedMode = false,
     this.isBrainDeckSaved = false,
     this.onToggleBrainDeck,
+    this.themeId = 'paper',
   });
 
   @override
@@ -141,7 +144,7 @@ class _ContextCardWidgetState extends State<ContextCardWidget> {
     }
   }
 
-  void _showCitationPreview(BuildContext context, Map<String, dynamic> cite) {
+  void _showCitationPreview(BuildContext context, Map<String, dynamic> cite, ReaderThemeConfig theme) {
     final cUrl = cite['url'] as String? ?? '';
     final cTitle = cite['title'] as String? ?? 'Verified Citation';
     final cPub =
@@ -153,7 +156,7 @@ class _ContextCardWidgetState extends State<ContextCardWidget> {
     showModalBottomSheet(
       context: context,
       isScrollControlled: true,
-      backgroundColor: Colors.white,
+      backgroundColor: theme.scaffoldBackground,
       shape: const RoundedRectangleBorder(
         borderRadius: BorderRadius.vertical(top: Radius.circular(28)),
       ),
@@ -172,7 +175,7 @@ class _ContextCardWidgetState extends State<ContextCardWidget> {
                     height: 4,
                     margin: const EdgeInsets.only(bottom: 18),
                     decoration: BoxDecoration(
-                      color: const Color(0xFFE5E7DC),
+                      color: theme.borderColor,
                       borderRadius: BorderRadius.circular(2),
                     ),
                   ),
@@ -183,21 +186,21 @@ class _ContextCardWidgetState extends State<ContextCardWidget> {
                       padding: const EdgeInsets.symmetric(
                           horizontal: 10, vertical: 4),
                       decoration: BoxDecoration(
-                        color: const Color(0xFFF7F6F2),
+                        color: theme.pillBackground,
                         borderRadius: BorderRadius.circular(20),
-                        border: Border.all(color: const Color(0xFFE5E7DC)),
+                        border: Border.all(color: theme.borderColor),
                       ),
                       child: Row(
                         mainAxisSize: MainAxisSize.min,
                         children: [
-                          const Icon(Icons.verified,
-                              size: 14, color: Color(0xFF005E54)),
+                          Icon(Icons.verified,
+                              size: 14, color: theme.accentColor),
                           const SizedBox(width: 5),
                           Text(
                             cPub.toUpperCase(),
-                            style: const TextStyle(
+                            style: TextStyle(
                               fontFamily: AppTheme.fontUI,
-                              color: Color(0xFF005E54),
+                              color: theme.accentColor,
                               fontSize: 10,
                               fontWeight: FontWeight.w700,
                               letterSpacing: 0.6,
@@ -208,7 +211,7 @@ class _ContextCardWidgetState extends State<ContextCardWidget> {
                     ),
                     const Spacer(),
                     IconButton(
-                      icon: const Icon(Icons.close_rounded, size: 20),
+                      icon: Icon(Icons.close_rounded, size: 20, color: theme.textMutedColor),
                       padding: EdgeInsets.zero,
                       constraints: const BoxConstraints(),
                       onPressed: () => Navigator.of(ctx).pop(),
@@ -218,9 +221,9 @@ class _ContextCardWidgetState extends State<ContextCardWidget> {
                 const SizedBox(height: 14),
                 Text(
                   cTitle,
-                  style: const TextStyle(
+                  style: TextStyle(
                     fontFamily: AppTheme.fontDisplay,
-                    color: AppTheme.ink,
+                    color: theme.textColor,
                     fontSize: 18,
                     fontWeight: FontWeight.w400,
                     height: 1.3,
@@ -230,15 +233,15 @@ class _ContextCardWidgetState extends State<ContextCardWidget> {
                 Container(
                   padding: const EdgeInsets.all(14),
                   decoration: BoxDecoration(
-                    color: const Color(0xFFF7F6F2),
+                    color: theme.innerCardColor,
                     borderRadius: BorderRadius.circular(16),
-                    border: Border.all(color: const Color(0xFFE8EAE0)),
+                    border: Border.all(color: theme.borderColor),
                   ),
                   child: Text(
                     snippet,
-                    style: const TextStyle(
+                    style: TextStyle(
                       fontFamily: AppTheme.fontReading,
-                      color: Color(0xFF4A4F48),
+                      color: theme.isDark ? const Color(0xFFD1D5DB) : const Color(0xFF4A4F48),
                       fontSize: 13.5,
                       height: 1.45,
                       fontStyle: FontStyle.italic,
@@ -254,7 +257,7 @@ class _ContextCardWidgetState extends State<ContextCardWidget> {
                       _openSourceUrl(cUrl);
                     },
                     style: ElevatedButton.styleFrom(
-                      backgroundColor: const Color(0xFF141714),
+                      backgroundColor: theme.accentColor,
                       foregroundColor: Colors.white,
                       padding: const EdgeInsets.symmetric(vertical: 14),
                       shape: RoundedRectangleBorder(
@@ -287,7 +290,7 @@ class _ContextCardWidgetState extends State<ContextCardWidget> {
     );
   }
 
-  Widget _buildBodyContent(BuildContext context, String body) {
+  Widget _buildBodyContent(BuildContext context, String body, ReaderThemeConfig theme) {
     if (body.contains('||REVEAL||')) {
       final parts = body.split('||REVEAL||');
       final betPrompt = parts[0].trim();
@@ -300,7 +303,7 @@ class _ContextCardWidgetState extends State<ContextCardWidget> {
             betPrompt,
             style: TextStyle(
               fontFamily: AppTheme.fontReading,
-              color: const Color(0xFF141714),
+              color: theme.textColor,
               fontSize: widget.isFeedMode ? 15.5 : 14,
               fontWeight: FontWeight.w400,
               height: 1.5,
@@ -327,7 +330,7 @@ class _ContextCardWidgetState extends State<ContextCardWidget> {
                 },
                 style: OutlinedButton.styleFrom(
                   backgroundColor:
-                      const Color(0xFF10B981).withValues(alpha: 0.08),
+                      const Color(0xFF10B981).withValues(alpha: theme.isDark ? 0.16 : 0.08),
                   side: BorderSide(
                     color: const Color(0xFF10B981).withValues(alpha: 0.40),
                     width: 1.0,
@@ -363,7 +366,7 @@ class _ContextCardWidgetState extends State<ContextCardWidget> {
               margin: const EdgeInsets.only(top: 4),
               padding: const EdgeInsets.all(14),
               decoration: BoxDecoration(
-                color: const Color(0xFF10B981).withValues(alpha: 0.08),
+                color: const Color(0xFF10B981).withValues(alpha: theme.isDark ? 0.16 : 0.08),
                 borderRadius: BorderRadius.circular(16),
                 border: Border.all(
                   color: const Color(0xFF10B981).withValues(alpha: 0.35),
@@ -397,7 +400,7 @@ class _ContextCardWidgetState extends State<ContextCardWidget> {
                     revealPayoff,
                     style: TextStyle(
                       fontFamily: AppTheme.fontReading,
-                      color: const Color(0xFF141714),
+                      color: theme.textColor,
                       fontSize: widget.isFeedMode ? 14.5 : 13.5,
                       height: 1.5,
                     ),
@@ -449,7 +452,7 @@ class _ContextCardWidgetState extends State<ContextCardWidget> {
               intro,
               style: TextStyle(
                 fontFamily: AppTheme.fontReading,
-                color: const Color(0xFF4A4F48),
+                color: theme.isDark ? const Color(0xFFD1D5DB) : const Color(0xFF4A4F48),
                 fontSize: widget.isFeedMode ? 15 : 14,
                 height: 1.5,
               ),
@@ -461,7 +464,7 @@ class _ContextCardWidgetState extends State<ContextCardWidget> {
               width: double.infinity,
               padding: const EdgeInsets.all(13),
               decoration: BoxDecoration(
-                color: const Color(0xFFF43F5E).withValues(alpha: 0.07),
+                color: const Color(0xFFF43F5E).withValues(alpha: theme.isDark ? 0.16 : 0.07),
                 borderRadius: BorderRadius.circular(16),
                 border: Border.all(
                   color: const Color(0xFFF43F5E).withValues(alpha: 0.28),
@@ -493,7 +496,7 @@ class _ContextCardWidgetState extends State<ContextCardWidget> {
                     pushback,
                     style: TextStyle(
                       fontFamily: AppTheme.fontReading,
-                      color: const Color(0xFF141714),
+                      color: theme.textColor,
                       fontSize: widget.isFeedMode ? 14 : 13,
                       height: 1.45,
                     ),
@@ -508,7 +511,7 @@ class _ContextCardWidgetState extends State<ContextCardWidget> {
               width: double.infinity,
               padding: const EdgeInsets.all(13),
               decoration: BoxDecoration(
-                color: const Color(0xFF10B981).withValues(alpha: 0.07),
+                color: const Color(0xFF10B981).withValues(alpha: theme.isDark ? 0.16 : 0.07),
                 borderRadius: BorderRadius.circular(16),
                 border: Border.all(
                   color: const Color(0xFF10B981).withValues(alpha: 0.28),
@@ -540,7 +543,7 @@ class _ContextCardWidgetState extends State<ContextCardWidget> {
                     receipt,
                     style: TextStyle(
                       fontFamily: AppTheme.fontReading,
-                      color: const Color(0xFF141714),
+                      color: theme.textColor,
                       fontSize: widget.isFeedMode ? 14 : 13,
                       height: 1.45,
                     ),
@@ -558,7 +561,7 @@ class _ContextCardWidgetState extends State<ContextCardWidget> {
       body,
       style: TextStyle(
         fontFamily: AppTheme.fontReading,
-        color: const Color(0xFF141714),
+        color: theme.textColor,
         fontSize: widget.isFeedMode ? 15.5 : 14,
         height: 1.55,
       ),
@@ -567,6 +570,7 @@ class _ContextCardWidgetState extends State<ContextCardWidget> {
 
   @override
   Widget build(BuildContext context) {
+    final theme = ReaderThemeConfig.getById(widget.themeId);
     final isMobile = MediaQuery.sizeOf(context).width < 600;
     final card = widget.card;
     final isSaved = card.saved ?? false;
@@ -590,10 +594,10 @@ class _ContextCardWidgetState extends State<ContextCardWidget> {
         Container(
           padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
           decoration: BoxDecoration(
-            color: lens.color.withValues(alpha: 0.10),
+            color: lens.color.withValues(alpha: theme.isDark ? 0.20 : 0.10),
             borderRadius: BorderRadius.circular(20),
             border: Border.all(
-              color: lens.color.withValues(alpha: 0.22),
+              color: lens.color.withValues(alpha: theme.isDark ? 0.40 : 0.22),
               width: 1,
             ),
           ),
@@ -633,13 +637,13 @@ class _ContextCardWidgetState extends State<ContextCardWidget> {
               margin: const EdgeInsets.only(right: 6),
               decoration: BoxDecoration(
                 color: widget.isBrainDeckSaved
-                    ? const Color(0xFF141714)
-                    : const Color(0xFFF7F6F2),
+                    ? (theme.isDark ? theme.accentColor : const Color(0xFF141714))
+                    : theme.pillBackground,
                 borderRadius: BorderRadius.circular(20),
                 border: Border.all(
                   color: widget.isBrainDeckSaved
-                      ? const Color(0xFF141714)
-                      : const Color(0xFFE5E7DC),
+                      ? (theme.isDark ? theme.accentColor : const Color(0xFF141714))
+                      : theme.borderColor,
                   width: 1.0,
                 ),
               ),
@@ -651,8 +655,7 @@ class _ContextCardWidgetState extends State<ContextCardWidget> {
                         ? Icons.bookmark_rounded
                         : Icons.bookmark_border_rounded,
                     size: 13,
-                    color:
-                        widget.isBrainDeckSaved ? Colors.white : AppTheme.ink,
+                    color: widget.isBrainDeckSaved ? Colors.white : theme.textColor,
                   ),
                   const SizedBox(width: 5),
                   Text(
@@ -661,8 +664,7 @@ class _ContextCardWidgetState extends State<ContextCardWidget> {
                       fontFamily: AppTheme.fontUI,
                       fontSize: 11,
                       fontWeight: FontWeight.w600,
-                      color:
-                          widget.isBrainDeckSaved ? Colors.white : AppTheme.ink,
+                      color: widget.isBrainDeckSaved ? Colors.white : theme.textColor,
                     ),
                   ),
                 ],
@@ -673,7 +675,9 @@ class _ContextCardWidgetState extends State<ContextCardWidget> {
           IconButton(
             icon: Icon(
               isSaved ? Icons.bookmark_rounded : Icons.bookmark_border_rounded,
-              color: isSaved ? AppTheme.ink : AppTheme.textMuted,
+              color: isSaved
+                  ? (theme.isDark ? theme.accentColor : theme.textColor)
+                  : theme.textMutedColor,
               size: 19,
             ),
             tooltip: isSaved ? 'Saved' : 'Save note',
@@ -683,9 +687,9 @@ class _ContextCardWidgetState extends State<ContextCardWidget> {
           ),
         ],
         IconButton(
-          icon: const Icon(
+          icon: Icon(
             Icons.close_rounded,
-            color: AppTheme.textMuted,
+            color: theme.textMutedColor,
             size: 17,
           ),
           tooltip: 'Dismiss card',
@@ -706,7 +710,7 @@ class _ContextCardWidgetState extends State<ContextCardWidget> {
           title,
           style: TextStyle(
             fontFamily: AppTheme.fontDisplay,
-            color: AppTheme.ink,
+            color: theme.textColor,
             fontSize: widget.isFeedMode ? 21 : 18.5,
             fontWeight: FontWeight.w400,
             letterSpacing: -0.2,
@@ -726,9 +730,9 @@ class _ContextCardWidgetState extends State<ContextCardWidget> {
             ),
             child: Text(
               '"$exactQuote"',
-              style: const TextStyle(
+              style: TextStyle(
                 fontFamily: AppTheme.fontReading,
-                color: Color(0xFF4A4F48),
+                color: theme.textColor.withValues(alpha: 0.85),
                 fontStyle: FontStyle.italic,
                 fontSize: 13.5,
                 height: 1.48,
@@ -737,14 +741,14 @@ class _ContextCardWidgetState extends State<ContextCardWidget> {
           ),
         ],
         const SizedBox(height: 10),
-        _buildBodyContent(context, body),
+        _buildBodyContent(context, body, theme),
         if (citations.isNotEmpty) ...[
           const SizedBox(height: 16),
-          const Text(
+          Text(
             'VERIFIED SOURCES',
             style: TextStyle(
               fontFamily: AppTheme.fontUI,
-              color: AppTheme.textMuted,
+              color: theme.textMutedColor,
               fontSize: 10,
               fontWeight: FontWeight.w800,
               letterSpacing: 0.8,
@@ -760,16 +764,16 @@ class _ContextCardWidgetState extends State<ContextCardWidget> {
                       'Source')
                   .trim();
               return InkWell(
-                onTap: () => _showCitationPreview(context, cite),
+                onTap: () => _showCitationPreview(context, cite, theme),
                 borderRadius: BorderRadius.circular(20),
                 child: Container(
                   padding:
                       const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
                   decoration: BoxDecoration(
-                    color: const Color(0xFFF7F6F2),
+                    color: theme.pillBackground,
                     borderRadius: BorderRadius.circular(20),
                     border: Border.all(
-                      color: const Color(0xFFE5E7DC),
+                      color: theme.borderColor,
                       width: 1.0,
                     ),
                   ),
@@ -778,18 +782,18 @@ class _ContextCardWidgetState extends State<ContextCardWidget> {
                     children: [
                       Text(
                         cPub,
-                        style: const TextStyle(
+                        style: TextStyle(
                           fontFamily: AppTheme.fontUI,
                           fontSize: 11,
-                          color: Color(0xFF141714),
+                          color: theme.textColor,
                           fontWeight: FontWeight.w600,
                         ),
                       ),
                       const SizedBox(width: 5),
-                      const Icon(
+                      Icon(
                         Icons.arrow_outward_rounded,
                         size: 12,
-                        color: Color(0xFF141714),
+                        color: theme.textColor,
                       ),
                     ],
                   ),
@@ -805,9 +809,9 @@ class _ContextCardWidgetState extends State<ContextCardWidget> {
             children: [
               Text(
                 '$citationTitle ($citationPublisher)',
-                style: const TextStyle(
+                style: TextStyle(
                   fontFamily: AppTheme.fontUI,
-                  color: AppTheme.textMuted,
+                  color: theme.textMutedColor,
                   fontSize: 11,
                 ),
               ),
@@ -816,9 +820,9 @@ class _ContextCardWidgetState extends State<ContextCardWidget> {
                   'url': citationUrl,
                   'title': citationTitle,
                   'publisher': citationPublisher,
-                }),
+                }, theme),
                 style: TextButton.styleFrom(
-                  foregroundColor: const Color(0xFF005E54),
+                  foregroundColor: theme.accentColor,
                   padding:
                       const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
                   minimumSize: const Size(40, 36),
@@ -850,34 +854,34 @@ class _ContextCardWidgetState extends State<ContextCardWidget> {
                   padding:
                       const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
                   decoration: BoxDecoration(
-                    color: const Color(0xFFE8F8F2),
+                    color: theme.pillBackground,
                     borderRadius: BorderRadius.circular(20),
                     border: Border.all(
-                      color: const Color(0xFFBBE5D8),
+                      color: theme.borderColor,
                       width: 1.0,
                     ),
                     boxShadow: [
                       BoxShadow(
-                        color: const Color(0xFF005E54).withValues(alpha: 0.08),
+                        color: theme.accentColor.withValues(alpha: 0.08),
                         blurRadius: 6,
                         offset: const Offset(0, 2),
                       ),
                     ],
                   ),
-                  child: const Row(
+                  child: Row(
                     mainAxisSize: MainAxisSize.min,
                     children: [
                       AthenaSymbol(
                         size: 13,
-                        color: Color(0xFF005E54),
+                        color: theme.accentColor,
                       ),
-                      SizedBox(width: 6),
+                      const SizedBox(width: 6),
                       Text(
                         'Ask Athena',
                         style: TextStyle(
                           fontFamily: AppTheme.fontUI,
                           fontSize: 11.5,
-                          color: Color(0xFF005E54),
+                          color: theme.accentColor,
                           fontWeight: FontWeight.bold,
                           letterSpacing: 0.3,
                         ),
@@ -901,20 +905,20 @@ class _ContextCardWidgetState extends State<ContextCardWidget> {
             isMobile ? 12 : 16,
             8,
             isMobile ? 12 : 16,
-            widget.isFeedMode ? 84 : 10,
+            12,
           ),
           // Outer Shell (Doppelrand)
           padding: const EdgeInsets.all(4),
           decoration: BoxDecoration(
-            color: lens.color.withValues(alpha: 0.06),
+            color: lens.color.withValues(alpha: theme.isDark ? 0.15 : 0.06),
             borderRadius: BorderRadius.circular(26),
             border: Border.all(
-              color: lens.color.withValues(alpha: 0.22),
+              color: lens.color.withValues(alpha: theme.isDark ? 0.35 : 0.22),
               width: 1.0,
             ),
             boxShadow: [
               BoxShadow(
-                color: lens.color.withValues(alpha: 0.08),
+                color: lens.color.withValues(alpha: theme.isDark ? 0.12 : 0.08),
                 blurRadius: 18,
                 offset: const Offset(0, 5),
               ),
@@ -924,8 +928,12 @@ class _ContextCardWidgetState extends State<ContextCardWidget> {
             // Inner Core
             padding: const EdgeInsets.all(20),
             decoration: BoxDecoration(
-              color: const Color(0xFFFCFBF7), // Warm editorial paper
+              color: theme.innerCardColor,
               borderRadius: BorderRadius.circular(22),
+              border: Border.all(
+                color: theme.borderColor,
+                width: 0.8,
+              ),
             ),
             child: innerContentWidget,
           ),
@@ -934,12 +942,10 @@ class _ContextCardWidgetState extends State<ContextCardWidget> {
     );
 
     if (widget.isFeedMode) {
-      return SizedBox.expand(
-        child: Center(
-          child: SingleChildScrollView(
-            physics: const BouncingScrollPhysics(),
-            child: cardContainer,
-          ),
+      return Center(
+        child: SingleChildScrollView(
+          physics: const ClampingScrollPhysics(),
+          child: cardContainer,
         ),
       );
     }

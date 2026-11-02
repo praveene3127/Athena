@@ -492,49 +492,6 @@ class ChunkWidget extends StatelessWidget {
               ),
             ),
           ],
-          if (onDeepDive != null) ...[
-            const SizedBox(width: 8),
-            InkWell(
-              borderRadius: BorderRadius.circular(20),
-              onTap: () {
-                HapticFeedback.lightImpact();
-                onDeepDive!();
-              },
-              child: Container(
-                constraints: const BoxConstraints(minHeight: 36),
-                padding:
-                    const EdgeInsets.symmetric(horizontal: 12, vertical: 7),
-                decoration: BoxDecoration(
-                  color: theme.pillBackground,
-                  borderRadius: BorderRadius.circular(20),
-                  border: Border.all(
-                    color: theme.borderColor,
-                    width: 1,
-                  ),
-                ),
-                child: Row(
-                  mainAxisSize: MainAxisSize.min,
-                  children: [
-                    const Icon(
-                      Icons.bolt_rounded,
-                      size: 15,
-                      color: Color(0xFFD97706),
-                    ),
-                    const SizedBox(width: 4),
-                    Text(
-                      'Fact-Check',
-                      style: TextStyle(
-                        fontFamily: AppTheme.fontUI,
-                        fontSize: 11.5,
-                        fontWeight: FontWeight.w600,
-                        color: theme.textColor,
-                      ),
-                    ),
-                  ],
-                ),
-              ),
-            ),
-          ],
         ],
       ),
     );
@@ -548,7 +505,7 @@ class ChunkWidget extends StatelessWidget {
             isMobile ? 12 : 16,
             8,
             isMobile ? 12 : 16,
-            isFeedMode ? 84 : 10,
+            12,
           ),
           // Outer Shell (Doppelrand)
           padding: const EdgeInsets.all(4),

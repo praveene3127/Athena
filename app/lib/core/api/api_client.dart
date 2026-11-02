@@ -141,12 +141,51 @@ _ParseDocumentResult _parseAndChunkDocumentInBackground(_ParseDocumentParams par
         return false;
       }
 
+      String extractPageText(int index) {
+        try {
+          final lines = extractor.extractTextLines(startPageIndex: index, endPageIndex: index);
+          if (lines.isNotEmpty) {
+            final lineStrings = <String>[];
+            for (final line in lines) {
+              if (line.wordCollection.isNotEmpty) {
+                final lineWords = line.wordCollection
+                    .map((w) => w.text.trim())
+                    .where((w) => w.isNotEmpty)
+                    .join(' ');
+                if (lineWords.isNotEmpty) {
+                  lineStrings.add(lineWords);
+                }
+              } else if (line.text.trim().isNotEmpty) {
+                lineStrings.add(line.text.trim());
+              }
+            }
+            if (lineStrings.isNotEmpty) {
+              return lineStrings.join('\n');
+            }
+          }
+        } catch (_) {}
+
+        try {
+          return extractor.extractText(
+            startPageIndex: index,
+            endPageIndex: index,
+            layoutText: true,
+          );
+        } catch (_) {
+          try {
+            return extractor.extractText(
+              startPageIndex: index,
+              endPageIndex: index,
+            );
+          } catch (_) {
+            return '';
+          }
+        }
+      }
+
       for (int i = 0; i < pageCount; i++) {
         final pageNum = i + 1;
-        String pageText = '';
-        try {
-          pageText = extractor.extractText(startPageIndex: i, endPageIndex: i);
-        } catch (_) {}
+        final pageText = extractPageText(i);
 
         if (i < frontMatterCutoff && isTocOrFrontMatter(pageText)) {
           continue;
@@ -175,11 +214,7 @@ _ParseDocumentResult _parseAndChunkDocumentInBackground(_ParseDocumentParams par
       if (buffer.isEmpty) {
         for (int i = 0; i < pageCount; i++) {
           final pageNum = i + 1;
-          String pageText = '';
-          try {
-            pageText =
-                extractor.extractText(startPageIndex: i, endPageIndex: i);
-          } catch (_) {}
+          final pageText = extractPageText(i);
           final sanitizedPage = sanitizeProseSpacing(pageText).trim();
           if (sanitizedPage.isEmpty) continue;
 
