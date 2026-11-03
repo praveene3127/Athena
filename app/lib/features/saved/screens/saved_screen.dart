@@ -72,7 +72,9 @@ final savedCardsProvider =
     for (final item in list) {
       result.add(SavedItem.fromJson(item));
     }
-  } catch (_) {}
+  } catch (e) {
+        debugPrint('Athena caught error: $e');
+      }
 
   // Also merge any cards stored locally to guarantee zero loss
   try {
@@ -121,7 +123,9 @@ final savedCardsProvider =
         }
       }
     }
-  } catch (_) {}
+  } catch (e) {
+        debugPrint('Athena caught error: $e');
+      }
 
   return result;
 });

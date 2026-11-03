@@ -1,5 +1,5 @@
 import 'package:flutter/foundation.dart'
-    show kIsWeb, defaultTargetPlatform, TargetPlatform;
+    show kIsWeb, defaultTargetPlatform, TargetPlatform, debugPrint;
 import 'package:shared_preferences/shared_preferences.dart';
 
 class AppConfig {
@@ -14,6 +14,11 @@ class AppConfig {
   );
 
   static const String nativeFallback = 'http://127.0.0.1:8000';
+
+  static bool get isStandaloneMobile =>
+      !kIsWeb &&
+      (_runtimeBaseUrl == null || _runtimeBaseUrl!.isEmpty) &&
+      _configured.isEmpty;
 
   static bool get hasActiveBackend =>
       kIsWeb ||
@@ -37,7 +42,9 @@ class AppConfig {
       } else if (!kIsWeb && _configured.isNotEmpty) {
         _runtimeBaseUrl = _configured.trim().replaceAll(RegExp(r'/+$'), '');
       }
-    } catch (_) {}
+    } catch (e) {
+        debugPrint('Athena caught error: $e');
+      }
   }
 
   /// Save and update runtime URL.
@@ -55,7 +62,9 @@ class AppConfig {
         await prefs.setString('athena_backend_url', sanitized);
         await prefs.setString('athena_server_url', sanitized);
       }
-    } catch (_) {}
+    } catch (e) {
+        debugPrint('Athena caught error: $e');
+      }
   }
 
   /// Pure host resolver used by [apiBaseUrl] and unit tests.
@@ -98,7 +107,9 @@ class AppConfig {
       try {
         origin = Uri.base.origin;
         host = Uri.base.host;
-      } catch (_) {}
+      } catch (e) {
+        debugPrint('Athena caught error: $e');
+      }
     }
     final isMobile = !kIsWeb &&
         (defaultTargetPlatform == TargetPlatform.android ||

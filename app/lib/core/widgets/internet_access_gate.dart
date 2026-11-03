@@ -77,7 +77,9 @@ class _InternetAccessGateState extends State<InternetAccessGate>
         if (res.statusCode == 200) {
           reachable = true;
         }
-      } catch (_) {}
+      } catch (e) {
+        debugPrint('Athena caught error: $e');
+      }
     }
 
     // 2. If backend probe failed, check public internet via Wikipedia API
@@ -98,7 +100,9 @@ class _InternetAccessGateState extends State<InternetAccessGate>
         );
         reachable =
             response.statusCode == 200 && response.data?['query'] is Map;
-      } catch (_) {}
+      } catch (e) {
+        debugPrint('Athena caught error: $e');
+      }
     }
 
     if (!mounted) return;

@@ -101,7 +101,9 @@ class _LibraryScreenState extends ConsumerState<LibraryScreen>
           _checkForUpdates();
         }
       });
-    } catch (_) {}
+    } catch (e) {
+        debugPrint('Athena caught error: $e');
+      }
   }
 
   Future<void> _checkServerConnectionAndAutoDiscover() async {
@@ -110,7 +112,9 @@ class _LibraryScreenState extends ConsumerState<LibraryScreen>
       final client = ref.read(apiClientProvider);
       final health = await client.checkHealth();
       if (health['status'] == 'ok') return;
-    } catch (_) {}
+    } catch (e) {
+        debugPrint('Athena caught error: $e');
+      }
 
     try {
       final found = await LanDiscovery.discoverServer(timeoutMs: 600);
@@ -120,7 +124,9 @@ class _LibraryScreenState extends ConsumerState<LibraryScreen>
         _checkAIConfiguration();
         _checkForUpdates();
       }
-    } catch (_) {}
+    } catch (e) {
+        debugPrint('Athena caught error: $e');
+      }
   }
 
   Future<void> _checkAIConfiguration() async {
@@ -166,7 +172,9 @@ class _LibraryScreenState extends ConsumerState<LibraryScreen>
           );
 
           cfg = await client.getAIConfig();
-        } catch (_) {}
+        } catch (e) {
+        debugPrint('Athena caught error: $e');
+      }
       }
 
       if (!mounted) return;
@@ -198,7 +206,9 @@ class _LibraryScreenState extends ConsumerState<LibraryScreen>
           }
         }
       }
-    } catch (_) {}
+    } catch (e) {
+        debugPrint('Athena caught error: $e');
+      }
   }
 
   @override
@@ -257,7 +267,9 @@ class _LibraryScreenState extends ConsumerState<LibraryScreen>
           _hasUpdate = isNewer;
         });
       }
-    } catch (_) {}
+    } catch (e) {
+        debugPrint('Athena caught error: $e');
+      }
   }
 
   void _showUpdateDialog() {
@@ -1168,7 +1180,9 @@ class _LibraryScreenState extends ConsumerState<LibraryScreen>
             )
             .catchError((_) => <String, dynamic>{});
       }
-    } catch (_) {}
+    } catch (e) {
+        debugPrint('Athena caught error: $e');
+      }
 
     if (mounted) {
       context.push('/reader/${doc.id}');
@@ -2233,7 +2247,9 @@ class _DocumentTileState extends State<_DocumentTile> {
       if (mounted && saved != null && saved > 0) {
         setState(() => _savedChunkIndex = saved);
       }
-    } catch (_) {}
+    } catch (e) {
+        debugPrint('Athena caught error: $e');
+      }
   }
 
   @override

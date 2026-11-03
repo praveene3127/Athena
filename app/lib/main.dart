@@ -9,7 +9,7 @@ Future<void> main() async {
   try {
     await AppConfig.init();
     await initializeMobileProcessing();
-  } catch (_) {
+  } catch (e) {
     // The app can still process in the foreground if background scheduling
     // is unavailable on this OS/device.
   }

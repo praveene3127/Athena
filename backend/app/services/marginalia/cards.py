@@ -212,13 +212,18 @@ def _fetch_multi_source_evidence(
 
     with ThreadPoolExecutor(max_workers=4) as pool:
         futures = [pool.submit(fn) for fn in tasks]
-        for fut in as_completed(futures, timeout=2.5):
-            try:
-                res = fut.result()
-                if res:
-                    results.extend(res)
-            except Exception:
-                pass
+        try:
+            for fut in as_completed(futures, timeout=2.5):
+                try:
+                    res = fut.result()
+                    if res:
+                        results.extend(res)
+                except Exception:
+                    pass
+        except TimeoutError:
+            pass
+        except Exception:
+            pass
 
     seen_urls = set()
     deduped = []

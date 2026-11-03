@@ -1,3 +1,4 @@
+import 'package:flutter/foundation.dart';
 import 'dart:async';
 import 'package:dio/dio.dart';
 import 'package:flutter_secure_storage/flutter_secure_storage.dart';
@@ -25,7 +26,7 @@ class SecureStorageService {
       if (saved != null && saved.trim().isNotEmpty) {
         return saved.trim().replaceAll(RegExp(r'/+$'), '');
       }
-    } catch (_) {
+    } catch (e) {
       // Keystore unavailable or corrupted; fallback to default
     }
     return AppConfig.apiBaseUrl.replaceAll(RegExp(r'/+$'), '');
@@ -36,7 +37,9 @@ class SecureStorageService {
     final sanitized = url.trim().replaceAll(RegExp(r'/+$'), '');
     try {
       await _storage.write(key: _backendUrlKey, value: sanitized);
-    } catch (_) {}
+    } catch (e) {
+        debugPrint('Athena caught error: $e');
+      }
     await AppConfig.setBaseUrl(sanitized);
   }
 
@@ -47,7 +50,7 @@ class SecureStorageService {
       if (token != null && token.trim().isNotEmpty) {
         return token.trim();
       }
-    } catch (_) {
+    } catch (e) {
       // Secure storage read error
     }
     return null;

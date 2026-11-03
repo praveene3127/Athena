@@ -396,7 +396,7 @@ class _ReaderScreenState extends ConsumerState<ReaderScreen> {
 
       }
 
-    } catch (_) {}
+    } catch (e) { debugPrint('Athena caught error: '); }
 
   }
 
@@ -794,7 +794,7 @@ class _ReaderScreenState extends ConsumerState<ReaderScreen> {
 
             }
 
-          } catch (_) {}
+          } catch (e) { debugPrint('Athena caught error: '); }
 
         }
 
@@ -1133,24 +1133,47 @@ class _ReaderScreenState extends ConsumerState<ReaderScreen> {
     try {
 
       final client = ref.read(apiClientProvider);
-
-      final res = await client.generateCardForChunk(
-
+      final seq = chunk.sequence ?? 1;
+      var res = await client.generateCardForChunk(
         widget.documentId,
-
-        chunk.sequence ?? 1,
-
+        seq,
         forceNew: true,
-
       );
+      if (res == null || res['status'] == 'error') {
+        res = await client.generateImmediateCard(
+          widget.documentId,
+          chunk.id,
+          seq,
+          chunk.rawText,
+        );
+      }
 
       if (mounted) {
-
         ScaffoldMessenger.of(context).hideCurrentSnackBar();
+        if (res != null && res['status'] != 'error') {
+          final cardItem = ReaderItem.fromJson(res);
+          setState(() {
+            _cardsByChunkSeq[seq] = cardItem;
+          });
 
-        if (res != null) {
-
-          ref.invalidate(readerDataProvider(widget.documentId));
+          WidgetsBinding.instance.addPostFrameCallback((_) {
+            if (mounted && _readingMode == 'feed' && _pageController != null && _pageController!.hasClients) {
+              final feedItems = _getFeedItems(ref.read(readerDataProvider(widget.documentId)).value?.items ?? []);
+              final targetIdx = feedItems.indexWhere((it) => it.isContextCard && it.sequence == seq);
+              if (targetIdx != -1) {
+                _pageController!.animateToPage(
+                  targetIdx,
+                  duration: const Duration(milliseconds: 400),
+                  curve: Curves.easeInOutCubic,
+                );
+              } else {
+                _pageController!.nextPage(
+                  duration: const Duration(milliseconds: 350),
+                  curve: Curves.easeInOutCubic,
+                );
+              }
+            }
+          });
 
           ScaffoldMessenger.of(context).showSnackBar(
 
@@ -1190,7 +1213,7 @@ class _ReaderScreenState extends ConsumerState<ReaderScreen> {
 
       }
 
-    } catch (_) {
+    } catch (e) {
 
       if (mounted) {
 
@@ -1372,7 +1395,7 @@ class _ReaderScreenState extends ConsumerState<ReaderScreen> {
 
       }
 
-    } catch (_) {
+    } catch (e) {
 
       if (mounted) {
 
@@ -1526,7 +1549,7 @@ class _ReaderScreenState extends ConsumerState<ReaderScreen> {
 
         }
 
-      } catch (_) {
+      } catch (e) {
 
         prefs.remove('athena_saved_notes_v1');
 
@@ -2527,7 +2550,7 @@ class _ReaderScreenState extends ConsumerState<ReaderScreen> {
 
       ref.invalidate(savedCardsProvider);
 
-    } catch (_) {}
+    } catch (e) { debugPrint('Athena caught error: '); }
 
   }
 
@@ -5552,6 +5575,7 @@ class _ReaderScreenState extends ConsumerState<ReaderScreen> {
                                 controller: _pageController,
 
                                 physics: const PageScrollPhysics(),
+                                allowImplicitScrolling: true,
 
                                 onPageChanged: (index) {
 
@@ -5889,16 +5913,20 @@ class _ReaderScreenState extends ConsumerState<ReaderScreen> {
 
 
 
-                                    final bool hasNextCard =
-
-                                        (index + 1 < feedItems.length) &&
-
-                                            feedItems[index + 1].isContextCard;
-
+                                    int? nextCardIndex;
+                                    for (int ci = index + 1; ci < feedItems.length; ci++) {
+                                      if (feedItems[ci].isContextCard) {
+                                        if (feedItems[ci].sequence == seq || ci <= index + 2) {
+                                          nextCardIndex = ci;
+                                          break;
+                                        }
+                                      } else if (feedItems[ci].sequence != seq) {
+                                        break;
+                                      }
+                                    }
+                                    final bool hasNextCard = nextCardIndex != null;
                                     final String nextCardTitle = hasNextCard
-
-                                        ? (feedItems[index + 1].title ?? 'AI Marginalia')
-
+                                        ? (feedItems[nextCardIndex].title ?? 'AI Marginalia')
                                         : '';
 
 
@@ -6049,7 +6077,17 @@ class _ReaderScreenState extends ConsumerState<ReaderScreen> {
 
                                                   child: InkWell(
 
-                                                    onTap: () => _nextCard(feedItems.length),
+                                                    onTap: () {
+                                                      if (nextCardIndex != null && _pageController != null && _pageController!.hasClients) {
+                                                        _pageController!.animateToPage(
+                                                          nextCardIndex,
+                                                          duration: const Duration(milliseconds: 350),
+                                                          curve: Curves.easeInOutCubic,
+                                                        );
+                                                      } else {
+                                                        _nextCard(feedItems.length);
+                                                      }
+                                                    },
 
                                                     borderRadius: BorderRadius.circular(20),
 
@@ -8063,7 +8101,7 @@ class _InBookSearchSheetState extends ConsumerState<_InBookSearchSheet> {
 
       }
 
-    } catch (_) {
+    } catch (e) {
 
       if (mounted) {
 

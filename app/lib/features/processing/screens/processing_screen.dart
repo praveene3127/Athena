@@ -148,11 +148,13 @@ class _ProcessingScreenState extends ConsumerState<ProcessingScreen>
           }
         }
       }
-    } on AppError catch (_) {
+    } on AppError catch (e) {
+      debugPrint('Processing AppError: $e');
       if (mounted) {
         setState(() => _backendUnreachable = true);
       }
-    } catch (_) {
+    } catch (e) {
+      debugPrint('Processing unexpected error: $e');
       if (mounted) {
         setState(() => _backendUnreachable = true);
       }
@@ -174,7 +176,7 @@ class _ProcessingScreenState extends ConsumerState<ProcessingScreen>
           SnackBar(content: Text(e.message), backgroundColor: Colors.redAccent),
         );
       }
-    } catch (_) {
+    } catch (e) {
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
           const SnackBar(
@@ -196,7 +198,7 @@ class _ProcessingScreenState extends ConsumerState<ProcessingScreen>
       await client.forceIngestDocument(widget.documentId);
       _pollTimer?.cancel();
       _startPolling();
-    } catch (_) {
+    } catch (e) {
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
           const SnackBar(
@@ -215,7 +217,7 @@ class _ProcessingScreenState extends ConsumerState<ProcessingScreen>
       final client = ref.read(apiClientProvider);
       await client.deleteDocument(widget.documentId);
       if (mounted) context.go('/');
-    } catch (_) {
+    } catch (e) {
       if (mounted) context.go('/');
     }
   }

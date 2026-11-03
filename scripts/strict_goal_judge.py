@@ -576,7 +576,21 @@ def gate_7_flutter_quality():
     harness_path = os.path.join(APP_DIR, "test", "artcraft_reader_harness_test.dart")
     if not os.path.isfile(harness_path):
         fail_gate(7, "Flutter Quality", "Missing ArtCraft harness test at app/test/artcraft_reader_harness_test.dart")
+    mobile_harness_path = os.path.join(APP_DIR, "test", "mobile_architecture_harness_test.dart")
+    if not os.path.isfile(mobile_harness_path):
+        fail_gate(7, "Flutter Quality", "Missing Mobile Architecture harness test at app/test/mobile_architecture_harness_test.dart")
     print("  + ArtCraft 390x844 Mobile Viewport & Invariant Harness verified.")
+
+    # 2b. AST/Regex Scan: Zero Empty catch (_) {} blocks in app/lib
+    for root, _, files in os.walk(os.path.join(APP_DIR, "lib")):
+        for f in files:
+            if f.endswith(".dart"):
+                fpath = os.path.join(root, f)
+                with open(fpath, "r", encoding="utf-8", errors="ignore") as fh:
+                    fcontent = fh.read()
+                if re.search(r"catch\s*\([^\)]*\)\s*\{\s*\}", fcontent):
+                    fail_gate(7, "Flutter Quality", f"Architectural violation: Empty catch block found in {fpath}")
+    print("  + AST Architecture Audit: Zero empty catch blocks verified across app/lib.")
 
     cmd_test = [FLUTTER_BAT, "test"]
     print(f"  Running: {' '.join(cmd_test)} in {APP_DIR}...")

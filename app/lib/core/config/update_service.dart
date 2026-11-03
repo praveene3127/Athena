@@ -139,7 +139,7 @@ class UpdateService {
           return UpdateInfo.fromJson(
               Map<String, dynamic>.from(response.data as Map));
         }
-      } catch (_) {
+      } catch (e) {
         // Local companion server unavailable or offline — proceed to remote fallback
       }
     }
@@ -182,7 +182,9 @@ class UpdateService {
           ),
         );
       }
-    } catch (_) {}
+    } catch (e) {
+        debugPrint('Athena caught error: $e');
+      }
 
     return null;
   }
@@ -251,7 +253,7 @@ class UpdateService {
     final uri = Uri.parse(targetUrl);
     try {
       return await launchUrl(uri, mode: LaunchMode.externalApplication);
-    } catch (_) {
+    } catch (e) {
       return await launchUrl(uri);
     }
   }

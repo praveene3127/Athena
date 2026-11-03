@@ -5,7 +5,7 @@ import 'dart:isolate';
 import 'package:archive/archive.dart';
 import 'package:cross_file/cross_file.dart';
 import 'package:dio/dio.dart';
-import 'package:flutter/foundation.dart' show compute, kIsWeb;
+import 'package:flutter/foundation.dart' show compute, kIsWeb, debugPrint;
 import 'package:shared_preferences/shared_preferences.dart';
 
 import 'package:athena/core/config/config.dart';
@@ -68,7 +68,7 @@ String _extractEpubText(List<int> bytes) {
       }
     }
     return buffer.toString().trim();
-  } catch (_) {
+  } catch (e) {
     return '';
   }
 }
@@ -164,7 +164,9 @@ _ParseDocumentResult _parseAndChunkDocumentInBackground(_ParseDocumentParams par
               return lineStrings.join('\n');
             }
           }
-        } catch (_) {}
+        } catch (e) {
+        debugPrint('Athena caught error: $e');
+      }
 
         try {
           return extractor.extractText(
@@ -172,13 +174,13 @@ _ParseDocumentResult _parseAndChunkDocumentInBackground(_ParseDocumentParams par
             endPageIndex: index,
             layoutText: true,
           );
-        } catch (_) {
+        } catch (e) {
           try {
             return extractor.extractText(
               startPageIndex: index,
               endPageIndex: index,
             );
-          } catch (_) {
+          } catch (e) {
             return '';
           }
         }
@@ -238,11 +240,11 @@ _ParseDocumentResult _parseAndChunkDocumentInBackground(_ParseDocumentParams par
 
       pdfDoc.dispose();
       canonicalText = buffer.toString().trim();
-    } catch (_) {
+    } catch (e) {
       try {
         canonicalText =
             sanitizeProseSpacing(utf8.decode(bytes, allowMalformed: true));
-      } catch (_) {
+      } catch (e) {
         canonicalText = sanitizeProseSpacing(String.fromCharCodes(bytes));
       }
     }
@@ -252,7 +254,7 @@ _ParseDocumentResult _parseAndChunkDocumentInBackground(_ParseDocumentParams par
       try {
         canonicalText =
             sanitizeProseSpacing(utf8.decode(bytes, allowMalformed: true));
-      } catch (_) {
+      } catch (e) {
         canonicalText = sanitizeProseSpacing(String.fromCharCodes(bytes));
       }
     }
@@ -260,7 +262,7 @@ _ParseDocumentResult _parseAndChunkDocumentInBackground(_ParseDocumentParams par
     try {
       canonicalText =
           sanitizeProseSpacing(utf8.decode(bytes, allowMalformed: true));
-    } catch (_) {
+    } catch (e) {
       canonicalText = sanitizeProseSpacing(String.fromCharCodes(bytes));
     }
   }
@@ -294,6 +296,35 @@ _ParseDocumentResult _parseAndChunkDocumentInBackground(_ParseDocumentParams par
 }
 
 class ApiClient {
+  static bool _backendReachable = true;
+  static DateTime? _backendCircuitBreakerResetTime;
+
+  static bool get isBackendReachable {
+    if (!_backendReachable && _backendCircuitBreakerResetTime != null) {
+      if (DateTime.now().isAfter(_backendCircuitBreakerResetTime!)) {
+        _backendReachable = true;
+        _backendCircuitBreakerResetTime = null;
+      }
+    }
+    return _backendReachable;
+  }
+
+  static void recordBackendFailure() {
+    _backendReachable = false;
+    _backendCircuitBreakerResetTime =
+        DateTime.now().add(const Duration(seconds: 60));
+  }
+
+  static void recordBackendSuccess() {
+    _backendReachable = true;
+    _backendCircuitBreakerResetTime = null;
+  }
+
+  bool get _hasReachableBackend =>
+      AppConfig.apiBaseUrl.isNotEmpty &&
+      !AppConfig.isStandaloneMobile &&
+      isBackendReachable;
+
   final Dio dio;
 
   ApiClient({Dio? client})
@@ -322,7 +353,9 @@ class ApiClient {
                   host != '127.0.0.1') {
                 base = origin;
               }
-            } catch (_) {}
+            } catch (e) {
+        debugPrint('Athena caught error: $e');
+      }
           }
           if (base.isNotEmpty) {
             options.baseUrl = base;
@@ -336,7 +369,7 @@ class ApiClient {
   // --- Health ---
 
   Future<Map<String, dynamic>> checkHealth() async {
-    if (AppConfig.apiBaseUrl.isEmpty) {
+    if (!_hasReachableBackend || AppConfig.apiBaseUrl.isEmpty) {
       return {'status': 'ok', 'mode': 'on_device_standalone'};
     }
     try {
@@ -361,16 +394,20 @@ class ApiClient {
         },
       );
       return response.data as Map<String, dynamic>;
-    } catch (_) {
+    } catch (e) {
+
+      debugPrint('Athena generateCard caught: ');
+
       return null;
+
     }
   }
 
   // --- Documents ---
 
   Future<List<Map<String, dynamic>>> listDocuments() async {
-    // 1. In standalone mobile mode, read directly from SQLite
-    if (AppConfig.apiBaseUrl.isEmpty && !kIsWeb) {
+    // 1. In standalone mobile mode or when circuit-breaker is tripped, read directly from SQLite (< 2ms)
+    if ((!_hasReachableBackend || AppConfig.apiBaseUrl.isEmpty) && !kIsWeb) {
       final localDocs = await LocalDatabase.instance.listDocuments();
       return localDocs;
     }
@@ -382,7 +419,8 @@ class ApiClient {
       final list = (response.data as List).cast<Map<String, dynamic>>();
       _cacheDocumentsLocally(list);
       return list;
-    } catch (_) {
+    } catch (e) {
+      recordBackendFailure();
       if (!kIsWeb) {
         final localDocs = await LocalDatabase.instance.listDocuments();
         if (localDocs.isNotEmpty) {
@@ -406,7 +444,9 @@ class ApiClient {
               _cacheDocumentsLocally(list);
               return list;
             }
-          } catch (_) {}
+          } catch (e) {
+        debugPrint('Athena caught error: $e');
+      }
         }
         // In standalone mode, return empty library without nagging
         return [];
@@ -425,7 +465,7 @@ class ApiClient {
           .get('/api/documents/$id')
           .timeout(const Duration(seconds: 3));
       return response.data as Map<String, dynamic>;
-    } catch (_) {
+    } catch (e) {
       if (!kIsWeb) {
         final doc = await LocalDatabase.instance.getDocument(id);
         if (doc != null) return doc;
@@ -440,7 +480,7 @@ class ApiClient {
           .get('/api/documents/$id/status')
           .timeout(const Duration(seconds: 2));
       return response.data as Map<String, dynamic>;
-    } catch (_) {
+    } catch (e) {
       if (!kIsWeb) {
         final doc = await LocalDatabase.instance.getDocument(id);
         if (doc != null) {
@@ -467,7 +507,7 @@ class ApiClient {
     List<int>? fileBytes,
   }) async {
     // 1. If companion engine backend is reachable, try backend first
-    if (AppConfig.apiBaseUrl.isNotEmpty) {
+    if (_hasReachableBackend) {
       try {
         FormData formData;
         if (!kIsWeb && filePath != null && filePath.isNotEmpty) {
@@ -541,7 +581,9 @@ class ApiClient {
       try {
         final xf = XFile(filePath);
         bytes.addAll(await xf.readAsBytes());
-      } catch (_) {}
+      } catch (e) {
+        debugPrint('Athena caught error: $e');
+      }
     }
 
     if (bytes.isEmpty) {
@@ -621,7 +663,9 @@ class ApiClient {
               })
           .toList();
       await LocalDatabase.instance.insertCards(cardMaps);
-    } catch (_) {}
+    } catch (e) {
+        debugPrint('Athena caught error: $e');
+      }
 
     return docId;
   }
@@ -649,12 +693,16 @@ class ApiClient {
     if (!kIsWeb) {
       try {
         await LocalDatabase.instance.deleteDocument(id);
-      } catch (_) {}
+      } catch (e) {
+        debugPrint('Athena caught error: $e');
+      }
     }
     if (AppConfig.apiBaseUrl.isNotEmpty) {
       try {
         await dio.delete('/api/documents/$id');
-      } catch (_) {}
+      } catch (e) {
+        debugPrint('Athena caught error: $e');
+      }
     }
   }
 
@@ -688,15 +736,27 @@ class ApiClient {
   }
 
   Future<Map<String, dynamic>> getReader(String id) async {
+    // 1. Instant local read (< 2ms) when in standalone mobile mode or backend circuit-breaker tripped
+    if ((!_hasReachableBackend || AppConfig.isStandaloneMobile) && !kIsWeb) {
+      final dbData = await LocalDatabase.instance.getReaderData(id);
+      final chunks = dbData['chunks'] as List?;
+      if (chunks != null && chunks.isNotEmpty) {
+        _sanitizeReaderData(dbData);
+        return dbData;
+      }
+    }
+
     try {
       final response = await dio
           .get('/api/documents/$id/reader')
-          .timeout(const Duration(seconds: 3));
+          .timeout(const Duration(milliseconds: 1800));
+      recordBackendSuccess();
       final data = response.data as Map<String, dynamic>;
       _sanitizeReaderData(data);
       _cacheReaderLocally(id, data);
       return data;
-    } catch (_) {
+    } catch (e) {
+      recordBackendFailure();
       if (!kIsWeb) {
         final dbData = await LocalDatabase.instance.getReaderData(id);
         final chunks = dbData['chunks'] as List?;
@@ -723,11 +783,15 @@ class ApiClient {
       final response = await dio.post(
         '/api/documents/$docId/cards/generate',
         data: {'chunk_index': chunkIndex, 'force_new': forceNew},
-        options: Options(receiveTimeout: const Duration(seconds: 12)),
+        options: Options(receiveTimeout: const Duration(seconds: 45)),
       );
       return response.data as Map<String, dynamic>;
-    } catch (_) {
+    } catch (e) {
+
+      debugPrint('Athena generateCard caught: ');
+
       return null;
+
     }
   }
 
@@ -771,10 +835,26 @@ class ApiClient {
         } else if (response.data is List) {
           return List<Map<String, dynamic>>.from(response.data as List);
         }
-      } catch (_) {}
+      } catch (e) {
+        debugPrint('Athena caught error: $e');
+      }
     }
 
-    // Local substring search fallback over cached chunks if offline
+    // 1. Instant on-device SQLite FTS5 search (< 1ms)
+    if (!kIsWeb) {
+      final dbResults = await LocalDatabase.instance.searchChunks(docId, trimmed);
+      if (dbResults.isNotEmpty) {
+        return dbResults.map((r) => {
+          'chunk_id': r['id']?.toString() ?? '',
+          'sequence': (r['sequence'] as num?)?.toInt() ?? 1,
+          'section_title': r['section_title']?.toString() ?? '',
+          'raw_text': r['raw_text']?.toString() ?? '',
+          'rrf_score': 1.0,
+        }).take(topK).toList();
+      }
+    }
+
+    // 2. Local substring search fallback over cached chunks if offline
     final cached = await _loadCachedReader(docId);
     final results = <Map<String, dynamic>>[];
     if (cached != null) {
@@ -838,7 +918,9 @@ class ApiClient {
           });
         }
       }
-    } catch (_) {}
+    } catch (e) {
+        debugPrint('Athena caught error: $e');
+      }
   }
 
   Future<List<Map<String, dynamic>>> _loadCachedDocuments() async {
@@ -853,7 +935,9 @@ class ApiClient {
         final decoded = jsonDecode(raw) as List;
         return decoded.map((e) => Map<String, dynamic>.from(e as Map)).toList();
       }
-    } catch (_) {}
+    } catch (e) {
+        debugPrint('Athena caught error: $e');
+      }
     return [];
   }
 
@@ -925,7 +1009,9 @@ class ApiClient {
           await LocalDatabase.instance.insertCards(cardMaps);
         }
       }
-    } catch (_) {}
+    } catch (e) {
+        debugPrint('Athena caught error: $e');
+      }
   }
 
   Future<Map<String, dynamic>?> _loadCachedReader(String docId) async {
@@ -942,7 +1028,9 @@ class ApiClient {
       if (raw != null && raw.isNotEmpty) {
         return Map<String, dynamic>.from(jsonDecode(raw) as Map);
       }
-    } catch (_) {}
+    } catch (e) {
+        debugPrint('Athena caught error: $e');
+      }
     return null;
   }
 
@@ -957,7 +1045,9 @@ class ApiClient {
         if (response.data is Map<String, dynamic>) {
           return response.data as Map<String, dynamic>;
         }
-      } catch (_) {}
+      } catch (e) {
+        debugPrint('Athena caught error: $e');
+      }
     }
 
     // Standalone on-device mobile mode
@@ -1015,7 +1105,9 @@ class ApiClient {
           if (c['citations_json'] != null) {
             try {
               citations = jsonDecode(c['citations_json'] as String) as List;
-            } catch (_) {}
+            } catch (e) {
+        debugPrint('Athena caught error: $e');
+      }
           }
           return {
             'type': 'context_card',
@@ -1038,7 +1130,9 @@ class ApiClient {
           'chunk_index': chunkIndex,
           'cards': formattedCards,
         };
-      } catch (_) {}
+      } catch (e) {
+        debugPrint('Athena caught error: $e');
+      }
     }
 
     return {'status': 'saved', 'chunk_index': chunkIndex};
@@ -1071,7 +1165,9 @@ class ApiClient {
           try {
             citations =
                 jsonDecode(newCard['citations_json'] as String) as List;
-          } catch (_) {}
+          } catch (e) {
+        debugPrint('Athena caught error: $e');
+      }
         }
         return {
           'type': 'context_card',
@@ -1088,7 +1184,9 @@ class ApiClient {
           'citations': citations,
         };
       }
-    } catch (_) {}
+    } catch (e) {
+        debugPrint('Athena caught error: $e');
+      }
     return null;
   }
 
@@ -1122,14 +1220,16 @@ class ApiClient {
           final len = await xf.length();
           if (len > 0) return path;
         }
-      } catch (_) {}
+      } catch (e) {
+        debugPrint('Athena caught error: $e');
+      }
     }
     return null;
   }
 
   Future<Map<String, dynamic>> fetchVibeCheck(
       String docId, int chunkIndex) async {
-    if (AppConfig.apiBaseUrl.isNotEmpty) {
+    if (_hasReachableBackend) {
       try {
         final response = await dio.post(
           '/api/documents/$docId/vibe-check',
@@ -1140,7 +1240,9 @@ class ApiClient {
           ),
         );
         return response.data as Map<String, dynamic>;
-      } catch (_) {}
+      } catch (e) {
+        debugPrint('Athena caught error: $e');
+      }
     }
 
     return {
@@ -1182,7 +1284,9 @@ class ApiClient {
     if (!kIsWeb) {
       try {
         await LocalDatabase.instance.insertCards([noteMap]);
-      } catch (_) {}
+      } catch (e) {
+        debugPrint('Athena caught error: $e');
+      }
     }
 
     if (AppConfig.apiBaseUrl.isNotEmpty) {
@@ -1196,7 +1300,9 @@ class ApiClient {
           'exact_quote': exactQuote ?? quoteText,
           if (documentTitle != null) 'document_title': documentTitle,
         });
-      } catch (_) {}
+      } catch (e) {
+        debugPrint('Athena caught error: $e');
+      }
     }
   }
 
@@ -1232,12 +1338,16 @@ class ApiClient {
           }
         }
       }
-    } catch (_) {}
+    } catch (e) {
+        debugPrint('Athena caught error: $e');
+      }
 
     // 2. Remove from LocalDatabase
     try {
       await LocalDatabase.instance.setCardSaved(id, false);
-    } catch (_) {}
+    } catch (e) {
+        debugPrint('Athena caught error: $e');
+      }
 
     // 3. Remove from remote backend if connected
     if (AppConfig.apiBaseUrl.isEmpty) {
@@ -1256,11 +1366,15 @@ class ApiClient {
       await prefs.remove('athena_saved_notes_v1');
       await prefs.remove('athena_brain_deck_cards_v1');
       await prefs.remove('athena_brain_deck_v1');
-    } catch (_) {}
+    } catch (e) {
+        debugPrint('Athena caught error: $e');
+      }
     try {
       final db = await LocalDatabase.instance.database;
       await db.update('context_cards', {'saved': 0});
-    } catch (_) {}
+    } catch (e) {
+        debugPrint('Athena caught error: $e');
+      }
     if (AppConfig.apiBaseUrl.isNotEmpty) {
       try {
         final list = await getSavedCards();
@@ -1270,7 +1384,9 @@ class ApiClient {
             await dio.delete('/api/cards/$id/save');
           }
         }
-      } catch (_) {}
+      } catch (e) {
+        debugPrint('Athena caught error: $e');
+      }
     }
   }
 
@@ -1304,7 +1420,9 @@ class ApiClient {
       try {
         final local = await LocalDatabase.instance.getSavedCards();
         result.addAll(local);
-      } catch (_) {}
+      } catch (e) {
+        debugPrint('Athena caught error: $e');
+      }
     }
 
     try {
@@ -1321,7 +1439,9 @@ class ApiClient {
           }
         }
       }
-    } catch (_) {}
+    } catch (e) {
+        debugPrint('Athena caught error: $e');
+      }
 
     if (AppConfig.hasActiveBackend) {
       try {
@@ -1333,7 +1453,7 @@ class ApiClient {
             result.add(card);
           }
         }
-      } catch (_) {
+      } catch (e) {
         // Backend offline — return locally gathered saved cards
       }
     }
@@ -1351,7 +1471,7 @@ class ApiClient {
     String? passageText,
   }) async {
     // 1. Try companion engine backend if configured
-    if (AppConfig.apiBaseUrl.isNotEmpty) {
+    if (_hasReachableBackend) {
       try {
         final response = await dio.post(
           '/api/ask',
@@ -1377,7 +1497,9 @@ class ApiClient {
             'source': 'backend',
           };
         }
-      } catch (_) {}
+      } catch (e) {
+        debugPrint('Athena caught error: $e');
+      }
     }
 
     // 2. Fetch passage text from LocalDatabase if needed
@@ -1388,7 +1510,9 @@ class ApiClient {
         if (chunk != null) {
           textForPrompt = chunk['raw_text']?.toString() ?? '';
         }
-      } catch (_) {}
+      } catch (e) {
+        debugPrint('Athena caught error: $e');
+      }
     }
 
     // 3. On-device fallback via configured Gemini or AI key directly over HTTPS
@@ -1498,7 +1622,9 @@ class ApiClient {
           }
         }
       }
-    } catch (_) {}
+    } catch (e) {
+        debugPrint('Athena caught error: $e');
+      }
 
     // 4. Grounded passage fallback
     final rawText = (selectedText != null && selectedText.isNotEmpty)
@@ -1541,14 +1667,16 @@ class ApiClient {
   // --- BYOK Multi-Provider AI Settings ---
 
   Future<AIConfig> getAIConfig() async {
-    if (AppConfig.apiBaseUrl.isNotEmpty) {
+    if (_hasReachableBackend) {
       try {
         final response = await dio
             .get('/api/settings/ai-config')
             .timeout(const Duration(seconds: 2));
         final cfg = AIConfig.fromJson(response.data as Map<String, dynamic>);
         if (cfg.isConfigured) return cfg;
-      } catch (_) {}
+      } catch (e) {
+        debugPrint('Athena caught error: $e');
+      }
     }
 
     // Read from SharedPreferences
@@ -1616,7 +1744,7 @@ class ApiClient {
     }
 
     // 2. Try companion backend, if unreachable, do not throw
-    if (AppConfig.apiBaseUrl.isNotEmpty) {
+    if (_hasReachableBackend) {
       try {
         final response = await dio.post(
           '/api/settings/ai-config',
@@ -1638,7 +1766,7 @@ class ApiClient {
           ),
         );
         return response.data as Map<String, dynamic>;
-      } catch (_) {
+      } catch (e) {
         // Backend offline on mobile — perfectly fine, saved locally
       }
     }
@@ -1659,7 +1787,7 @@ class ApiClient {
     }
 
     // 1. Try companion backend
-    if (AppConfig.apiBaseUrl.isNotEmpty) {
+    if (_hasReachableBackend) {
       try {
         final response = await dio.post(
           '/api/settings/fetch-models',
@@ -1681,7 +1809,9 @@ class ApiClient {
                   AIModelOption.fromJson(item as Map<String, dynamic>))
               .toList();
         }
-      } catch (_) {}
+      } catch (e) {
+        debugPrint('Athena caught error: $e');
+      }
     }
 
     // 2. Direct on-device models discovery for Gemini
@@ -1722,7 +1852,9 @@ class ApiClient {
           }
           if (models.isNotEmpty) return models;
         }
-      } catch (_) {}
+      } catch (e) {
+        debugPrint('Athena caught error: $e');
+      }
       return const [];
     }
 
@@ -1835,7 +1967,9 @@ class ApiClient {
               }
               if (fetched.isNotEmpty) models = fetched;
             }
-          } catch (_) {}
+          } catch (e) {
+        debugPrint('Athena caught error: $e');
+      }
 
           return {
             'ok': true,
@@ -1893,7 +2027,9 @@ class ApiClient {
                 }
               }
             }
-          } catch (_) {}
+          } catch (e) {
+        debugPrint('Athena caught error: $e');
+      }
 
           return {
             'ok': true,
@@ -1987,7 +2123,9 @@ class ApiClient {
                 }
               }
             }
-          } catch (_) {}
+          } catch (e) {
+        debugPrint('Athena caught error: $e');
+      }
 
           return {
             'ok': true,
@@ -2051,7 +2189,7 @@ class ApiClient {
     final cleanKey = (apiKey ?? '').trim();
 
     // 1. Try companion engine backend first if configured and reachable
-    if (AppConfig.apiBaseUrl.isNotEmpty) {
+    if (_hasReachableBackend) {
       try {
         final response = await dio.post(
           '/api/settings/test-connection',
@@ -2078,7 +2216,7 @@ class ApiClient {
             };
           }
         }
-      } catch (_) {
+      } catch (e) {
         // Backend offline or unreachable — seamlessly test directly over HTTPS
       }
     }

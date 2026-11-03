@@ -1,6 +1,23 @@
 import 'package:crypto/crypto.dart';
 import 'dart:convert';
 
+// Pre-compiled top-level RegExps (Zero runtime re-compilation)
+final _punctLetterRe = RegExp(r'([.,!?;:])([A-Za-z“"‘\x27])');
+final _ellipsisLetterRe = RegExp(r'(\x2e{2,})([A-Za-z“"‘\x27])');
+final _letterEllipsisRe = RegExp(r'([A-Za-z])(\x2e{2,})');
+final _pairedQuotesRe = RegExp(r'([A-Za-z0-9])"([^"\n]+)"([A-Za-z0-9])');
+final _curlyQuoteLetterRe = RegExp(r'([”’])([A-Za-z])');
+final _letterCurlyQuoteRe = RegExp(r'([A-Za-z])([“‘])');
+final _allCapsCapitalizedRe = RegExp(r'([A-Z]{2,})([A-Z][a-z])');
+final _camelCaseRe = RegExp(r'([a-z])([A-Z])');
+final _letterDigitRe = RegExp(r'([A-Za-z])(\d)');
+final _digitLetterRe = RegExp(r'(\d)(?!(?:st|nd|rd|th)\b)([A-Za-z])', caseSensitive: false);
+final _multiSpaceRe = RegExp(r'[ \t]+');
+final _spaceNewlineRe = RegExp(r' *\n *');
+final _multiNewlineRe = RegExp(r'\n{3,}');
+final _isLetterRe = RegExp(r'[A-Za-z]');
+
+
 /// Normalizes spacing in extracted PDF/EPUB prose.
 /// Restores spaces after punctuation, quotes, splits camelCase/PascalCase,
 /// splits letter-digit boundaries, and collapses excessive whitespace.
@@ -10,67 +27,19 @@ String sanitizeProseSpacing(String text) {
 
   // 1a. Space after punctuation if immediately followed by letter or quote:
   // e.g. "candle.Headmaster" -> "candle. Headmaster", "Nolan,ahusky" -> "Nolan, ahusky"
-  result = result.replaceAllMapped(
-    RegExp(r'([.,!?;:])([A-Za-z“"‘\x27])'),
-    (m) => '${m[1]} ${m[2]}',
-  );
-
-  // 1b. Space around ellipsis followed by letters: "boys...hesaid" -> "boys... hesaid"
-  result = result.replaceAllMapped(
-    RegExp(r'(\.{2,})([A-Za-z“"‘\x27])'),
-    (m) => '${m[1]} ${m[2]}',
-  );
-  result = result.replaceAllMapped(
-    RegExp(r'([A-Za-z])(\.{2,})'),
-    (m) => '${m[1]} ${m[2]}',
-  );
-
-  // 2. Space around paired ASCII quotes:
-  // e.g. 'said"Focus"and' -> 'said "Focus" and'
-  result = result.replaceAllMapped(
-    RegExp(r'([A-Za-z0-9])"([^"\n]+)"([A-Za-z0-9])'),
-    (m) => '${m[1]} "${m[2]}" ${m[3]}',
-  );
-
-  // 3. Space for curly quotes:
-  result = result.replaceAllMapped(
-    RegExp(r'([”’])([A-Za-z])'),
-    (m) => '${m[1]} ${m[2]}',
-  );
-  result = result.replaceAllMapped(
-    RegExp(r'([A-Za-z])([“‘])'),
-    (m) => '${m[1]} ${m[2]}',
-  );
-
-  // 4a. Split all-caps acronym/heading followed by capitalized word:
-  // e.g. "CONTENTSCover" -> "CONTENTS Cover", "PDFReader" -> "PDF Reader"
-  result = result.replaceAllMapped(
-    RegExp(r'([A-Z]{2,})([A-Z][a-z])'),
-    (m) => '${m[1]} ${m[2]}',
-  );
-
-  // 4b. Split camelCase / PascalCase fused tokens:
-  // e.g. "TitlePage" -> "Title Page", "ChapterOne" -> "Chapter One", "GaleNolan" -> "Gale Nolan"
-  result = result.replaceAllMapped(
-    RegExp(r'([a-z])([A-Z])'),
-    (m) => '${m[1]} ${m[2]}',
-  );
-
-  // 5. Split letter-digit and digit-letter boundaries (preserving 1st, 2nd, 3rd, 4th):
-  // e.g. "Chapter1" -> "Chapter 1", "1959the" -> "1959 the"
-  result = result.replaceAllMapped(
-    RegExp(r'([A-Za-z])(\d)'),
-    (m) => '${m[1]} ${m[2]}',
-  );
-  result = result.replaceAllMapped(
-    RegExp(r'(\d)(?!(?:st|nd|rd|th)\b)([A-Za-z])', caseSensitive: false),
-    (m) => '${m[1]} ${m[2]}',
-  );
-
-  // 6. Clean up horizontal spaces and line breaks
-  result = result.replaceAll(RegExp(r'[ \t]+'), ' ');
-  result = result.replaceAll(RegExp(r' *\n *'), '\n');
-  result = result.replaceAll(RegExp(r'\n{3,}'), '\n\n');
+  result = result.replaceAllMapped(_punctLetterRe, (m) => '${m[1]} ${m[2]}');
+  result = result.replaceAllMapped(_ellipsisLetterRe, (m) => '${m[1]} ${m[2]}');
+  result = result.replaceAllMapped(_letterEllipsisRe, (m) => '${m[1]} ${m[2]}');
+  result = result.replaceAllMapped(_pairedQuotesRe, (m) => '${m[1]} "${m[2]}" ${m[3]}');
+  result = result.replaceAllMapped(_curlyQuoteLetterRe, (m) => '${m[1]} ${m[2]}');
+  result = result.replaceAllMapped(_letterCurlyQuoteRe, (m) => '${m[1]} ${m[2]}');
+  result = result.replaceAllMapped(_allCapsCapitalizedRe, (m) => '${m[1]} ${m[2]}');
+  result = result.replaceAllMapped(_camelCaseRe, (m) => '${m[1]} ${m[2]}');
+  result = result.replaceAllMapped(_letterDigitRe, (m) => '${m[1]} ${m[2]}');
+  result = result.replaceAllMapped(_digitLetterRe, (m) => '${m[1]} ${m[2]}');
+  result = result.replaceAll(_multiSpaceRe, ' ');
+  result = result.replaceAll(_spaceNewlineRe, '\n');
+  result = result.replaceAll(_multiNewlineRe, '\n\n');
 
   // 7. Split fused lowercase tokens caused by PDF kerning / justification space drops
   // e.g. "Thefourboyswhocarriedbannersmarchedsolemnlytothedais" -> "The four boys who carried banners marched solemnly to the dais"
@@ -363,12 +332,12 @@ String _segmentFusedWord(String rawWord) {
 
   // Separate leading punctuation
   int start = 0;
-  while (start < rawWord.length && !RegExp(r'[A-Za-z]').hasMatch(rawWord[start])) {
+  while (start < rawWord.length && !_isLetterRe.hasMatch(rawWord[start])) {
     start++;
   }
   // Separate trailing punctuation
   int end = rawWord.length;
-  while (end > start && !RegExp(r'[A-Za-z]').hasMatch(rawWord[end - 1])) {
+  while (end > start && !_isLetterRe.hasMatch(rawWord[end - 1])) {
     end--;
   }
 
@@ -441,8 +410,8 @@ List<String>? _wordBreakDP(String s) {
 /// returned range is a direct slice of canonicalText; no text is regenerated.
 class LosslessChunker {
   static const int _minWords = 25;
-  static const int _maxWords = 75;
-  static const int _maxChars = 450;
+  static const int _maxWords = 65;
+  static const int _maxChars = 380;
 
   static final RegExp _continuationStart = RegExp(
     r'^(however|therefore|thus|moreover|furthermore|for example|for instance|as a result|in contrast|because|but|and|so|this|these|they|it)\b',

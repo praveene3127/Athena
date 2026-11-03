@@ -267,14 +267,19 @@ class _ContextCardWidgetState extends State<ContextCardWidget> {
                       elevation: 0,
                     ),
                     child: const Row(
+                      mainAxisSize: MainAxisSize.min,
                       mainAxisAlignment: MainAxisAlignment.center,
                       children: [
-                        Text(
-                          'Open Source Page',
-                          style: TextStyle(
-                            fontFamily: AppTheme.fontUI,
-                            fontWeight: FontWeight.w600,
-                            fontSize: 13,
+                        Flexible(
+                          child: Text(
+                            'Open Source Page',
+                            maxLines: 1,
+                            overflow: TextOverflow.ellipsis,
+                            style: TextStyle(
+                              fontFamily: AppTheme.fontUI,
+                              fontWeight: FontWeight.w600,
+                              fontSize: 13,
+                            ),
                           ),
                         ),
                         SizedBox(width: 8),
@@ -343,19 +348,24 @@ class _ContextCardWidgetState extends State<ContextCardWidget> {
                   ),
                 ),
                 child: const Row(
+                  mainAxisSize: MainAxisSize.min,
                   mainAxisAlignment: MainAxisAlignment.center,
                   children: [
                     Icon(Icons.visibility_outlined,
                         size: 16, color: Color(0xFF10B981)),
                     SizedBox(width: 8),
-                    Text(
-                      'Reveal Study Findings',
-                      style: TextStyle(
-                        fontFamily: AppTheme.fontUI,
-                        fontSize: 13,
-                        fontWeight: FontWeight.w700,
-                        color: Color(0xFF10B981),
-                        letterSpacing: 0.2,
+                    Flexible(
+                      child: Text(
+                        'Reveal Study Findings',
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                        style: TextStyle(
+                          fontFamily: AppTheme.fontUI,
+                          fontSize: 13,
+                          fontWeight: FontWeight.w700,
+                          color: Color(0xFF10B981),
+                          letterSpacing: 0.2,
+                        ),
                       ),
                     ),
                   ],

@@ -1,3 +1,4 @@
+import 'package:flutter/foundation.dart';
 import 'dart:convert';
 
 import 'package:path/path.dart' as p;
@@ -37,7 +38,27 @@ class LocalDatabase {
     return openDatabase(
       dbPath,
       version: 1,
-      onConfigure: (db) => db.execute('PRAGMA foreign_keys = ON'),
+      onConfigure: (db) async {
+        await db.execute('PRAGMA foreign_keys = ON');
+        try {
+          await db.execute('PRAGMA journal_mode = WAL');
+          await db.execute('PRAGMA synchronous = NORMAL');
+          await db.execute('PRAGMA temp_store = MEMORY');
+          await db.execute('PRAGMA cache_size = -16000');
+        } catch (e) {
+          debugPrint('Athena SQLite pragma notice: $e');
+        }
+      },
+      onOpen: (db) async {
+        try {
+          await db.execute(
+            'CREATE VIRTUAL TABLE IF NOT EXISTS reading_chunks_fts USING fts5('
+            'chunk_id UNINDEXED, document_id UNINDEXED, raw_text, section_title, tokenize=\'unicode61\')'
+          );
+        } catch (e) {
+          debugPrint('Athena FTS5 init notice: $e');
+        }
+      },
       onCreate: (db, version) async {
         await db.execute('''
           CREATE TABLE documents (
@@ -140,12 +161,65 @@ class LocalDatabase {
 
   Future<void> insertChunks(List<Map<String, Object?>> chunks) async {
     final db = await database;
-    final batch = db.batch();
-    for (final c in chunks) {
-      batch.insert('reading_chunks', c,
-          conflictAlgorithm: ConflictAlgorithm.replace);
+    await db.transaction((txn) async {
+      final batch = txn.batch();
+      for (final c in chunks) {
+        batch.insert('reading_chunks', c,
+            conflictAlgorithm: ConflictAlgorithm.replace);
+      }
+      await batch.commit(noResult: true);
+
+      try {
+        final ftsBatch = txn.batch();
+        for (final c in chunks) {
+          final cId = c['id']?.toString() ?? '';
+          final dId = c['document_id']?.toString() ?? '';
+          final rawText = c['raw_text']?.toString() ?? '';
+          final sectionTitle = c['section_title']?.toString() ?? '';
+          ftsBatch.rawInsert(
+            'INSERT OR REPLACE INTO reading_chunks_fts(chunk_id, document_id, raw_text, section_title) VALUES (?, ?, ?, ?)',
+            [cId, dId, rawText, sectionTitle],
+          );
+        }
+        await ftsBatch.commit(noResult: true);
+      } catch (e) {
+        debugPrint('Athena FTS5 insert fallback: $e');
+      }
+    });
+  }
+
+  Future<List<Map<String, dynamic>>> searchChunks(
+    String documentId,
+    String query, {
+    int limit = 20,
+  }) async {
+    final db = await database;
+    final qClean = query.trim();
+    if (qClean.isEmpty) return [];
+
+    try {
+      final ftsRows = await db.rawQuery('''
+        SELECT c.*, bm25(reading_chunks_fts) as rank
+        FROM reading_chunks_fts f
+        JOIN reading_chunks c ON c.id = f.chunk_id
+        WHERE f.document_id = ? AND reading_chunks_fts MATCH ?
+        ORDER BY rank ASC LIMIT ?
+      ''', [documentId, '$qClean*', limit]);
+      if (ftsRows.isNotEmpty) {
+        return ftsRows.map((r) => Map<String, dynamic>.from(r)).toList();
+      }
+    } catch (e) {
+      debugPrint('Athena FTS5 search query notice: $e');
     }
-    await batch.commit(noResult: true);
+
+    final rows = await db.query(
+      'reading_chunks',
+      where: 'document_id = ? AND raw_text LIKE ?',
+      whereArgs: [documentId, '%$qClean%'],
+      orderBy: 'sequence ASC',
+      limit: limit,
+    );
+    return rows.map((r) => Map<String, dynamic>.from(r)).toList();
   }
 
   Future<void> insertCards(List<Map<String, Object?>> cards) async {
@@ -234,7 +308,9 @@ class LocalDatabase {
       if (pagesJson != null) {
         try {
           pages = jsonDecode(pagesJson) as List;
-        } catch (_) {}
+        } catch (e) {
+        debugPrint('Athena caught error: $e');
+      }
       }
       String pageRef = 'Page 1';
       if (pages.length == 1) {
@@ -262,7 +338,9 @@ class LocalDatabase {
         if (card['citations_json'] != null) {
           try {
             citations = jsonDecode(card['citations_json'] as String) as List;
-          } catch (_) {}
+          } catch (e) {
+        debugPrint('Athena caught error: $e');
+      }
         }
         items.add({
           'type': 'context_card',
@@ -296,7 +374,9 @@ class LocalDatabase {
             if (card['citations_json'] != null) {
               try {
                 citations = jsonDecode(card['citations_json'] as String) as List;
-              } catch (_) {}
+              } catch (e) {
+        debugPrint('Athena caught error: $e');
+      }
             }
             items.insert(i + 1, {
               'type': 'context_card',
@@ -345,23 +425,7 @@ class LocalDatabase {
     return rows.map((r) => Map<String, dynamic>.from(r)).toList();
   }
 
-  Future<List<Map<String, dynamic>>> searchChunks(
-    String documentId,
-    String query, {
-    int limit = 10,
-  }) async {
-    final db = await database;
-    final cleanQ = query.trim();
-    if (cleanQ.isEmpty) return [];
-    final rows = await db.query(
-      'reading_chunks',
-      where: 'document_id = ? AND raw_text LIKE ?',
-      whereArgs: [documentId, '%$cleanQ%'],
-      limit: limit,
-      orderBy: 'sequence ASC',
-    );
-    return rows.map((r) => Map<String, dynamic>.from(r)).toList();
-  }
+
 
   Future<void> setCardSaved(String cardId, bool saved) async {
     final db = await database;

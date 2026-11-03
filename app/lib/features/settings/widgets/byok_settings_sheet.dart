@@ -143,7 +143,7 @@ class _BYOKSettingsSheetState extends State<BYOKSettingsSheet> {
             : [];
         _loading = false;
       });
-    } catch (_) {
+    } catch (e) {
       if (mounted) setState(() => _loading = false);
     }
   }

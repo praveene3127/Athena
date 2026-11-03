@@ -1,3 +1,4 @@
+import 'package:flutter/foundation.dart';
 import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
@@ -39,7 +40,9 @@ Future<String?> discoverServerImpl({int timeoutMs = 800}) async {
         }
       }
     }
-  } catch (_) {}
+  } catch (e) {
+        debugPrint('Athena caught error: $e');
+      }
 
   final client = HttpClient()
     ..connectionTimeout = Duration(milliseconds: timeoutMs);
@@ -83,7 +86,9 @@ Future<bool> _probeHost(HttpClient client, String host, int port) async {
         return true;
       }
     }
-  } catch (_) {}
+  } catch (e) {
+        debugPrint('Athena caught error: $e');
+      }
   return false;
 }
 

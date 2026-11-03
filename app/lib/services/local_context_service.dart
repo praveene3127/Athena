@@ -1,3 +1,4 @@
+import 'package:flutter/foundation.dart';
 import 'dart:convert';
 
 import 'package:crypto/crypto.dart';
@@ -335,7 +336,9 @@ Respond ONLY with valid JSON with this exact schema:
           return Map<String, dynamic>.from(parsed);
         }
       }
-    } catch (_) {}
+    } catch (e) {
+        debugPrint('Athena caught error: $e');
+      }
     return null;
   }
 
@@ -396,7 +399,7 @@ Respond ONLY with valid JSON with this exact schema:
           return {'title': title, 'extract': extract, 'url': url!};
         }
       }
-    } catch (_) {
+    } catch (e) {
       hadNetworkFailure = true;
     }
     return null;

@@ -109,7 +109,6 @@ ehthumbs.db
 
 # --- Quarantine, Cache & Scratch Files ---
 _quarantine/
-.repowise/
 graphify-out/
 *.log
 
