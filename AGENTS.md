@@ -59,6 +59,46 @@ Any autonomous agent operating in Athena MUST strictly comply with every constit
 
 ---
 
+## 1.5. ArtCraft Engineering Invariants (Mandatory)
+
+These are the **non-negotiable ArtCraft rules** extracted from `storytold/pdfcraft` and `storytold/photocraft` that prevent mobile UI regressions:
+
+### ArtCraft Law 1: "The Three Front Doors" — Headless Automation + Visual Specimens + GUI
+- Every feature MUST be testable via a **Headless CLI Automation Runner** that executes real user actions and dumps exact JSON/text output.
+- Every UI change MUST generate **Automated Screenshots / Visual Specimens** (`flutter test --update-goldens`) so the agent can **see** layout overflows, broken text, or overlapping widgets before committing.
+- The Desktop/Mobile GUI is a **thin skin over the automation core** — no logic lives in the GUI layer.
+
+### ArtCraft Law 2: Strict Layer Isolation (L1–L5 Engine vs. L6 State vs. L7 UI)
+- **L1–L5 (Pure Engine)**: Document extraction, word spacing, lossless chunking, card generation. **Zero `package:flutter/material.dart` imports.**
+- **L6 (State & ViewModel)**: Deterministic state machines (`ReaderController`) that produce the exact `feedItems` list (interleaving `ReadingChunk` and `ContextCard` items).
+- **L7 (Dumb UI Widgets)**: Each widget (`ReaderTopBar`, `FeedPageView`, `ChunkCard`, `ContextCard`, `ReaderBottomBar`) is a tiny, isolated **≤ 400 lines** file that only renders data passed to it.
+- **Hard File-Size Cap**: No file exceeds 400–500 lines. Monolithic files (like 4,500-line `reader_screen.dart`) are **architectural violations**.
+
+### ArtCraft Law 3: Static Architectural Tests That Fail If an Agent Cheats
+- Every architectural rule MUST have a corresponding **AST/regex test** that scans source code and fails the build if violated.
+- Examples: Scan UI files to forbid `DropdownButton`, scan `reader_screen.dart` to forbid `Stack` overlap, scan providers to forbid hardcoded model lists.
+- These tests live in `app/test/artcraft_architecture_test.dart` and run in Gate 7.
+
+### ArtCraft Law 4: "Never Panic / Never Swallow Errors Silently" (`Result<T, E>` Everywhere)
+- **Zero empty `catch (_) {}` blocks** in production code. Every error must be logged with `debugPrint` / `logger.warning` and trigger a deterministic, visible fallback state.
+- No `unwrap` / `expect` / `panic!` / silent catch in non-test code.
+- Every crash or bug fix gets a synthetic regression test.
+
+### ArtCraft Law 5: Single Source of Truth (Not Dual Half-Finished Stacks)
+- **One single engine**, tested by the exact same test harness everywhere.
+- No dual Python backend + Dart fallback implementations of the same logic.
+- The Rust core (`backend/rust_core/`) is the single source of truth for extraction, chunking, and search.
+
+### ArtCraft Law 6: Every UI Change Passes the `390×844` Phone Viewport Harness
+- No task is complete until `flutter test test/artcraft_reader_harness_test.dart` renders the actual `ReaderScreen` and `BYOKSettingsSheet` at `390×844` resolution with:
+  - 0 overflows
+  - Verified word spacing
+  - Verified vertical page-snapping (Feed Mode)
+  - Verified Context Cards in the feed
+  - Zero bottom-bar overlaps
+
+---
+
 ## 2. ECC Skills Autonomous Orchestration Directive
 
 Athena integrates **312 specialized engineering skills** from the Extended Capability Catalog (ECC) located in [`.agents/skills/`](file:///c:/Users/prave/Downloads/Athena/.agents/skills) and language-specific rules in [`.agents/rules/`](file:///c:/Users/prave/Downloads/Athena/.agents/rules).

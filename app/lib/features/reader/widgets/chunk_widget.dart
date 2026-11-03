@@ -8,6 +8,8 @@ import 'package:athena/core/widgets/athena_logo.dart';
 /// Renders a single lossless source chunk with high-end editorial paper aesthetic.
 /// Complies with Double-Bezel nested architecture, squircle curvature,
 /// and literary typography.
+///
+/// Wrapped in RepaintBoundary for GPU texture caching (UPGRADE 5).
 class ChunkWidget extends StatelessWidget {
   final ReaderItem chunk;
   final double fontSize;
@@ -369,9 +371,12 @@ class ChunkWidget extends StatelessWidget {
 
     final actionRowWidget = Padding(
       padding: EdgeInsets.fromLTRB(hPad, 0, hPad, 16),
-      child: Row(
-        mainAxisAlignment: MainAxisAlignment.end,
-        children: [
+      child: SingleChildScrollView(
+        scrollDirection: Axis.horizontal,
+        physics: const BouncingScrollPhysics(),
+        child: Row(
+          mainAxisAlignment: MainAxisAlignment.end,
+          children: [
           _TactilePillButton(
             backgroundColor: theme.pillBackground,
             borderColor: theme.borderColor,
@@ -493,14 +498,16 @@ class ChunkWidget extends StatelessWidget {
             ),
           ],
         ],
+        ),
       ),
     );
 
-    // Double-Bezel nested architecture
-    return Center(
-      child: ConstrainedBox(
-        constraints: const BoxConstraints(maxWidth: 680),
-        child: Container(
+    // Double-Bezel nested architecture with RepaintBoundary for GPU texture caching
+    return RepaintBoundary(
+      child: Center(
+        child: ConstrainedBox(
+          constraints: const BoxConstraints(maxWidth: 680),
+          child: Container(
           margin: EdgeInsets.fromLTRB(
             isMobile ? 12 : 16,
             8,
@@ -545,6 +552,7 @@ class ChunkWidget extends StatelessWidget {
           ),
         ),
       ),
+    ),
     );
   }
 }

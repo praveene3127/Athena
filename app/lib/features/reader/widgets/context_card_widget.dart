@@ -589,113 +589,125 @@ class _ContextCardWidgetState extends State<ContextCardWidget> {
 
     // Top Row inside the card (Eyebrow Tag + Save Pill + Dismiss)
     final topActionRow = Row(
+      mainAxisAlignment: MainAxisAlignment.spaceBetween,
       children: [
         // Microscopic Eyebrow Archetype Badge
-        Container(
-          padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
-          decoration: BoxDecoration(
-            color: lens.color.withValues(alpha: theme.isDark ? 0.20 : 0.10),
-            borderRadius: BorderRadius.circular(20),
-            border: Border.all(
-              color: lens.color.withValues(alpha: theme.isDark ? 0.40 : 0.22),
-              width: 1,
+        Flexible(
+          child: Container(
+            padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+            decoration: BoxDecoration(
+              color: lens.color.withValues(alpha: theme.isDark ? 0.20 : 0.10),
+              borderRadius: BorderRadius.circular(20),
+              border: Border.all(
+                color: lens.color.withValues(alpha: theme.isDark ? 0.40 : 0.22),
+                width: 1,
+              ),
             ),
-          ),
-          child: Row(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              Icon(
-                lens.icon,
-                size: 13,
-                color: lens.color,
-              ),
-              const SizedBox(width: 6),
-              Text(
-                lens.label,
-                style: TextStyle(
-                  fontFamily: AppTheme.fontUI,
+            child: Row(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Icon(
+                  lens.icon,
+                  size: 13,
                   color: lens.color,
-                  fontSize: 10,
-                  fontWeight: FontWeight.w800,
-                  letterSpacing: 0.8,
                 ),
-              ),
-            ],
-          ),
-        ),
-        const Spacer(),
-        if (widget.onToggleBrainDeck != null) ...[
-          InkWell(
-            onTap: () {
-              HapticFeedback.lightImpact();
-              widget.onToggleBrainDeck?.call();
-            },
-            borderRadius: BorderRadius.circular(20),
-            child: Container(
-              padding:
-                  const EdgeInsets.symmetric(horizontal: 10, vertical: 4.5),
-              margin: const EdgeInsets.only(right: 6),
-              decoration: BoxDecoration(
-                color: widget.isBrainDeckSaved
-                    ? (theme.isDark ? theme.accentColor : const Color(0xFF141714))
-                    : theme.pillBackground,
-                borderRadius: BorderRadius.circular(20),
-                border: Border.all(
-                  color: widget.isBrainDeckSaved
-                      ? (theme.isDark ? theme.accentColor : const Color(0xFF141714))
-                      : theme.borderColor,
-                  width: 1.0,
-                ),
-              ),
-              child: Row(
-                mainAxisSize: MainAxisSize.min,
-                children: [
-                  Icon(
-                    widget.isBrainDeckSaved
-                        ? Icons.bookmark_rounded
-                        : Icons.bookmark_border_rounded,
-                    size: 13,
-                    color: widget.isBrainDeckSaved ? Colors.white : theme.textColor,
-                  ),
-                  const SizedBox(width: 5),
-                  Text(
-                    widget.isBrainDeckSaved ? 'Saved' : 'Save Note',
+                const SizedBox(width: 5),
+                Flexible(
+                  child: Text(
+                    lens.label,
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
                     style: TextStyle(
                       fontFamily: AppTheme.fontUI,
-                      fontSize: 11,
-                      fontWeight: FontWeight.w600,
-                      color: widget.isBrainDeckSaved ? Colors.white : theme.textColor,
+                      color: lens.color,
+                      fontSize: 10,
+                      fontWeight: FontWeight.w800,
+                      letterSpacing: 0.6,
                     ),
                   ),
-                ],
+                ),
+              ],
+            ),
+          ),
+        ),
+        const SizedBox(width: 6),
+        Row(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            if (widget.onToggleBrainDeck != null) ...[
+              InkWell(
+                onTap: () {
+                  HapticFeedback.lightImpact();
+                  widget.onToggleBrainDeck?.call();
+                },
+                borderRadius: BorderRadius.circular(20),
+                child: Container(
+                  padding:
+                      const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                  margin: const EdgeInsets.only(right: 4),
+                  decoration: BoxDecoration(
+                    color: widget.isBrainDeckSaved
+                        ? (theme.isDark ? theme.accentColor : const Color(0xFF141714))
+                        : theme.pillBackground,
+                    borderRadius: BorderRadius.circular(20),
+                    border: Border.all(
+                      color: widget.isBrainDeckSaved
+                          ? (theme.isDark ? theme.accentColor : const Color(0xFF141714))
+                          : theme.borderColor,
+                      width: 1.0,
+                    ),
+                  ),
+                  child: Row(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      Icon(
+                        widget.isBrainDeckSaved
+                            ? Icons.bookmark_rounded
+                            : Icons.bookmark_border_rounded,
+                        size: 13,
+                        color: widget.isBrainDeckSaved ? Colors.white : theme.textColor,
+                      ),
+                      const SizedBox(width: 4),
+                      Text(
+                        widget.isBrainDeckSaved ? 'Saved' : 'Save',
+                        style: TextStyle(
+                          fontFamily: AppTheme.fontUI,
+                          fontSize: 10.5,
+                          fontWeight: FontWeight.w600,
+                          color: widget.isBrainDeckSaved ? Colors.white : theme.textColor,
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
               ),
+            ] else ...[
+              IconButton(
+                icon: Icon(
+                  isSaved ? Icons.bookmark_rounded : Icons.bookmark_border_rounded,
+                  color: isSaved
+                      ? (theme.isDark ? theme.accentColor : theme.textColor)
+                      : theme.textMutedColor,
+                  size: 18,
+                ),
+                tooltip: isSaved ? 'Saved' : 'Save note',
+                constraints: const BoxConstraints(minWidth: 28, minHeight: 28),
+                padding: EdgeInsets.zero,
+                onPressed: widget.onToggleSave,
+              ),
+            ],
+            IconButton(
+              icon: Icon(
+                Icons.close_rounded,
+                color: theme.textMutedColor,
+                size: 17,
+              ),
+              tooltip: 'Dismiss card',
+              constraints: const BoxConstraints(minWidth: 28, minHeight: 28),
+              padding: EdgeInsets.zero,
+              onPressed: widget.onDismiss,
             ),
-          ),
-        ] else ...[
-          IconButton(
-            icon: Icon(
-              isSaved ? Icons.bookmark_rounded : Icons.bookmark_border_rounded,
-              color: isSaved
-                  ? (theme.isDark ? theme.accentColor : theme.textColor)
-                  : theme.textMutedColor,
-              size: 19,
-            ),
-            tooltip: isSaved ? 'Saved' : 'Save note',
-            constraints: const BoxConstraints(minWidth: 32, minHeight: 32),
-            padding: EdgeInsets.zero,
-            onPressed: widget.onToggleSave,
-          ),
-        ],
-        IconButton(
-          icon: Icon(
-            Icons.close_rounded,
-            color: theme.textMutedColor,
-            size: 17,
-          ),
-          tooltip: 'Dismiss card',
-          constraints: const BoxConstraints(minWidth: 32, minHeight: 32),
-          padding: EdgeInsets.zero,
-          onPressed: widget.onDismiss,
+          ],
         ),
       ],
     );
@@ -896,11 +908,12 @@ class _ContextCardWidgetState extends State<ContextCardWidget> {
       ],
     );
 
-    // Double-Bezel Nested Card Container
-    final cardContainer = Center(
-      child: ConstrainedBox(
-        constraints: const BoxConstraints(maxWidth: 680),
-        child: Container(
+    // Double-Bezel Nested Card Container with RepaintBoundary for GPU texture caching
+    final cardContainer = RepaintBoundary(
+      child: Center(
+        child: ConstrainedBox(
+          constraints: const BoxConstraints(maxWidth: 680),
+          child: Container(
           margin: EdgeInsets.fromLTRB(
             isMobile ? 12 : 16,
             8,
@@ -939,6 +952,7 @@ class _ContextCardWidgetState extends State<ContextCardWidget> {
           ),
         ),
       ),
+    ),
     );
 
     if (widget.isFeedMode) {

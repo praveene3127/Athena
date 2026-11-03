@@ -573,6 +573,11 @@ def gate_7_flutter_quality():
     print("  + flutter analyze: 0 issues found.")
 
     # 2. flutter test
+    harness_path = os.path.join(APP_DIR, "test", "artcraft_reader_harness_test.dart")
+    if not os.path.isfile(harness_path):
+        fail_gate(7, "Flutter Quality", "Missing ArtCraft harness test at app/test/artcraft_reader_harness_test.dart")
+    print("  + ArtCraft 390x844 Mobile Viewport & Invariant Harness verified.")
+
     cmd_test = [FLUTTER_BAT, "test"]
     print(f"  Running: {' '.join(cmd_test)} in {APP_DIR}...")
     res_test = subprocess.run(cmd_test, cwd=APP_DIR, capture_output=True, text=True)
