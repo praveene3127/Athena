@@ -6,6 +6,7 @@ import 'package:athena/core/theme/reader_theme.dart';
 import 'package:athena/models/document.dart';
 import 'package:athena/core/widgets/athena_avatar.dart';
 import 'package:athena/core/widgets/athena_logo.dart';
+import 'package:athena/services/lossless_chunker.dart';
 
 /// Context card widget per CLAUDE.md §11 & §7.3.
 /// High-end editorial marginalia card using Double-Bezel nested architecture,
@@ -575,8 +576,8 @@ class _ContextCardWidgetState extends State<ContextCardWidget> {
     final card = widget.card;
     final isSaved = card.saved ?? false;
     final rawTitle = card.title ?? 'Context';
-    final title = _cleanCardTitle(rawTitle);
-    final body = card.body ?? '';
+    final title = sanitizeProseSpacing(_cleanCardTitle(rawTitle));
+    final body = sanitizeProseSpacing(card.body ?? '');
     final citations = card.citations ?? [];
     final firstCitation = citations.isNotEmpty ? citations.first : null;
     final citationUrl = firstCitation?['url'] as String?;
@@ -584,7 +585,9 @@ class _ContextCardWidgetState extends State<ContextCardWidget> {
     final citationPublisher =
         firstCitation?['publisher'] as String? ?? 'Wikipedia';
 
-    final exactQuote = card.exactQuote;
+    final exactQuote = card.exactQuote != null
+        ? sanitizeProseSpacing(card.exactQuote!)
+        : null;
     final lens = _resolveLens(rawTitle, card.whyHere, body);
 
     // Top Row inside the card (Eyebrow Tag + Save Pill + Dismiss)

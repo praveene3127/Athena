@@ -4,6 +4,7 @@ import 'package:athena/core/theme/theme.dart';
 import 'package:athena/core/theme/reader_theme.dart';
 import 'package:athena/models/document.dart';
 import 'package:athena/core/widgets/athena_logo.dart';
+import 'package:athena/services/lossless_chunker.dart';
 
 /// Renders a single lossless source chunk with high-end editorial paper aesthetic.
 /// Complies with Double-Bezel nested architecture, squircle curvature,
@@ -275,6 +276,9 @@ class ChunkWidget extends StatelessWidget {
     final String bodyText =
         hasChapterHeading ? rawText.substring(chapterMatch.end) : rawText;
 
+    final String cleanHeadingText = sanitizeProseSpacing(headingText);
+    final String cleanBodyText = sanitizeProseSpacing(bodyText);
+
     final effectiveFontSize = isFeedMode ? (fontSize + 0.5) : fontSize;
 
     final List<TextSpan> textSpans = [];
@@ -282,7 +286,7 @@ class ChunkWidget extends StatelessWidget {
     if (hasChapterHeading) {
       textSpans.add(
         TextSpan(
-          text: '$headingText\n\n',
+          text: '$cleanHeadingText\n\n',
           style: TextStyle(
             fontFamily: AppTheme.fontDisplay,
             fontSize: 24,
@@ -297,7 +301,7 @@ class ChunkWidget extends StatelessWidget {
 
     if (bionicFocusEnabled) {
       textSpans.addAll(_buildBionicSpans(
-        bodyText,
+        cleanBodyText,
         effectiveFontSize,
         fontFamily: fontFamily,
         lineHeight: lineHeight,
@@ -307,7 +311,7 @@ class ChunkWidget extends StatelessWidget {
     } else {
       textSpans.add(
         TextSpan(
-          text: bodyText,
+          text: cleanBodyText,
           style: TextStyle(
             fontFamily: fontFamily,
             color: theme.textColor,

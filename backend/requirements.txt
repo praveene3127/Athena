@@ -10,4 +10,5 @@ openai>=3.37.0
 google-genai>=2.33.0
 yake>=0.7.3
 python-dotenv>=1.0.1
+wordninja>=2.0.0
 pytest>=9.1.1

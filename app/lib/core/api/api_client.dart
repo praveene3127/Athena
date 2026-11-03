@@ -660,12 +660,40 @@ class ApiClient {
 
   // --- Reader ---
 
+  void _sanitizeReaderData(Map<String, dynamic> data) {
+    final chunks = data['chunks'] as List?;
+    if (chunks != null) {
+      for (final c in chunks) {
+        if (c is Map && c['raw_text'] is String) {
+          c['raw_text'] = sanitizeProseSpacing(c['raw_text'] as String);
+        }
+      }
+    }
+    final cards = data['cards'] as List?;
+    if (cards != null) {
+      for (final cd in cards) {
+        if (cd is Map) {
+          if (cd['body'] is String) {
+            cd['body'] = sanitizeProseSpacing(cd['body'] as String);
+          }
+          if (cd['exact_quote'] is String) {
+            cd['exact_quote'] = sanitizeProseSpacing(cd['exact_quote'] as String);
+          }
+          if (cd['title'] is String) {
+            cd['title'] = sanitizeProseSpacing(cd['title'] as String);
+          }
+        }
+      }
+    }
+  }
+
   Future<Map<String, dynamic>> getReader(String id) async {
     try {
       final response = await dio
           .get('/api/documents/$id/reader')
           .timeout(const Duration(seconds: 3));
       final data = response.data as Map<String, dynamic>;
+      _sanitizeReaderData(data);
       _cacheReaderLocally(id, data);
       return data;
     } catch (_) {
@@ -673,11 +701,15 @@ class ApiClient {
         final dbData = await LocalDatabase.instance.getReaderData(id);
         final chunks = dbData['chunks'] as List?;
         if (chunks != null && chunks.isNotEmpty) {
+          _sanitizeReaderData(dbData);
           return dbData;
         }
       }
       final cached = await _loadCachedReader(id);
-      if (cached != null && cached.isNotEmpty) return cached;
+      if (cached != null && cached.isNotEmpty) {
+        _sanitizeReaderData(cached);
+        return cached;
+      }
       throw const AppError(code: 'NOT_FOUND', message: 'Reader data not found');
     }
   }
