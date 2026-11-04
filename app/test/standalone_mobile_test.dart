@@ -1,3 +1,4 @@
+import 'dart:convert';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:athena/core/config/config.dart';
 import 'package:athena/services/lossless_chunker.dart';
@@ -108,6 +109,20 @@ void main() {
       );
       expect(res['ok'], isFalse);
       expect(res['message'], contains('API key is required'));
+    });
+
+    test('uploadDocument drains Stream<List<int>> and runs isolate parser without unsendable object error', () async {
+      TestWidgetsFlutterBinding.ensureInitialized();
+      final sampleText = utf8.encode('Sample book text containing authentic literature with complete sentences.');
+      final stream = Stream<List<int>>.fromIterable([sampleText]);
+      final client = ApiClient();
+      final docId = await client.uploadDocument(
+        stream,
+        sampleText.length,
+        'test.pdf',
+      );
+      expect(docId, isNotEmpty);
+      expect(docId, startsWith('doc_'));
     });
   });
 }

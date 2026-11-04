@@ -933,7 +933,9 @@ class _LibraryScreenState extends ConsumerState<LibraryScreen>
 
       final String? filePath = kIsWeb ? null : file.path;
       final List<int>? fileBytes = kIsWeb ? file.bytes : null;
-      final Stream<List<int>>? fileStream = kIsWeb ? null : file.readStream;
+      final Stream<List<int>>? fileStream = (kIsWeb || (filePath != null && filePath.isNotEmpty))
+          ? null
+          : file.readStream;
 
       if (fileBytes == null && (filePath == null || filePath.isEmpty) && fileStream == null) {
         if (mounted) {

@@ -1,11 +1,12 @@
+import 'dart:isolate';
+import 'dart:typed_data';
 import 'dart:async';
 import 'dart:convert';
-import 'dart:isolate';
 
 import 'package:archive/archive.dart';
 import 'package:cross_file/cross_file.dart';
 import 'package:dio/dio.dart';
-import 'package:flutter/foundation.dart' show compute, kIsWeb, debugPrint;
+import 'package:flutter/foundation.dart' show kIsWeb, debugPrint;
 import 'package:shared_preferences/shared_preferences.dart';
 
 import 'package:athena/core/config/config.dart';
@@ -71,6 +72,28 @@ String _extractEpubText(List<int> bytes) {
   } catch (e) {
     return '';
   }
+}
+
+class _ParseDocumentArgs {
+  final String docId;
+  final String fileName;
+  final String? filePath;
+  final Uint8List? fileBytes;
+
+  const _ParseDocumentArgs({
+    required this.docId,
+    required this.fileName,
+    this.filePath,
+    this.fileBytes,
+  });
+}
+
+_ParseDocumentResult _parseDocumentTopLevel(_ParseDocumentArgs args) {
+  return _parseAndChunkDocumentInBackground(_ParseDocumentParams(
+    bytes: args.fileBytes ?? <int>[],
+    fileName: args.fileName,
+    docId: args.docId,
+  ));
 }
 
 class _ParseDocumentParams {
@@ -296,6 +319,29 @@ _ParseDocumentResult _parseAndChunkDocumentInBackground(_ParseDocumentParams par
 }
 
 class ApiClient {
+  static Future<_ParseDocumentResult> _runIsolateParser(
+    String docId,
+    String fileName,
+    String? filePath,
+    Uint8List? fileBytes,
+  ) async {
+    final args = _ParseDocumentArgs(
+      docId: docId,
+      fileName: fileName,
+      filePath: filePath,
+      fileBytes: fileBytes,
+    );
+    if (kIsWeb) {
+      return _parseDocumentTopLevel(args);
+    }
+    try {
+      return await Isolate.run(() => _parseDocumentTopLevel(args));
+    } catch (e, st) {
+      debugPrint('[Athena Error] Isolate parser failed, falling back: $e\n$st');
+      return _parseDocumentTopLevel(args);
+    }
+  }
+
   static bool _backendReachable = true;
   static DateTime? _backendCircuitBreakerResetTime;
 
@@ -570,45 +616,43 @@ class ApiClient {
 
     // 2. On-device standalone extraction and lossless chunking
     final docId = 'doc_${DateTime.now().millisecondsSinceEpoch}';
-    final bytes = <int>[];
+    Uint8List? rawBytes;
+
     if (fileBytes != null && fileBytes.isNotEmpty) {
-      bytes.addAll(fileBytes);
-    } else if (fileStream != null) {
-      await for (final chunk in fileStream) {
-        bytes.addAll(chunk);
-      }
+      rawBytes = fileBytes is Uint8List ? fileBytes : Uint8List.fromList(fileBytes);
     } else if (filePath != null && filePath.isNotEmpty) {
       try {
         final xf = XFile(filePath);
-        bytes.addAll(await xf.readAsBytes());
-      } catch (e) {
-        debugPrint('Athena caught error: $e');
+        rawBytes = await xf.readAsBytes();
+      } catch (e, st) {
+        debugPrint('[Athena Error] Failed reading filePath $filePath: $e\n$st');
+      }
+    } else if (fileStream != null) {
+      try {
+        final builder = BytesBuilder(copy: false);
+        await for (final chunk in fileStream) {
+          builder.add(chunk);
+        }
+        rawBytes = builder.takeBytes();
+      } catch (e, st) {
+        debugPrint('[Athena Error] Failed reading fileStream: $e\n$st');
       }
     }
 
-    if (bytes.isEmpty) {
+    if (rawBytes == null || rawBytes.isEmpty) {
       throw const AppError(
         code: 'PDF_UNREADABLE',
         message: 'Could not read bytes from the selected file.',
       );
     }
 
-    final parseResult = kIsWeb
-        ? await compute(
-            _parseAndChunkDocumentInBackground,
-            _ParseDocumentParams(
-              bytes: bytes,
-              fileName: fileName,
-              docId: docId,
-            ),
-          )
-        : await Isolate.run(() => _parseAndChunkDocumentInBackground(
-            _ParseDocumentParams(
-              bytes: bytes,
-              fileName: fileName,
-              docId: docId,
-            ),
-          ));
+    // Call static helper that has zero reference to fileStream or this
+    final parseResult = await _runIsolateParser(
+      docId,
+      fileName,
+      filePath,
+      rawBytes,
+    );
 
     final canonicalText = parseResult.canonicalText;
     final pageCount = parseResult.pageCount;
@@ -617,25 +661,29 @@ class ApiClient {
     final now = DateTime.now().toIso8601String();
     final cleanTitle = fileName.replaceAll(RegExp(r'\.[a-zA-Z0-9]+$'), '');
 
-    await LocalDatabase.instance.insertDocument({
-      'id': docId,
-      'filename': fileName,
-      'title': cleanTitle,
-      'status': 'ready',
-      'stage': 'done',
-      'stage_label': 'Ready to read',
-      'percent': 100,
-      'page_count': pageCount,
-      'processed_page': pageCount,
-      'file_path': filePath ?? 'local://$fileName',
-      'canonical_text': canonicalText,
-      'integrity_verified': 1,
-      'context_status': 'ready',
-      'created_at': now,
-      'updated_at': now,
-    });
+    try {
+      await LocalDatabase.instance.insertDocument({
+        'id': docId,
+        'filename': fileName,
+        'title': cleanTitle,
+        'status': 'ready',
+        'stage': 'done',
+        'stage_label': 'Ready to read',
+        'percent': 100,
+        'page_count': pageCount,
+        'processed_page': pageCount,
+        'file_path': filePath ?? 'local://$fileName',
+        'canonical_text': canonicalText,
+        'integrity_verified': 1,
+        'context_status': 'ready',
+        'created_at': now,
+        'updated_at': now,
+      });
 
-    await LocalDatabase.instance.insertChunks(chunkMaps);
+      await LocalDatabase.instance.insertChunks(chunkMaps);
+    } catch (e, st) {
+      debugPrint('[Athena Error] LocalDatabase insert notice: $e\n$st');
+    }
 
     try {
       final contextService = LocalContextService();
