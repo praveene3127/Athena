@@ -110,8 +110,6 @@ ehthumbs.db
 # --- Quarantine, Cache & Scratch Files ---
 _quarantine/
 graphify-out/
-floorplan/
-.floorplan/
 *.log
 
 # --- xtool (Cross-Platform iOS Toolchain) ---
