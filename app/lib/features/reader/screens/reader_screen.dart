@@ -442,44 +442,55 @@ class _ReaderScreenState extends ConsumerState<ReaderScreen> {
         : chunks.first;
     final chunkSeq = currentChunk.sequence ?? 1;
 
-    try {
-      final service = LocalContextService();
-      final cardMap = await service.generateCardForChunk(
-        widget.documentId,
-        {
-          'id': currentChunk.id,
-          'raw_text': currentChunk.rawText,
-          'sequence': chunkSeq,
-        },
-        _cardsByChunkSeq.length,
-      );
+    final service = LocalContextService();
+    final chunkMap = {
+      'id': currentChunk.id,
+      'raw_text': currentChunk.rawText,
+      'sequence': chunkSeq,
+    };
 
-      if (cardMap != null && mounted) {
-        final cardItem = ReaderItem.fromJson({
-          ...cardMap,
+    // Stage 1: Instant Local Structural Draft (< 1ms)
+    final draftMap = service.generateSpeculativeDraftCard(
+      widget.documentId,
+      chunkMap,
+      _cardsByChunkSeq.length,
+    );
+    final draftItem = ReaderItem.fromJson({
+      ...draftMap,
+      'type': 'context_card',
+      'insert_after': currentChunk.id,
+      'source_chunk_id': currentChunk.id,
+      'sequence': chunkSeq,
+      'is_speculative_draft': true,
+    });
+
+    setState(() => _cardsByChunkSeq[chunkSeq] = draftItem);
+    HapticFeedback.lightImpact();
+
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (mounted && _currentIndex + 1 < feedItems.length + 1) {
+        _jumpTo(_currentIndex + 1, feedItems.length + 1);
+      }
+    });
+
+    // Stage 2: Seamless In-Place Cloud Upgrade
+    unawaited(service
+        .generateCardForChunk(widget.documentId, chunkMap, _cardsByChunkSeq.length)
+        .then((deepMap) async {
+      if (deepMap != null && mounted) {
+        final deepItem = ReaderItem.fromJson({
+          ...deepMap,
           'type': 'context_card',
           'insert_after': currentChunk.id,
           'source_chunk_id': currentChunk.id,
           'sequence': chunkSeq,
+          'is_speculative_draft': false,
         });
-
-        await LocalDatabase.instance.insertCards([cardMap]);
-
-        setState(() {
-          _cardsByChunkSeq[chunkSeq] = cardItem;
-        });
-
-        HapticFeedback.mediumImpact();
-
-        WidgetsBinding.instance.addPostFrameCallback((_) {
-          if (!mounted) return;
-          if (_currentIndex + 1 < feedItems.length + 1) {
-            _jumpTo(_currentIndex + 1, feedItems.length + 1);
-          }
-        });
+        await LocalDatabase.instance.insertCards([deepMap]);
+        if (mounted) setState(() => _cardsByChunkSeq[chunkSeq] = deepItem);
       }
-    } catch (e, st) {
-      debugPrint('[Athena Error] Failed generating context card on demand: $e\n$st');
-    }
+    }).catchError((e) {
+      debugPrint('[Athena Notice] Stage 2 upgrade notice: $e');
+    }));
   }
 }

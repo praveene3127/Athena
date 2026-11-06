@@ -120,6 +120,7 @@ class ReaderItem {
   final String? supportStatus;
   final String? boundaryMethod;
   final List<Map<String, dynamic>>? citations;
+  final bool isSpeculativeDraft;
 
   const ReaderItem({
     required this.type,
@@ -140,6 +141,7 @@ class ReaderItem {
     this.supportStatus,
     this.boundaryMethod,
     this.citations,
+    this.isSpeculativeDraft = false,
   });
 
   bool get isReadingChunk => type == 'reading_chunk';
@@ -165,6 +167,7 @@ class ReaderItem {
     String? supportStatus,
     String? boundaryMethod,
     List<Map<String, dynamic>>? citations,
+    bool? isSpeculativeDraft,
   }) {
     return ReaderItem(
       type: type ?? this.type,
@@ -185,6 +188,7 @@ class ReaderItem {
       supportStatus: supportStatus ?? this.supportStatus,
       boundaryMethod: boundaryMethod ?? this.boundaryMethod,
       citations: citations ?? this.citations,
+      isSpeculativeDraft: isSpeculativeDraft ?? this.isSpeculativeDraft,
     );
   }
 
@@ -209,6 +213,7 @@ class ReaderItem {
       exactQuote: json['exact_quote']?.toString(),
       supportStatus: json['support_status']?.toString(),
       boundaryMethod: json['boundary_method']?.toString(),
+      isSpeculativeDraft: json['is_speculative_draft'] == true || json['isSpeculativeDraft'] == true,
       citations: (json['citations'] as List?)
           ?.whereType<Map>()
           .map((e) => e.map((k, v) => MapEntry(k.toString(), v)))

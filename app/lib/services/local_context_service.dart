@@ -66,6 +66,55 @@ class LocalContextService {
     return cards;
   }
 
+  /// Stage 1: Generates an instant local structural draft card in < 1ms.
+  /// Anchored to verbatim exact quote and SimHash cross-reference.
+  Map<String, Object?> generateSpeculativeDraftCard(
+    String documentId,
+    Map<String, Object?> chunk,
+    int slotIndex, {
+    int? crossReferencePage,
+  }) {
+    final passage = (chunk['raw_text'] as String?)?.trim() ?? '';
+    final chunkId = chunk['id']?.toString() ?? 'chunk_$slotIndex';
+    final archetype = _archetypes[slotIndex % _archetypes.length];
+    final concept = _extractSalientConcept(passage);
+
+    var exactQuote = _exactQuote(passage, concept);
+    if (exactQuote == null || exactQuote.isEmpty || !passage.contains(exactQuote)) {
+      exactQuote = _fallbackSentence(passage);
+    }
+    if (!passage.contains(exactQuote)) {
+      final len = passage.length < 80 ? passage.length : 80;
+      exactQuote = passage.substring(0, len);
+    }
+
+    final id = sha256
+        .convert(utf8.encode('draft:$documentId:$chunkId:$slotIndex'))
+        .toString()
+        .substring(0, 24);
+
+    final crossRef = crossReferencePage != null
+        ? '\n[ Cross-Reference: Conceptually aligned with Page $crossReferencePage via 64-bit SimHash ]'
+        : '';
+
+    return {
+      'id': 'local-draft-$id',
+      'document_id': documentId,
+      'source_chunk_id': chunkId,
+      'concept_name': concept,
+      'card_type': 'explain',
+      'title': '$archetype: $concept',
+      'body': 'Question: How does the author ground $concept in this passage?\n||REVEAL||\nKey Thesis: "$exactQuote"$crossRef',
+      'why_here': 'Instant local structural draft for “$concept”. Grounded to author’s text.',
+      'citations_json': jsonEncode([
+        {'title': 'Primary Author Passage', 'publisher': 'Direct Text Anchor', 'url': ''}
+      ]),
+      'exact_quote': exactQuote,
+      'support_status': 'grounded',
+      'is_speculative_draft': true,
+    };
+  }
+
   Future<Map<String, Object?>?> generateCardForChunk(
     String documentId,
     Map<String, Object?> chunk,
@@ -140,8 +189,9 @@ class LocalContextService {
         'support_status': 'fully_supported',
         'canonical_sha256': chunk['canonical_sha256'] ?? '',
         'generation_mode': 'ai_grounded',
+        'is_speculative_draft': false,
         'verified': 1,
-        'saved': 0,
+      'saved': 0,
         'dismissed': 0,
         'created_at': DateTime.now().toUtc().toIso8601String(),
       };
@@ -177,6 +227,7 @@ class LocalContextService {
       'canonical_sha256': chunk['canonical_sha256'] ?? '',
       'generation_mode': 'local_archetype',
       'verified': 1,
+      'is_speculative_draft': false,
       'saved': 0,
       'dismissed': 0,
       'created_at': DateTime.now().toUtc().toIso8601String(),

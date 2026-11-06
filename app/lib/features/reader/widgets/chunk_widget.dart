@@ -342,6 +342,18 @@ class _ChunkWidgetState extends State<ChunkWidget> {
     );
   }
 
+  double _getIdealFontSize(String text, double baseFontSize) {
+    final delta = baseFontSize - 18.0;
+    final len = text.length;
+    if (len < 220) {
+      return 19.0 + delta;
+    } else if (len <= 320) {
+      return 17.5 + delta;
+    } else {
+      return 16.0 + delta;
+    }
+  }
+
   Widget _buildReadingContent(ReaderThemeConfig theme, String text, bool hasCode) {
     final cleanText = sanitizeProseSpacing(text);
 
@@ -352,13 +364,15 @@ class _ChunkWidgetState extends State<ChunkWidget> {
       );
     }
 
+    final effectiveFontSize = _getIdealFontSize(cleanText, widget.fontSize);
+
     return Padding(
       padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 18),
       child: SelectableText(
         cleanText,
         style: TextStyle(
           fontFamily: widget.fontFamily,
-          fontSize: widget.fontSize,
+          fontSize: effectiveFontSize,
           height: widget.lineHeight,
           letterSpacing: 0.15,
           color: theme.textColor,

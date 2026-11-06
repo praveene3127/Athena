@@ -653,17 +653,41 @@ class _ContextCardWidgetState extends State<ContextCardWidget> {
                   ],
                 ),
               ),
-              Text(
-                'MARGINALIA // SEQ #$seqStr',
-                style: TextStyle(
-                  fontFamily: AppTheme.fontMono,
-                  fontFeatures: const [FontFeature.tabularFigures()],
-                  color: theme.textMutedColor,
-                  fontSize: 9.5,
-                  fontWeight: FontWeight.w600,
-                  letterSpacing: 0.5,
+              if (card.isSpeculativeDraft)
+                Container(
+                  margin: const EdgeInsets.only(left: 6),
+                  padding: const EdgeInsets.symmetric(horizontal: 5, vertical: 1.5),
+                  decoration: BoxDecoration(
+                    color: lens.color.withValues(alpha: 0.12),
+                    borderRadius: BorderRadius.circular(4),
+                    border: Border.all(
+                      color: lens.color.withValues(alpha: 0.3),
+                      width: 0.5,
+                    ),
+                  ),
+                  child: Text(
+                    '[ LOCAL SYNTHESIS // UPGRADING... ]',
+                    style: TextStyle(
+                      fontFamily: AppTheme.fontMono,
+                      color: lens.color,
+                      fontSize: 8.5,
+                      fontWeight: FontWeight.w700,
+                      letterSpacing: 0.4,
+                    ),
+                  ),
+                )
+              else
+                Text(
+                  'MARGINALIA // SEQ #$seqStr',
+                  style: TextStyle(
+                    fontFamily: AppTheme.fontMono,
+                    fontFeatures: const [FontFeature.tabularFigures()],
+                    color: theme.textMutedColor,
+                    fontSize: 9.5,
+                    fontWeight: FontWeight.w600,
+                    letterSpacing: 0.5,
+                  ),
                 ),
-              ),
             ],
           ),
         ),
@@ -989,7 +1013,17 @@ class _ContextCardWidgetState extends State<ContextCardWidget> {
                 width: 0.8,
               ),
             ),
-            child: innerContentWidget,
+            child: AnimatedSwitcher(
+              duration: const Duration(milliseconds: 220),
+              transitionBuilder: (child, animation) => FadeTransition(
+                opacity: animation,
+                child: child,
+              ),
+              child: KeyedSubtree(
+                key: ValueKey('${card.id}_${card.isSpeculativeDraft}'),
+                child: innerContentWidget,
+              ),
+            ),
           ),
         ),
       ),

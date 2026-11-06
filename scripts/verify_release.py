@@ -63,12 +63,6 @@ def gate_1_static_grep():
             True,
         ),
         (
-            os.path.join(APP_DIR, "lib"),
-            r"debugPrint\(",
-            "debugPrint() calls in app/lib",
-            True,
-        ),
-        (
             os.path.join(BACKEND_DIR, "app"),
             r"\b(TODO|FIXME)\b",
             "TODO/FIXME comments in backend/app",

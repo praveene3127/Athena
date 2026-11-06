@@ -617,6 +617,113 @@ fn rust_find_similar_chunks_simhash(
     py.allow_threads(|| Ok(find_similar_chunks_simhash_core(target_hash, &candidate_hashes, top_k)))
 }
 
+// ==============================================================================
+// Flat Contiguous Binary Tape (ATHN) Architecture
+// ==============================================================================
+
+pub const BINARY_TAPE_MAGIC: u32 = 0x4154484E; // 'ATHN'
+pub const BINARY_TAPE_VERSION: u32 = 1;
+pub const HEADER_SIZE: usize = 16;
+pub const INDEX_RECORD_SIZE: usize = 16;
+
+/// Encodes chunks into contiguous binary tape matching Dart BinaryBookTape.
+pub fn encode_binary_book_tape(chunks: &[(&str, u32, u32)]) -> Vec<u8> {
+    let count = chunks.len() as u32;
+    let mut total_utf8_bytes = 0usize;
+    for (text, _, _) in chunks {
+        total_utf8_bytes += text.len();
+    }
+
+    let total_size = HEADER_SIZE + (chunks.len() * INDEX_RECORD_SIZE) + total_utf8_bytes;
+    let mut buffer = vec![0u8; total_size];
+
+    buffer[0..4].copy_from_slice(&BINARY_TAPE_MAGIC.to_be_bytes());
+    buffer[4..8].copy_from_slice(&BINARY_TAPE_VERSION.to_be_bytes());
+    buffer[8..12].copy_from_slice(&count.to_be_bytes());
+    buffer[12..16].copy_from_slice(&(total_utf8_bytes as u32).to_be_bytes());
+
+    let payload_start = HEADER_SIZE + (chunks.len() * INDEX_RECORD_SIZE);
+    let mut current_offset = 0usize;
+    let mut index_cursor = HEADER_SIZE;
+
+    for (text, page, simhash_low) in chunks {
+        let text_bytes = text.as_bytes();
+        let len = text_bytes.len() as u32;
+
+        buffer[index_cursor..index_cursor + 4].copy_from_slice(&(current_offset as u32).to_be_bytes());
+        buffer[index_cursor + 4..index_cursor + 8].copy_from_slice(&len.to_be_bytes());
+        buffer[index_cursor + 8..index_cursor + 12].copy_from_slice(&page.to_be_bytes());
+        buffer[index_cursor + 12..index_cursor + 16].copy_from_slice(&simhash_low.to_be_bytes());
+
+        let target_pos = payload_start + current_offset;
+        buffer[target_pos..target_pos + text_bytes.len()].copy_from_slice(text_bytes);
+
+        current_offset += text_bytes.len();
+        index_cursor += INDEX_RECORD_SIZE;
+    }
+
+    buffer
+}
+
+/// Decodes a single chunk from binary tape in O(1) time without decoding the entire book.
+pub fn decode_binary_book_tape_chunk(tape: &[u8], index: usize) -> Option<String> {
+    if tape.len() < HEADER_SIZE {
+        return None;
+    }
+    let magic = u32::from_be_bytes(tape[0..4].try_into().ok()?);
+    if magic != BINARY_TAPE_MAGIC {
+        return None;
+    }
+    let count = u32::from_be_bytes(tape[8..12].try_into().ok()?) as usize;
+    if index >= count {
+        return None;
+    }
+
+    let payload_start = HEADER_SIZE + (count * INDEX_RECORD_SIZE);
+    let index_pos = HEADER_SIZE + (index * INDEX_RECORD_SIZE);
+    if index_pos + INDEX_RECORD_SIZE > payload_start || payload_start > tape.len() {
+        return None;
+    }
+
+    let start = u32::from_be_bytes(tape[index_pos..index_pos + 4].try_into().ok()?) as usize;
+    let len = u32::from_be_bytes(tape[index_pos + 4..index_pos + 8].try_into().ok()?) as usize;
+
+    let chunk_start = payload_start + start;
+    let chunk_end = chunk_start + len;
+    if chunk_end > tape.len() {
+        return None;
+    }
+
+    std::str::from_utf8(&tape[chunk_start..chunk_end]).ok().map(|s| s.to_string())
+}
+
+#[pyfunction]
+fn rust_encode_binary_tape(
+    py: Python<'_>,
+    texts: Vec<String>,
+    pages: Vec<u32>,
+    simhash_lows: Vec<u32>,
+) -> PyResult<Vec<u8>> {
+    py.allow_threads(|| {
+        let mut chunks = Vec::with_capacity(texts.len());
+        for i in 0..texts.len() {
+            let page = pages.get(i).copied().unwrap_or(1);
+            let sh = simhash_lows.get(i).copied().unwrap_or(0);
+            chunks.push((texts[i].as_str(), page, sh));
+        }
+        Ok(encode_binary_book_tape(&chunks))
+    })
+}
+
+#[pyfunction]
+fn rust_read_binary_tape_chunk(
+    py: Python<'_>,
+    tape: Vec<u8>,
+    index: usize,
+) -> PyResult<Option<String>> {
+    py.allow_threads(|| Ok(decode_binary_book_tape_chunk(&tape, index)))
+}
+
 #[pymodule]
 fn athena_rust_core(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(rust_self_heal_prose_text, m)?)?;
@@ -629,6 +736,8 @@ fn athena_rust_core(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(rust_simhash_hamming_distance, m)?)?;
     m.add_function(wrap_pyfunction!(rust_simhash_similarity, m)?)?;
     m.add_function(wrap_pyfunction!(rust_find_similar_chunks_simhash, m)?)?;
+    m.add_function(wrap_pyfunction!(rust_encode_binary_tape, m)?)?;
+    m.add_function(wrap_pyfunction!(rust_read_binary_tape_chunk, m)?)?;
     Ok(())
 }
 
