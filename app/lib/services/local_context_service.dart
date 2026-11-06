@@ -52,15 +52,13 @@ class LocalContextService {
     for (var i = 0; i < chunks.length; i++) {
       final chunk = chunks[i];
       final sequence = (chunk['sequence'] as num?)?.toInt() ?? (i + 1);
-      // Place context cards at intervals (e.g. sequence 3, 6, 9... or 4, 8, 12...)
+      // Place context cards at intervals of 3 chunks: sequence 3, 6, 9, 12...
       if (sequence % 3 != 0) continue;
 
-      final card = await generateCardForChunk(documentId, chunk, cards.length);
-      if (card != null) {
-        final title = (card['title'] as String?)?.toLowerCase() ?? '';
-        if (seen.add(title)) {
-          cards.add(card);
-        }
+      final card = generateSpeculativeDraftCard(documentId, chunk, cards.length);
+      final title = (card['title'] as String?)?.toLowerCase() ?? '';
+      if (seen.add(title)) {
+        cards.add(card);
       }
     }
     return cards;
@@ -102,7 +100,7 @@ class LocalContextService {
       'document_id': documentId,
       'source_chunk_id': chunkId,
       'concept_name': concept,
-      'card_type': 'explain',
+      'card_type': archetype.toLowerCase().replaceAll(' ', '_'),
       'title': '$archetype: $concept',
       'body': 'Question: How does the author ground $concept in this passage?\n||REVEAL||\nKey Thesis: "$exactQuote"$crossRef',
       'why_here': 'Instant local structural draft for “$concept”. Grounded to author’s text.',
@@ -111,6 +109,12 @@ class LocalContextService {
       ]),
       'exact_quote': exactQuote,
       'support_status': 'grounded',
+      'canonical_sha256': chunk['canonical_sha256'] ?? '',
+      'generation_mode': 'speculative_draft',
+      'verified': 1,
+      'saved': 0,
+      'dismissed': 0,
+      'created_at': DateTime.now().toUtc().toIso8601String(),
       'is_speculative_draft': true,
     };
   }

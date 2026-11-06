@@ -5,6 +5,7 @@ import 'package:path/path.dart' as p;
 import 'package:path_provider/path_provider.dart';
 import 'package:sqflite/sqflite.dart';
 import 'package:athena/services/simhash_service.dart';
+import 'package:athena/services/local_context_service.dart';
 
 /// App-private SQLite store shared by the foreground UI and background worker.
 /// PDFs stay in the app documents directory; only their private paths are kept
@@ -248,11 +249,28 @@ class LocalDatabase {
     return rows.map((r) => Map<String, dynamic>.from(r)).toList();
   }
 
+  static const Set<String> _validCardColumns = {
+    'id', 'document_id', 'source_chunk_id', 'concept_name', 'card_type',
+    'title', 'body', 'why_here', 'citations_json', 'exact_quote',
+    'support_status', 'canonical_sha256', 'generation_mode', 'verified',
+    'saved', 'dismissed', 'created_at',
+  };
+
   Future<void> insertCards(List<Map<String, Object?>> cards) async {
     final db = await database;
     final batch = db.batch();
     for (final c in cards) {
-      batch.insert('context_cards', c,
+      final sanitized = <String, Object?>{};
+      for (final entry in c.entries) {
+        if (_validCardColumns.contains(entry.key)) {
+          if (entry.value is bool) {
+            sanitized[entry.key] = (entry.value as bool) ? 1 : 0;
+          } else {
+            sanitized[entry.key] = entry.value;
+          }
+        }
+      }
+      batch.insert('context_cards', sanitized,
           conflictAlgorithm: ConflictAlgorithm.replace);
     }
     await batch.commit(noResult: true);
@@ -319,8 +337,20 @@ class LocalDatabase {
         where: 'document_id = ?',
         whereArgs: [documentId],
         orderBy: 'sequence ASC');
-    final cardRows = await db.query('context_cards',
+    var cardRows = await db.query('context_cards',
         where: 'document_id = ? AND dismissed = 0', whereArgs: [documentId]);
+
+    // Safety fallback: If context_cards are empty for this document, synthesize cards now!
+    if (cardRows.isEmpty && chunkRows.isNotEmpty) {
+      final chunkMaps = chunkRows.map((r) => Map<String, Object?>.from(r)).toList();
+      final contextService = LocalContextService();
+      final synthesized = await contextService.buildCards(documentId, chunkMaps);
+      if (synthesized.isNotEmpty) {
+        await insertCards(synthesized);
+        cardRows = await db.query('context_cards',
+            where: 'document_id = ? AND dismissed = 0', whereArgs: [documentId]);
+      }
+    }
 
     final chunks = chunkRows.map((r) => Map<String, dynamic>.from(r)).toList();
     final cards = cardRows.map((r) => Map<String, dynamic>.from(r)).toList();
@@ -382,6 +412,7 @@ class LocalDatabase {
           'exact_quote': card['exact_quote'],
           'support_status': card['support_status'] ?? 'fully_supported',
           'generation_mode': card['generation_mode'] ?? 'grounded',
+          'is_speculative_draft': card['generation_mode'] == 'speculative_draft',
           'saved': card['saved'] == 1,
           'citations': citations,
         });
@@ -419,6 +450,7 @@ class LocalDatabase {
               'exact_quote': card['exact_quote'],
               'support_status': card['support_status'] ?? 'fully_supported',
               'generation_mode': card['generation_mode'] ?? 'grounded',
+              'is_speculative_draft': card['generation_mode'] == 'speculative_draft',
               'saved': card['saved'] == 1,
               'citations': citations,
             });

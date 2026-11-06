@@ -209,11 +209,13 @@ class ReaderItem {
       body: json['body']?.toString(),
       whyHere: json['why_here']?.toString(),
       generationMode: json['generation_mode']?.toString(),
-      saved: json['saved'] as bool?,
+      saved: json['saved'] == true || json['saved'] == 1,
       exactQuote: json['exact_quote']?.toString(),
       supportStatus: json['support_status']?.toString(),
       boundaryMethod: json['boundary_method']?.toString(),
-      isSpeculativeDraft: json['is_speculative_draft'] == true || json['isSpeculativeDraft'] == true,
+      isSpeculativeDraft: json['is_speculative_draft'] == true ||
+          json['isSpeculativeDraft'] == true ||
+          json['generation_mode'] == 'speculative_draft',
       citations: (json['citations'] as List?)
           ?.whereType<Map>()
           .map((e) => e.map((k, v) => MapEntry(k.toString(), v)))

@@ -64,6 +64,8 @@ class LibraryScreen extends ConsumerStatefulWidget {
 class _LibraryScreenState extends ConsumerState<LibraryScreen>
     with WidgetsBindingObserver {
   bool _uploading = false;
+  double _uploadProgress = 0.0;
+  String _uploadStage = '';
 
   bool _aiConfigured = true;
 
@@ -630,6 +632,93 @@ class _LibraryScreenState extends ConsumerState<LibraryScreen>
     );
   }
 
+  Widget _buildEditorialIngestionProgressCard(bool isDark) {
+    final percentInt = (_uploadProgress * 100).clamp(0, 100).toInt();
+    final borderColor = isDark ? const Color(0xFF333333) : const Color(0xFFD4C8B8);
+    final cardBg = isDark ? const Color(0xFF1C1C1C) : const Color(0xFFFAF7F0);
+    final primaryColor = isDark ? const Color(0xFFE0E0E0) : const Color(0xFF2C2C2C);
+    const accentGreen = Color(0xFF2D6A4F);
+
+    return Container(
+      width: double.infinity,
+      margin: const EdgeInsets.only(bottom: 16),
+      padding: const EdgeInsets.all(16),
+      decoration: BoxDecoration(
+        color: cardBg,
+        borderRadius: BorderRadius.circular(16),
+        border: Border.all(color: borderColor, width: 1.0),
+        boxShadow: [
+          BoxShadow(
+            color: Colors.black.withValues(alpha: isDark ? 0.3 : 0.04),
+            blurRadius: 8,
+            offset: const Offset(0, 2),
+          ),
+        ],
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            mainAxisAlignment: MainAxisAlignment.spaceBetween,
+            children: [
+              Row(
+                children: [
+                  Container(
+                    width: 8,
+                    height: 8,
+                    decoration: const BoxDecoration(
+                      color: accentGreen,
+                      shape: BoxShape.circle,
+                    ),
+                  ),
+                  const SizedBox(width: 8),
+                  Text(
+                    'INGESTING DOCUMENT',
+                    style: TextStyle(
+                      fontFamily: 'Courier',
+                      fontSize: 11,
+                      fontWeight: FontWeight.w700,
+                      letterSpacing: 1.2,
+                      color: isDark ? const Color(0xFFAAAAAA) : const Color(0xFF666666),
+                    ),
+                  ),
+                ],
+              ),
+              Text(
+                '$percentInt%',
+                style: TextStyle(
+                  fontFamily: 'Courier',
+                  fontSize: 12,
+                  fontWeight: FontWeight.w700,
+                  color: primaryColor,
+                ),
+              ),
+            ],
+          ),
+          const SizedBox(height: 10),
+          ClipRRect(
+            borderRadius: BorderRadius.circular(4),
+            child: LinearProgressIndicator(
+              value: _uploadProgress.clamp(0.0, 1.0),
+              minHeight: 6,
+              backgroundColor: isDark ? const Color(0xFF2A2A2A) : const Color(0xFFE8E2D5),
+              valueColor: const AlwaysStoppedAnimation<Color>(accentGreen),
+            ),
+          ),
+          const SizedBox(height: 8),
+          Text(
+            _uploadStage.isNotEmpty ? _uploadStage : 'Processing book...',
+            style: TextStyle(
+              fontSize: 12,
+              fontWeight: FontWeight.w500,
+              color: isDark ? const Color(0xFFCCCCCC) : const Color(0xFF444444),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
   Widget _buildEditorialUpdateBanner(bool isDark) {
     final platform = detectDevicePlatform();
 
@@ -950,7 +1039,11 @@ class _LibraryScreenState extends ConsumerState<LibraryScreen>
         return;
       }
 
-      setState(() => _uploading = true);
+      setState(() {
+        _uploading = true;
+        _uploadProgress = 0.10;
+        _uploadStage = '1/4 Reading PDF bytes...';
+      });
 
       final client = ref.read(apiClientProvider);
 
@@ -960,12 +1053,28 @@ class _LibraryScreenState extends ConsumerState<LibraryScreen>
         file.name,
         filePath: filePath,
         fileBytes: fileBytes,
+        onProgress: (progress, stage) {
+          if (mounted) {
+            setState(() {
+              _uploadProgress = progress;
+              _uploadStage = stage;
+            });
+          }
+        },
       );
 
       ref.invalidate(documentsProvider);
+      try {
+        await ref.read(documentsProvider.future);
+      } catch (e) {
+        debugPrint('[Athena] Refresh documents notice: $e');
+      }
+      if (mounted) {
+        setState(() {});
+      }
 
       if (mounted) {
-        if (AppConfig.apiBaseUrl.isEmpty) {
+        if (AppConfig.apiBaseUrl.isEmpty || !kIsWeb) {
           context.push('/reader/$docId');
         } else {
           context.push('/processing/$docId');
@@ -990,7 +1099,14 @@ class _LibraryScreenState extends ConsumerState<LibraryScreen>
         );
       }
     } finally {
-      if (mounted) setState(() => _uploading = false);
+      if (mounted) {
+        setState(() {
+          _uploading = false;
+          _uploadProgress = 0.0;
+          _uploadStage = '';
+        });
+        ref.invalidate(documentsProvider);
+      }
     }
   }
 
@@ -1443,6 +1559,10 @@ class _LibraryScreenState extends ConsumerState<LibraryScreen>
                   ),
 
                   const SizedBox(height: 16),
+
+                  if (_uploading) ...[
+                    _buildEditorialIngestionProgressCard(isDark),
+                  ],
 
                   if (_hasUpdate && !_updateDismissed) ...[
                     _buildEditorialUpdateBanner(isDark),

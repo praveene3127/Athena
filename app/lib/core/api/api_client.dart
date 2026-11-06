@@ -165,6 +165,34 @@ _ParseDocumentResult _parseAndChunkDocumentInBackground(_ParseDocumentParams par
         return false;
       }
 
+      final closingPunct = RegExp(r'^[.,!?;:)\]}"”’]');
+      final openingPunct = RegExp(r'[(\[{"“‘\-]$');
+
+      String reconstructWordWithGlyphSpacing(TextWord word) {
+        if (word.glyphs.isEmpty) return word.text.trim();
+        if (word.glyphs.length == 1) return word.glyphs.first.text.trim();
+
+        final sb = StringBuffer();
+        for (int g = 0; g < word.glyphs.length; g++) {
+          final currGlyph = word.glyphs[g];
+          if (g > 0) {
+            final prevGlyph = word.glyphs[g - 1];
+            final horizontalGap = currGlyph.bounds.left - prevGlyph.bounds.right;
+            final gapThreshold = (currGlyph.bounds.width * 0.18).clamp(1.0, 3.5);
+            if (horizontalGap > gapThreshold || horizontalGap >= 1.2) {
+              final prevText = sb.toString();
+              if (prevText.isNotEmpty &&
+                  !prevText.endsWith(' ') &&
+                  !prevText.endsWith('-')) {
+                sb.write(' ');
+              }
+            }
+          }
+          sb.write(currGlyph.text);
+        }
+        return sb.toString().trim();
+      }
+
       String extractPageText(int index) {
         try {
           final lines = extractor.extractTextLines(startPageIndex: index, endPageIndex: index);
@@ -172,12 +200,23 @@ _ParseDocumentResult _parseAndChunkDocumentInBackground(_ParseDocumentParams par
             final lineStrings = <String>[];
             for (final line in lines) {
               if (line.wordCollection.isNotEmpty) {
-                final lineWords = line.wordCollection
-                    .map((w) => w.text.trim())
-                    .where((w) => w.isNotEmpty)
-                    .join(' ');
-                if (lineWords.isNotEmpty) {
-                  lineStrings.add(lineWords);
+                final lineBuffer = StringBuffer();
+                for (int w = 0; w < line.wordCollection.length; w++) {
+                  final wordStr = reconstructWordWithGlyphSpacing(line.wordCollection[w]);
+                  if (wordStr.isEmpty) continue;
+                  if (lineBuffer.isNotEmpty) {
+                    final prev = lineBuffer.toString();
+                    final prevEndsOpening = openingPunct.hasMatch(prev);
+                    final currStartsClosing = closingPunct.hasMatch(wordStr);
+                    if (!prevEndsOpening && !currStartsClosing && !prev.endsWith(' ')) {
+                      lineBuffer.write(' ');
+                    }
+                  }
+                  lineBuffer.write(wordStr);
+                }
+                final lineStr = lineBuffer.toString().trim();
+                if (lineStr.isNotEmpty) {
+                  lineStrings.add(lineStr);
                 }
               } else if (line.text.trim().isNotEmpty) {
                 lineStrings.add(line.text.trim());
@@ -551,7 +590,9 @@ class ApiClient {
     CancelToken? cancelToken,
     String? filePath,
     List<int>? fileBytes,
+    void Function(double progress, String stage)? onProgress,
   }) async {
+    onProgress?.call(0.15, '1/4 Reading PDF bytes...');
     // 1. If companion engine backend is reachable, try backend first
     if (_hasReachableBackend) {
       try {
@@ -646,6 +687,8 @@ class ApiClient {
       );
     }
 
+    onProgress?.call(0.40, '2/4 Extracting & healing text...');
+
     // Call static helper that has zero reference to fileStream or this
     final parseResult = await _runIsolateParser(
       docId,
@@ -660,6 +703,40 @@ class ApiClient {
 
     final now = DateTime.now().toIso8601String();
     final cleanTitle = fileName.replaceAll(RegExp(r'\.[a-zA-Z0-9]+$'), '');
+
+    onProgress?.call(0.70, '3/4 Building single-screen chunks & Context Cards...');
+
+    final cardMaps = <Map<String, Object?>>[];
+    try {
+      final contextService = LocalContextService();
+      final cards = await contextService.buildCards(docId, chunkMaps);
+      for (final cd in cards) {
+        cardMaps.add({
+          'id': cd['id'] ?? 'card_${cd['concept_name']}',
+          'document_id': docId,
+          'source_chunk_id':
+              cd['source_chunk_id'] ?? chunkMaps.first['id']!,
+          'concept_name': cd['concept_name'] ?? '',
+          'card_type': cd['card_type'] ?? 'context',
+          'title': cd['title'] ?? '',
+          'body': cd['body'] ?? '',
+          'why_here': cd['why_here'] ?? '',
+          'citations_json': cd['citations_json'] ?? '[]',
+          'exact_quote': cd['exact_quote'],
+          'support_status': 'fully_supported',
+          'canonical_sha256': cd['canonical_sha256'] ?? '',
+          'generation_mode': cd['generation_mode'] ?? 'speculative_draft',
+          'verified': 1,
+          'saved': 0,
+          'dismissed': 0,
+          'created_at': now,
+        });
+      }
+    } catch (e) {
+      debugPrint('Athena caught error: $e');
+    }
+
+    onProgress?.call(0.90, '4/4 Saving to SQLite library...');
 
     try {
       await LocalDatabase.instance.insertDocument({
@@ -681,40 +758,14 @@ class ApiClient {
       });
 
       await LocalDatabase.instance.insertChunks(chunkMaps);
+      if (cardMaps.isNotEmpty) {
+        await LocalDatabase.instance.insertCards(cardMaps);
+      }
     } catch (e, st) {
       debugPrint('[Athena Error] LocalDatabase insert notice: $e\n$st');
     }
 
-    try {
-      final contextService = LocalContextService();
-      final cards = await contextService.buildCards(docId, chunkMaps);
-      final cardMaps = cards
-          .map((cd) => {
-                'id': cd['id'] ?? 'card_${cd['concept_name']}',
-                'document_id': docId,
-                'source_chunk_id':
-                    cd['source_chunk_id'] ?? chunkMaps.first['id']!,
-                'concept_name': cd['concept_name'] ?? '',
-                'card_type': cd['card_type'] ?? 'context',
-                'title': cd['title'] ?? '',
-                'body': cd['body'] ?? '',
-                'why_here': cd['why_here'] ?? '',
-                'citations_json': cd['citations_json'] ?? '[]',
-                'exact_quote': cd['exact_quote'],
-                'support_status': 'fully_supported',
-                'canonical_sha256': cd['canonical_sha256'] ?? '',
-                'generation_mode': 'extractive',
-                'verified': 1,
-                'saved': 0,
-                'dismissed': 0,
-                'created_at': now,
-              })
-          .toList();
-      await LocalDatabase.instance.insertCards(cardMaps);
-    } catch (e) {
-        debugPrint('Athena caught error: $e');
-      }
-
+    onProgress?.call(1.0, 'Ready to read');
     return docId;
   }
 
@@ -762,6 +813,28 @@ class ApiClient {
       for (final c in chunks) {
         if (c is Map && c['raw_text'] is String) {
           c['raw_text'] = sanitizeProseSpacing(c['raw_text'] as String);
+        }
+      }
+    }
+    final items = data['items'] as List?;
+    if (items != null) {
+      for (final it in items) {
+        if (it is Map) {
+          if (it['text'] is String) {
+            it['text'] = sanitizeProseSpacing(it['text'] as String);
+          }
+          if (it['raw_text'] is String) {
+            it['raw_text'] = sanitizeProseSpacing(it['raw_text'] as String);
+          }
+          if (it['body'] is String) {
+            it['body'] = sanitizeProseSpacing(it['body'] as String);
+          }
+          if (it['exact_quote'] is String) {
+            it['exact_quote'] = sanitizeProseSpacing(it['exact_quote'] as String);
+          }
+          if (it['title'] is String) {
+            it['title'] = sanitizeProseSpacing(it['title'] as String);
+          }
         }
       }
     }
