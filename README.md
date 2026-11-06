@@ -6,10 +6,11 @@
 
 <p align="center">
   <img src="https://img.shields.io/badge/Flutter-3.x-02569B?logo=flutter&logoColor=white" alt="Flutter 3.x" />
-  <img src="https://img.shields.io/badge/FastAPI-0.115+-009688?logo=fastapi&logoColor=white" alt="FastAPI" />
+  <img src="https://img.shields.io/badge/FastAPI-0.162+-009688?logo=fastapi&logoColor=white" alt="FastAPI" />
+  <img src="https://img.shields.io/badge/Rust_Core-PyO3%20%7C%20Rayon-DEA584?logo=rust&logoColor=white" alt="Rust Core" />
   <img src="https://img.shields.io/badge/ONNX-Edge%20AI-005CED?logo=onnx&logoColor=white" alt="ONNX Edge AI" />
   <img src="https://img.shields.io/badge/SHA--256-Lossless%20Canonical-10B981" alt="Lossless Canonical" />
-  <img src="https://img.shields.io/badge/Tests-53%2F53%20Passing-brightgreen" alt="Tests" />
+  <img src="https://img.shields.io/badge/Tests-89%2F89%20Passing-brightgreen" alt="Tests" />
   <a href="docs/LICENSE"><img src="https://img.shields.io/badge/License-MIT-blue" alt="License" /></a>
 </p>
 
@@ -17,7 +18,7 @@
 
 ## 1. Client Downloads & Quick Start
 
-Athena operates as a native mobile client paired over local Wi-Fi or Cloudflare Tunnel to your local companion engine, ensuring complete data privacy with zero cloud lock-in.
+Athena operates in two distinct, versatile modes: **100% Standalone On-Device Mobile Mode** (offline, zero-server required) or paired over local Wi-Fi / Cloudflare Tunnel to the **High-Performance Companion Engine** for accelerated multi-page Rust parsing and ONNX semantic search.
 
 <p align="center">
   <a href="https://github.com/praveene3127/Athena/raw/main/releases/athena-release.apk">
@@ -29,37 +30,46 @@ Athena operates as a native mobile client paired over local Wi-Fi or Cloudflare 
   </a>
 </p>
 
-| Target Platform | Package / Distribution | Installation & Pairing Method |
+| Target Platform | Package / Distribution | Installation & Execution Mode |
 | :--- | :--- | :--- |
-| **Android** | [Athena-Android.apk](https://github.com/praveene3127/Athena/raw/main/releases/athena-release.apk) | Direct APK download. Background updates supported via [Obtainium](https://obtainium.imranr.dev) or in-app updater. |
+| **Android** | [Athena-Android.apk](https://github.com/praveene3127/Athena/raw/main/releases/athena-release.apk) | Direct APK download (61.8 MB). Runs 100% standalone on device or pairs with desktop. In-app updater and [Obtainium](https://obtainium.imranr.dev) compatible. |
 | **iOS (Native IPA)** | [Athena-iOS.ipa](https://github.com/praveene3127/Athena/raw/main/releases/athena-ios-release.ipa) | Sideload via [Sideloadly](https://sideloadly.io/) or AltStore with any free Apple ID (no paid developer account required). |
-| **iOS (PWA / WebApp)** | Standalone Fullscreen WebApp | Open `http://<LAN_IP>:8000` in Safari &rarr; Tap **Share** &rarr; **Add to Home Screen**. |
-| **Companion Engine** | Windows, macOS, Linux | Python 3.12+ backend hosting FastAPI REST API, static Web Reader, and ONNX embedder. |
+| **iOS / Web (PWA)** | Standalone Fullscreen WebApp | Open `http://<LAN_IP>:8000` in Safari &rarr; Tap **Share** &rarr; **Add to Home Screen**. |
+| **Companion Engine** | Windows, macOS, Linux | Python 3.12+ FastAPI backend hosting the Rust text engine, static Web Reader, and ONNX embedder. |
 
-### Companion Engine Launch
+### Quick Start Options
+
+#### Option A: 100% Standalone Mobile (Zero Server Setup)
+1. Download and install [athena-release.apk](https://github.com/praveene3127/Athena/raw/main/releases/athena-release.apk) on your Android device.
+2. Open Athena, tap **+ ADD BOOK**, and select any PDF or EPUB.
+3. The document is extracted on-device via isolated background parsing, cleaned, losslessly chunked, and stored in local SQLite with instant FTS5 search.
+4. *(Optional)* Tap **AI Engines**, enter your API key (Gemini, OpenRouter, Groq, Claude, OpenAI), tap **Check Connection** to discover live models, and enjoy live AI marginalia.
+
+#### Option B: Companion Engine (Desktop / LAN Mode)
 ```bash
-# 1. Clone & activate virtual environment
+# 1. Clone repository & initialize virtual environment
 git clone https://github.com/praveene3127/Athena.git && cd Athena
 python -m venv .venv
 .venv\Scripts\activate   # Windows (or source .venv/bin/activate on macOS/Linux)
 
-# 2. Install dependencies & start unified supervisor
+# 2. Install backend dependencies & start unified supervisor
 pip install -r backend/requirements.txt
 python scripts/run_athena.py
 # (On Windows, you can also double-click scripts/start_athena.bat)
 ```
+The terminal prints your dynamic local IP (e.g., `http://192.168.1.61:8000`). Connect the mobile app by navigating to **AI Engines &rarr; Server Host**, entering your LAN IP, and tapping **Save & Apply**.
 
 ---
 
 ## 2. Core Philosophy: Feed-Driven Deep Reading
 
-Long-form non-fiction presents a structural cognitive dilemma: traditional e-readers display static, unassisted walls of text that make sustaining focus on dense arguments difficult, while automated summarization tools compress nuanced prose into lossy, hallucination-prone bullet points.
+Long-form non-fiction books present an ongoing cognitive challenge: traditional e-readers display static, unassisted walls of text that make sustaining focus on dense arguments difficult, while automated summarization tools compress nuanced prose into lossy, hallucination-prone bullet points.
 
 Athena resolves this through **Feed-Driven Deep Reading**:
-1. **100% Verbatim Canonical Prose**: Not a single word, clause, or sentence is summarized, condensed, or rewritten.
-2. **High-Surprisal Grounded Marginalia**: As the reader scrolls through digestible chunks (80–140 words), an Edge AI scanner and dual-engine LLM generate grounded pedagogical context cards anchored to exact quotes.
+1. **100% Verbatim Canonical Prose**: Not a single sentence, word, or clause is summarized, condensed, or rewritten.
+2. **High-Surprisal Grounded Marginalia**: As the reader scrolls through digestible chunks (80–140 words), the engine interweaves grounded pedagogical context cards anchored to exact author quotes.
 
-```
+```text
 +---------------------------------------------------------------------------------------+
 |  Author's Verbatim Chunk (80–140 words)                                               |
 |  "The first rule of the Roman Stoics was not emotional repression, but the cognitive   |
@@ -71,7 +81,7 @@ Athena resolves this through **Feed-Driven Deep Reading**:
 |  Athena Marginalia Card (EMPIRICAL STUDY • #2D6A4F)                                    |
 |  Quote: "cognitive separation of perception from value judgment"                      |
 |  Context: Albert Ellis modeled Rational Emotive Behavior Therapy (REBT) directly on   |
-|  Epictetus' Enchiridion. In a 2018 randomized trial (N=142), cognitive reappraisal    |
+|  Epictetus' Enchiridion. In a randomized trial (N=142), cognitive reappraisal          |
 |  reduced amygdala activation by 38% compared to passive suppression.                  |
 |  [ ||REVEAL||: Tap to inspect neuroimaging replication and sample limitations ]       |
 +---------------------------------------------------------------------------------------+
@@ -81,147 +91,142 @@ Athena resolves this through **Feed-Driven Deep Reading**:
 
 | Capability | Kindle / PDF Readers | AI Summarizers (Blinkist / LLM) | Athena |
 | :--- | :--- | :--- | :--- |
-| **Verbatim Text Integrity** | 100% (Static page layout) | 0% (Lossy, rewritten prose) | **100% Lossless (SHA-256 Verified)** |
-| **Reading Ergonomics** | Rigid multi-paragraph pages | Bullet summaries | **Mobile Feed or Flow with Dynamic Chunks** |
-| **External Fact Grounding** | None (Manual lookup) | Pre-baked, unanchored | **2-Hop Orthogonal Search to Academic Sources** |
+| **Verbatim Text Integrity** | 100% (Static multi-page wall) | 0% (Lossy, rewritten prose) | **100% Lossless (SHA-256 Verified)** |
+| **Reading Ergonomics** | Rigid multi-paragraph pages | Bullet summaries | **Mobile Feed (1-Swipe Snap) or Flow Mode** |
+| **External Fact Grounding** | None (Manual lookup) | Pre-baked, unanchored | **2-Hop Orthogonal Search & Entity Discovery** |
 | **Edge AI Anti-Echo Gate** | N/A | High repetition of passage | **$\text{CosineSim} \le 0.81$ (Zero Paraphrase Echoes)** |
 | **Active Recall Integration**| Passive reading | Generic multiple-choice | **Interactive Study Findings Spoilers** |
+| **Offline Independence** | Requires downloaded books | Cloud API only | **100% Standalone On-Device Local SQLite & FTS5** |
 
 ### Mathematical Invariants
-Athena enforces two strict invariants verified on every build:
-- **Lossless Reconstruction**:
+Athena enforces three strict invariants verified by automated gates on every build:
+- **Lossless Reconstruction Invariant**:
   $$\sum_{i=1}^{N} \text{chunk}_i.\text{raw\_text} \equiv \text{document}.\text{canonical\_text}$$
   Verified via SHA-256 cryptographic digest before any document is served.
-- **Exact-Quote Anchoring**:
+- **Exact-Quote Anchoring Invariant**:
   Every marginalia card must satisfy:
   $$\text{card}.\text{anchor\_quote} \in \text{chunk}.\text{raw\_text}$$
   Cards failing exact substring containment are discarded prior to storage.
+- **Anti-Echo Novelty Invariant**:
+  Cards must introduce orthogonal information gain:
+  $$\text{CosineSim}(\text{chunk}.\text{embedding}, \text{card}.\text{embedding}) \le 0.81 \quad \land \quad \text{novel\_entities} \ge 2$$
 
 ---
 
-## 3. System Architecture & Edge AI Pipeline
+## 3. Dual-Engine System Architecture
 
-Athena combines an on-device ONNX embedding engine (`BAAI/bge-small-en-v1.5`) with pluggable cloud LLM orchestration (Google Gemini default, OpenRouter, Groq, Anthropic Claude, OpenAI, or local Ollama with instant failover).
+Athena features a dual-mode topology: an on-device standalone mobile architecture and an accelerated desktop companion engine backed by Rust and ONNX runtime.
 
-```
-                             ATHENA SYSTEM ARCHITECTURE
-
-  [ Native Mobile App ]               [ Web Reader ]
-  (iOS .ipa / Android .apk)         (Mobile Safari PWA)
-             |                               |
-             +---------------+---------------+
-                             |
-                   HTTP / WebSocket (CORS-free)
-                             |
-                             v
-  +-----------------------------------------------------+
-  |      FastAPI Unified Host (:8000 / :8080)           |
-  |  - Single-Origin Static Mount (HTML5 SPA)           |
-  |  - Dynamic Wi-Fi & LAN Pair Info (/api/pair-info)   |
-  |  - BYOK Dual Failover Router                        |
-  +-----------------------------------------------------+
-                             |
-         +-------------------+-------------------+
-         |                                       |
-         v                                       v
-  [ INGESTION PIPELINE ]                 [ READ-AHEAD PIPELINE ]
-  Stage 0: Document Bouncer              Stage 2A: 2-Hop Search
-  - Core Body Window (15%-85%)           - Academic & Historical Indices
-  - Per-Page Structural Dominance        - PubMed, Stanford, PNAS
-  - Book Immunity Rule (<100ms)                          |
-         |                                               v
-         v                               Stage 2B: ONNX Anti-Echo Gate
-  Stage 1: Mathematical Hygiene          - BAAI/bge-small-en-v1.5 (CPU)
-  - Shannon Entropy Filter (H < 0.65)    - CosineSim(chunk, card) <= 0.81
-  - Universal Dehyphenation              - >= 2 Novel External Entities
-  - Viterbi De-Compounding (wordninja)   - Disambiguation Filter
-  - Modal Font Footnote Isolation                        |
-         |                                               v
-         v                               [ SQLModel SQLite DB ]
-  Lossless Chunker (80-140 words)        - Chunks & Grounded Cards
-  - SHA-256 Invariant Verification       - Reading Progress & Vibe Cache
+```text
+                           ATHENA SYSTEM TOPOLOGY
+                           
+      [ 100% STANDALONE MOBILE MODE ]             [ SERVER COMPANION MODE ]
+     (Android APK / iOS Native Build)               (FastAPI + Rust + ONNX)
+                     |                                         |
+   +------------------------------------+    +------------------------------------+
+   | Flutter L6/L7 Modular Viewports    |    | FastAPI Host (:8000 / :8080)       |
+   | - ReaderTopBar (56px Safe Nav)     |    | - Single-Origin Flutter SPA Mount  |
+   | - ReaderFeedView (Discrete Snap)   |    | - Dynamic Wi-Fi Pair Info Service  |
+   | - ReaderFlowView (Continuous Flow) |    | - High-Concurrency Async Routers   |
+   | - ChunkWidget (Inline Note/Edit)   |    +-----------------+------------------+
+   | - ContextCardWidget (Interactive)  |                      |
+   | - ReaderBottomBar (Progress & Jump)|          +-----------+-----------+
+   +-----------------+------------------+          |                       |
+                     |                             v                       v
+          +----------+----------+        [ RUST CORE ENGINE ]    [ ONNX RUNTIME ]
+          |                     |        - athena_rust_core      - BAAI/bge-small
+          v                     v        - Parallel Rayon regex  - CosineSim Gate
+   [ ON-DEVICE INGEST ]   [ LOCAL SQLITE ]  - Aho-Corasick slop  - 2-Hop Grounding
+   - Background Isolate   - FTS5 Match      - Parallel chunking  - Anti-echo check
+   - PDF word spacing     - Chunks & Cards         |                       |
+   - Shannon Hygiene      - Reading bookmarks      +-----------+-----------+
+   - Lossless Chunker     - User annotations                   |
+          |                     |                              v
+          +----------+----------+                    [ SQLMODEL SQLITE DB ]
+                     |                               - Corpus SHA-256 Cache
+                     v                               - Marginalia Matrix
+          [ DIRECT HTTPS BYOK LLM ]                  - Hybrid BM25 Search
+          - Live /models discovery
+          - Gemini / OpenRouter / Groq
 ```
 
-### Stage 0: Structural Document Bouncer (`backend/app/services/edge/bouncer.py`)
-PDFs uploaded to Athena are evaluated through a sub-100ms structural triage gate prior to compute-heavy OCR or embedding:
-- **Per-Page Structural Dominance**: Measures font distribution, column counts, and paragraph continuity across the core body (pages `15%–85%`). Never relies on brittle keyword bans.
-- **Book Immunity Rule**: Documents demonstrating book-length page continuity (>25 pages of narrative text flow) receive unconditional ingestion immunity.
-- **Triage Classification**: Slide decks, invoices, forms, and raw code listings are bounced with a diagnostic reason and an optional manual override.
+### 1. Ingestion Pipeline & Structural Bouncer
+- **Stage 0: Structural Document Bouncer (`backend/app/services/edge/bouncer.py`)**: Sub-100ms structural triage analyzing font sizes, column counts, and continuity across the core body (pages `15%–85%`). Admits narrative non-fiction; gracefully rejects slide decks, tabular ledgers, and raw code manuals with actionable diagnostics.
+- **Stage 1: Mathematical Text Hygiene (`backend/app/services/edge/hygiene.py` & Rust Core)**:
+  - **Shannon Entropy Filter**: Strips border artifacts, scanner noise, and repetitive headers where character entropy falls below $H(w) < 0.65\text{ bits}$.
+  - **Universal Dehyphenation**: Heals line-wrap hyphens (`trans- formation` &rarr; `transformation`) while preserving true compounds (`self-esteem`, `high-dimensional`).
+  - **Viterbi Word De-Compounding**: Unfuses collided words (`inorderto` &rarr; `in order to`) while strictly protecting scientific terms (`neuroplasticity`, `electromagnetism`).
+- **Stage 2: Lossless Chunker (80–140 words)**: Respects paragraph and sentence boundaries while strictly preserving 100% byte-exact author text.
 
-### Stage 1: Information-Theoretic PDF Hygiene (`backend/app/services/edge/hygiene.py`)
-Raw PDF extraction often produces typographical artifacts that destroy readability. Athena cleans text using information theory principles:
-- **Shannon Entropy Filter (DeepMind *Gopher* / AllenAI *Dolma*)**: Strips printer border noise and decorative dividers where word entropy falls below:
-  $$H(w) = -\sum_{i=1}^{k} p(c_i) \log_2 p(c_i) < 0.65\text{ bits}$$
-- **Universal Dehyphenation**: Repairs line-break splits (`An- toninus` &rarr; `Antoninus`) while preserving valid compound words (`self-esteem`, `eighteenth-century`).
-- **Viterbi Unigram De-Compounding (`wordninja`)**: Corrects kerning collisions (`amusementlastsummer` &rarr; `amusement last summer`) while protecting technical vocabulary (`neuroplasticity`, `electromagnetism`).
-- **Modal Font Footnote Isolation**: Isolates smaller text blocks at page boundaries so sentences never break across page turns. Fused superscript callouts are cleanly sanitized.
-
-### Stage 2: Read-Ahead Scanner & Novelty Gate (`backend/app/services/edge/novelty.py`)
-While reading chunk $K$, Athena asynchronously prepares grounded marginalia for chunks $K+1 \dots K+5$:
-- **2-Hop Orthogonal Grounding**: Retrieves external context from academic databases (PubMed, APA PsycNet, Stanford Encyclopedia of Philosophy).
-- **ONNX Anti-Echo Gate (`BAAI/bge-small-en-v1.5`)**:
-  1. **$\text{CosineSim}(\text{chunk}, \text{card}) \le 0.81$**: Discards cards that merely summarize or restate the passage.
-  2. **Entity Expansion**: Enforces $\ge 2$ novel named entities (dates, sample sizes, researcher names, historical events) not present in the source chunk.
-  3. **Disambiguation Filter**: Strips pop-culture Wikipedia disambiguation stubs.
+### 2. High-Performance Rust Core (`backend/rust_core/`)
+Compiled via PyO3 as the native Python extension `athena_rust_core`:
+- `rust_self_heal_prose_text`: Multi-pass zero-allocation regex de-hyphenation and fused kerning repair.
+- `rust_heal_pages_parallel`: Multi-threaded parallel page batch healing using Rayon.
+- `rust_plan_feed_chunks`: Microsecond-speed lossless chunk partitioning satisfying SHA-256 invariants.
+- `rust_hybrid_bm25_search`: Sub-millisecond indexed keyword search over book passages.
+- `rust_check_slop_phrase`: Aho-Corasick multi-pattern scanner blocking generic AI phrases (*"in this passage", "the author highlights"*).
 
 ---
 
-## 4. Interactive Marginalia Archetypes & Cognitive Tools
+## 4. ArtCraft Modular Reader & Editorial UI
 
-Cards cycle deterministically through four distinct cognitive lenses (`slot = card_index % 4`):
+Athena's mobile frontend adheres to the **ArtCraft Engineering Laws** (`storytold/pdfcraft` design principles) to prevent layout regressions on mobile devices:
 
-```
+### Layer Isolation & Strict File-Size Caps
+- **L1–L5 Pure Engine**: Lossless chunking, text hygiene, and database storage without UI dependencies.
+- **L6 Deterministic State**: State machines (`ReaderController`, `reader_feed_builder.dart`) calculating feed lists.
+- **L7 Dumb UI Widgets**: Monolithic screens are strictly capped and broken into isolated widgets (`<= 350 lines`):
+  - [`ReaderTopBar`](file:///c:/Users/prave/Downloads/Athena/app/lib/features/reader/widgets/reader_top_bar.dart): 56px fixed height with Back navigation, book title, `FEED | FLOW` toggle, live search trigger, and drawers.
+  - [`ReaderFeedView`](file:///c:/Users/prave/Downloads/Athena/app/lib/features/reader/widgets/reader_feed_view.dart): 1-by-1 discrete vertical card snapping (`PageScrollPhysics`) with strict SafeArea column layout (zero `Stack` overlaps).
+  - [`ReaderFlowView`](file:///c:/Users/prave/Downloads/Athena/app/lib/features/reader/widgets/reader_flow_view.dart): Continuous flowing reader with persistent position tracking and inline typography styling.
+  - [`ChunkWidget`](file:///c:/Users/prave/Downloads/Athena/app/lib/features/reader/widgets/chunk_widget.dart): Card rendering verbatim author text with double-tap inline note editing and annotation persistence.
+  - [`ContextCardWidget`](file:///c:/Users/prave/Downloads/Athena/app/lib/features/reader/widgets/context_card_widget.dart): 4-archetype pedagogical marginalia with exact quote anchoring and interactive reveal spoiler gates.
+  - [`ReaderBottomBar`](file:///c:/Users/prave/Downloads/Athena/app/lib/features/reader/widgets/reader_bottom_bar.dart): Reading progress slider, percentage indicator, chapter navigation, and Ask Athena modal.
+
+### The 4 Marginalia Archetypes
+Marginalia cards cycle deterministically through four distinct cognitive lenses (`slot = card_index % 4`):
+
+```text
 +---------------------------------------------------------------------------------------+
 | 1. EMPIRICAL STUDY     (Forest Emerald • #2D6A4F)                                     |
-|    Peer-reviewed studies, randomized trials, statistical cohorts, and sample sizes.   |
-|    Interactive: Tap [ Reveal Study Findings ] to inspect experimental results.        |
+|    Peer-reviewed clinical trials, controlled experiments, statistical cohort metrics. |
+|    Interactive: Tap [ REVEAL FINDINGS ] to inspect sample sizes and neuroimaging data.|
 +---------------------------------------------------------------------------------------+
 | 2. CRITICAL DEBATE     (Terracotta • #C84B31)                                         |
 |    Major counterarguments, theoretical dissent, and empirical contradictions.         |
 |    Dual-panel: Structured [ Counterpoint ] vs. [ Empirical Evidence ].                |
 +---------------------------------------------------------------------------------------+
 | 3. HISTORICAL CONTEXT  (Prussian Navy • #1D3557)                                      |
-|    Primary source letters, archival records, and geopolitical background.             |
-|    Anchors author arguments in the tangible world of their era.                       |
+|    Primary source letters, archival accounts, and geopolitical historical background. |
+|    Grounds the author's argument in the tangible world of its era.                    |
 +---------------------------------------------------------------------------------------+
 | 4. CORE PARADOX        (Warm Ochre • #B45309)                                         |
-|    Counter-intuitive laws, cognitive blindspots, and systemic contradictions.        |
-|    Named laws (e.g., Goodhart's Law, Jevons Paradox, Selection Bias).                 |
+|    Counter-intuitive systemic laws, cognitive blindspots, and logical contradictions.|
+|    Explains named paradoxes (e.g., Jevons Paradox, Goodhart's Law, Selection Bias).   |
 +---------------------------------------------------------------------------------------+
 ```
 
-### Cognitive Reading Tools
-- **Feed Mode vs. Flow Mode**: Toggle between vertical snap-scrolling (one chunk + card per viewport) and continuous reading flow.
-- **Passage Simplifier**: Pausing on a complex passage for over 45 seconds surfaces a subtle icon offering a 1-tap plain-English conceptual breakdown.
-- **Bionic Focus Mode (`Aa`)**: Bolds initial fixation letters to accelerate visual parsing and reduce cognitive fatigue.
-- **Ask Athena Modal**: Context-grounded Q&A anchored to the active passage with keyboard-aware scrolling.
-- **Markdown Vault Export**: 1-click export of book marginalia formatted for Obsidian, Logseq, and Notion.
-
-### Bring Your Own Key (BYOK) & Dual Failover Engine
-- **Default Engine**: Google Gemini (`gemini-2.5-flash`), pre-configured for high-speed, cost-effective inference.
-- **Supported Providers**: Google Gemini, OpenRouter, Groq, Anthropic Claude, OpenAI, and local Ollama.
-- **Automatic Fallback Circuit**: Rate limits (HTTP 429), quota exhaustion, or server errors (HTTP 500/503) automatically trigger fallback to your secondary provider in under 200ms without reading interruption.
-- **Local Key Encryption**: API keys are encrypted at rest with local machine keys and never logged.
-
 ---
 
-## 5. Editorial Design System
+## 5. Bring Your Own Key (BYOK) & Law 5 Live Model Discovery
 
-Athena adopts a typography-first aesthetic inspired by high-end book design (Stripe Press & Edward Tufte):
+Athena enforces **Constitutional Law 5: Zero Static AI Models**. No hardcoded AI model strings exist in client code.
 
-| Element | Dark Mode Palette | Light Mode Palette | Design Purpose |
-| :--- | :--- | :--- | :--- |
-| **Canvas Background** | `#121212` (Deep Charcoal) | `#FAF9F6` (Alabaster Cream) | Minimizes fatigue during extended reading sessions |
-| **Prose Ink** | `#E5E5E5` (Warm Bone) | `#1A1A1A` (Carbon Ink) | High legibility without harsh pure-white glare |
-| **Card Surface** | `#181818` (Obsidian) | `#FFFFFF` (Crisp Paper) | Tactile elevated card surfaces |
-| **Border / Hairline** | `#262626` | `#E5E5E0` | Subtle structural division |
-| **Card Accent Spines** | Emerald / Terracotta / Navy / Ochre | High-contrast pedagogical color coding |
+```text
+[ BYOK SETTINGS SHEET ]
+1. Select Provider (Google Gemini, OpenRouter, Groq, Anthropic Claude, OpenAI, Ollama)
+2. Enter API Key
+3. Click "Check Connection"
+        |
+        v [ Direct HTTPS query to Provider /models endpoint ]
+4. Inline Expandable Card dynamically populates live discovered models
+5. Zero DropdownButton overlays — 100% keyboard-safe at 390x844 with 0 overflows
+```
 
-### Typography Hierarchy
-- **Literary Prose**: *Newsreader* (Variable serif, 18.5px mobile optical size, line-height 1.65, tracking 0.2px). Fits 60–70 characters per line comfortably on 390px mobile screens.
-- **Editorial Display**: *DM Serif Display* (Transitional display serif for titles, mastheads, and dropcaps).
-- **Marginalia & UI**: *Geist* (Geometric sans-serif, optimized for 11–13px mobile legibility).
-- **Metadata & Coordinates**: *JetBrains Mono* / Monospace (Tabular figures, SHA-256 digests, and archival anchors).
+- **Dynamic Discovery**: The model selector begins with an active status badge: `[ ENTER API KEY & CLICK "CHECK CONNECTION" TO DISCOVER LIVE MODELS ]`.
+- **Zero Loopback Delays**: Client routes model discovery directly to official HTTPS provider endpoints on mobile, preventing `127.0.0.1` loopback timeouts when running standalone.
+- **Instant Fallback Engine**: If your primary provider exhausts rate limits or returns HTTP 429/500, Athena can automatically route to your configured secondary provider in under 200ms.
+- **Encrypted Local Storage**: API credentials are securely stored using platform-native secure storage (`FlutterSecureStorage` / Keystore / Keychain).
 
 ---
 
@@ -229,25 +234,30 @@ Athena adopts a typography-first aesthetic inspired by high-end book design (Str
 
 ```text
 Athena/
-├── app/                                 # Flutter Cross-Platform Client (iOS, Android, Web)
+├── app/                                 # Flutter Cross-Platform Client (Android, iOS, Web)
 │   ├── lib/
 │   │   ├── core/                        # Infrastructure, API client & theme engine
-│   │   │   ├── api/                     # ApiClient with automatic origin host resolution
-│   │   │   ├── config/                  # AppConfig (pure host resolver & preferences)
-│   │   │   ├── theme/                   # AppTheme palette & typography tokens
-│   │   │   └── widgets/                 # Shared widgets & editorial components
-│   │   ├── features/                    # Feature-first clean architecture
+│   │   │   ├── api/                     # ApiClient & isolated background document parser
+│   │   │   ├── config/                  # AppConfig (host resolution) & UpdateService
+│   │   │   ├── theme/                   # AppTheme palettes & typography tokens
+│   │   │   └── widgets/                 # Shared brand widgets & navigation components
+│   │   ├── features/                    # Feature-first modular architecture
 │   │   │   ├── ask/                     # Context-grounded Q&A bottom sheet
-│   │   │   ├── library/                 # Bookshelf, upload progress, and document list
+│   │   │   ├── library/                 # Bookshelf, file picker & standalone importer
 │   │   │   ├── processing/              # Multi-stage extraction & ingestion pipeline viewer
-│   │   │   ├── reader/                  # Feed/Flow reader, ChunkWidget & ContextCardWidget
-│   │   │   ├── saved/                   # Saved marginalia, insights, and starred quotes
-│   │   │   └── settings/                # BYOKSettingsSheet (Primary, Failover, Server Host)
-│   │   └── main.dart                    # Application entrypoint & route management
-│   ├── web/index.html                   # Fullscreen iOS PWA configuration & meta tags
+│   │   │   ├── reader/                  # Modular deep-reading engine
+│   │   │   │   ├── controllers/         # reader_feed_builder.dart (3-tier interleaving)
+│   │   │   │   ├── screens/             # reader_screen.dart (capped <= 450 lines)
+│   │   │   │   └── widgets/             # ReaderTopBar, FeedView, FlowView, BottomBar
+│   │   │   ├── saved/                   # Starred quotes, bookmarks & marginalia vault
+│   │   │   └── settings/                # BYOKSettingsSheet (live model discovery)
+│   │   ├── models/                      # Document, Chunk, and ContextCard schemas
+│   │   └── services/                    # LocalDatabase (SQLite FTS5), LocalContextService
+│   ├── test/                            # 11 comprehensive Flutter unit & harness suites
+│   ├── web/index.html                   # Standalone iOS PWA configuration & meta tags
 │   └── pubspec.yaml                     # Flutter dependencies
 │
-├── backend/                             # Python 3.12+ FastAPI & ONNX Engine
+├── backend/                             # Python 3.12+ FastAPI Engine & Services
 │   ├── app/
 │   │   ├── routers/                     # REST endpoints (documents, cards, ask, settings, updates)
 │   │   ├── services/
@@ -257,66 +267,113 @@ Athena/
 │   │   │   └── edge_ai.py               # ONNX runtime embedder & cosine similarity
 │   │   ├── db.py                        # SQLModel SQLite database engine
 │   │   └── main.py                      # FastAPI application & static Flutter SPA mount
-│   ├── tests/                           # 53 automated pytest suites
-│   └── requirements.txt                 # Backend dependencies
+│   ├── rust_core/                       # Pure Rust text processing engine (PyO3)
+│   │   ├── Cargo.toml                   # Rayon, Aho-Corasick, Regex, Serde, SHA-2
+│   │   └── src/lib.rs                   # Accelerated parallel de-hyphenation & BM25 search
+│   ├── tests/                           # 6 pytest test suites (54 automated tests)
+│   └── requirements.txt                 # Backend Python dependencies
 │
-├── scripts/                             # Operator tooling & verification
-│   ├── run_athena.py                    # Unified supervisor (FastAPI + Forwarder + Wi-Fi discovery)
-│   ├── start_athena.bat                 # 1-Click Windows desktop launcher
+├── releases/                            # Distribution release binaries
+│   ├── athena-release.apk               # Verified production Android APK (61.8 MB)
+│   └── Athena-iOS.ipa                   # Sideloadable iOS IPA package
+│
+├── scripts/                             # Operational tooling & verification engines
+│   ├── run_athena.py                    # Unified supervisor (FastAPI + LAN IP discovery)
+│   ├── start_athena.bat                 # 1-Click Windows launcher
 │   ├── strict_goal_judge.py             # 8-Gate adversarial verification suite
-│   ├── verify_release.py                # Release integrity verifier
-│   └── package_ios_ipa.py               # iOS IPA packaging tool
+│   ├── verify_release.py                # Release binary integrity verifier
+│   └── package_ios_ipa.py               # Native iOS IPA packager
 │
-├── docs/                                # Architecture Decision Records (ADRs)
-└── .github/workflows/
-    └── mobile_release.yml               # Automated Android APK & iOS IPA Cloud Release
+├── docs/                                # Architectural Decision Records & Specs
+├── README.md                            # Comprehensive production guide
+└── AGENTS.md                            # Constitutional Laws & Verification Directives
 ```
 
 ---
 
-## 7. REST API Reference & Verification Suite
+## 7. REST API Reference
 
-### REST Endpoints
+When running the Companion Engine, the FastAPI server mounts the Flutter Web client at `/` and exposes the REST API under `/api/*`:
 
 | Endpoint | Method | Request Payload | Response | Description |
 | :--- | :--- | :--- | :--- | :--- |
-| `/api/health` | `GET` | None | `{"status": "ok", "database": "reachable", ...}` | Verifies database connectivity, ONNX runtime, and AI provider status |
-| `/api/pair-info` | `GET` | None | `{"lan_ip": "...", "api_port": 8000, ...}` | Returns dynamic local IP and pairing coordinates |
+| `/api/health` | `GET` | None | `{"status": "ok", "database": "reachable"}` | Verifies database connectivity, ONNX runtime, and AI provider status |
+| `/api/pair-info` | `GET` | None | `{"lan_ip": "...", "api_port": 8000}` | Returns dynamic local LAN IP coordinates for mobile pairing |
 | `/api/documents` | `GET` | None | `[{"id": "doc_...", "title": "...", "chunks": 120}]` | Lists processed books with reading progress and metadata |
-| `/api/documents/upload` | `POST` | Multipart PDF/EPUB | `{"id": "doc_...", "status": "processing"}` | Uploads book for structural triage and ingestion |
-| `/api/documents/upload-url` | `POST` | `{"url": "https://..."}` | `{"id": "doc_...", "status": "processing"}` | Imports document directly from a public URL |
-| `/api/documents/sample` | `POST` | None | `{"id": "doc_sample_...", "status": "ready"}` | Generates starter sample book for instant reading |
-| `/api/documents/{id}/reader` | `GET` | None | `{"document": {...}, "chunks": [...], "cards": [...]}` | Retrieves lossless chunks and grounded marginalia cards |
-| `/api/documents/{id}/search` | `GET` | `?q=...&top_k=8` | `{"document_id": "...", "results": [...]}` | In-book hybrid search (BM25 + Dense + RRF) |
-| `/api/documents/{id}/progress` | `POST` | `{"chunk_index": 42}` | `{"status": "ok"}` | Persists active reading position and bookmark across devices |
-| `/api/documents/{id}/force-ingest` | `POST` | None | `{"status": "queued"}` | Ingestion override bypassing document bouncer triage |
-| `/api/documents/{id}/vibe-check` | `POST` | `{"chunk_index": 5}` | `{"simplified": "..."}` | Real-time passage simplification breakdown |
-| `/api/ask` | `POST` | `{"document_id": "...", "chunk_id": "...", "question": "..."}` | `{"answer": "...", "status": "ok"}` | Grounded Q&A against current passage via configured AI key |
-| `/api/settings/ai-config` | `GET` | None | `{"primary_provider": "gemini", ...}` | Returns active BYOK provider configuration |
-| `/api/settings/ai-config` | `POST` | `{"primary_provider": "...", "primary_api_key": "..."}` | `{"status": "saved"}` | Updates primary and fallback AI provider credentials |
+| `/api/documents/upload` | `POST` | Multipart PDF/EPUB | `{"document_id": "doc_...", "status": "processing"}` | Uploads book for structural triage and ingestion |
+| `/api/documents/upload-url` | `POST` | `{"url": "https://..."}` | `{"document_id": "doc_...", "status": "processing"}` | Imports document directly from a public URL |
+| `/api/documents/sample` | `POST` | None | `{"document_id": "doc_sample_...", "status": "ready"}`| Seeds sample book for instant reading |
+| `/api/documents/{id}/reader`| `GET` | None | `{"document": {...}, "chunks": [...], "cards": [...]}`| Retrieves lossless chunks and grounded marginalia cards |
+| `/api/documents/{id}/search`| `GET` | `?q=...&top_k=8` | `{"document_id": "...", "results": [...]}` | Hybrid search across book (BM25 + Dense + RRF) |
+| `/api/documents/{id}/progress`| `POST` | `{"chunk_index": 42}` | `{"status": "ok"}` | Persists active reading position across devices |
+| `/api/ask` | `POST` | `{"document_id": "...", "chunk_id": "...", "question": "..."}` | `{"answer": "...", "status": "ok"}` | Grounded Q&A against the active passage via configured key |
+| `/api/settings/ai-config` | `GET` | None | `{"primary_provider": "gemini", ...}` | Returns active BYOK configuration |
+| `/api/settings/ai-config` | `POST` | `{"primary_provider": "...", "primary_api_key": "..."}` | `{"status": "saved"}` | Updates primary and fallback AI credentials |
 | `/api/cards/quote` | `POST` | `{"document_id": "...", "chunk_id": "...", "quote_text": "..."}` | `{"status": "ok", "card_id": "..."}` | Saves user-highlighted quote as a marginalia card |
 | `/api/saved` | `GET` | None | `{"cards": [...]}` | Retrieves saved marginalia cards and highlights |
-| `/api/app-update` | `GET` | `?current_version=1.1.0&platform=android` | `{"update_available": false, ...}` | Checks for client application updates |
-| `/api/download/android` | `GET` | None | Streams APK | Downloads latest Athena-Android.apk binary |
-| `/api/download/ios` | `GET` | None | Streams IPA | Downloads latest Athena-iOS.ipa binary |
+| `/api/app-update` | `GET` | `?current_version=1.1.0&platform=android` | `{"update_available": false}` | Checks for client updates |
+| `/api/download/android` | `GET` | None | Streams APK | Downloads latest `Athena-Android.apk` binary |
+| `/api/download/ios` | `GET` | None | Streams IPA | Downloads latest `Athena-iOS.ipa` binary |
 
-### Wireless Mobile Pairing
-1. Start the companion engine via `python scripts/run_athena.py` (or `scripts/start_athena.bat`).
-2. The terminal displays your local LAN IP (e.g., `http://192.168.1.61:8000`).
-3. In the mobile client, tap **Settings** &rarr; **Server Host**, enter the LAN URL, and tap **Save & Apply**.
+---
 
-### 8-Gate Adversarial Verification Suite
-Athena enforces an un-gameable 8-gate verification engine ensuring code hygiene, mathematical integrity, and production readiness:
+## 8. Exact Developer & Verification Commands
 
+### 1. Flutter Mobile & Web Client
 ```bash
-# Run full 8-gate adversarial goal judge
-python scripts/strict_goal_judge.py
+# Navigate to app directory
+cd app
 
-# Run backend unit tests (53 tests)
+# Fetch dependencies & verify static analysis
+flutter pub get
+flutter analyze lib
+
+# Run Flutter unit and architecture harness tests (35 tests)
+flutter test
+
+# Run app on Chrome or connected Android device
+flutter run -d chrome
+flutter run -d <DEVICE_ID>
+
+# Build production web bundle (served directly by FastAPI at /)
+flutter build web --release
+
+# Build production Android APK
+flutter build apk --release
+```
+
+### 2. Rust Core Engine (`athena_rust_core`)
+```bash
+# Navigate to Rust core
+cd backend/rust_core
+
+# Compile standalone Rust library in release mode
+cargo build --release
+
+# Compile and bind as Python C-extension via Maturin into active .venv
+maturin develop --release
+```
+
+### 3. Python FastAPI Companion Backend
+```bash
+# Activate virtual environment
+.venv\Scripts\activate   # Windows (or source .venv/bin/activate on Unix)
+
+# Install dependencies
+pip install -r backend/requirements.txt
+
+# Run pytest suite (54 automated tests)
 pytest backend/tests -q
 
-# Run Flutter static analysis & test suite
-cd app && flutter analyze lib && flutter test
+# Launch unified server with dynamic LAN Wi-Fi resolution
+python scripts/run_athena.py
+```
+
+### 4. Full 8-Gate Adversarial Verification
+Before any pull request or deployment, run the unified goal judge to audit root cleanliness, PDF bouncer holdouts, hygiene, lossless SHA-256 reconstruction, 4-archetype rotation, and mobile responsive viewports:
+
+```bash
+python scripts/strict_goal_judge.py
 ```
 
 ```text
@@ -326,34 +383,16 @@ cd app && flutter analyze lib && flutter test
  GATE 3: SELF-HEALING HYGIENE & VOCABULARY PRESERVATION       -> [PASS]
  GATE 4: LOSSLESS SHA-256 INVARIANT ON CORPUS CHUNKING        -> [PASS]
  GATE 5: MARGINALIA 4-ARCHETYPE ROTATION & ANTI-ECHO NOVELTY  -> [PASS]
- GATE 6: BACKEND PYTEST SUITE (53/53 PASSED)                  -> [PASS]
+ GATE 6: BACKEND PYTEST SUITE (54/54 PASSED)                  -> [PASS]
  GATE 7: FLUTTER ANALYSIS & NATIVE MOBILE READINESS (0 ISSUES) -> [PASS]
  GATE 8: REAL MOBILE VIEWPORT & LAN IP SINGLE-ORIGIN E2E TEST -> [PASS]
 ==============================================================================
-  >>> ALL 8 GATES PASSED! ATHENA IS 100% PRODUCTION READY <<<
+   >>> ALL 8 GATES PASSED! ATHENA IS 100% PRODUCTION READY <<<
 ==============================================================================
-```
-
----
-
-## 8. Development & Contribution
-
-Pull requests must comply with all 8 adversarial gates and maintain 100% lossless canonical text integrity.
-
-```bash
-# Frontend development
-cd app
-flutter pub get
-flutter run -d chrome
-
-# Backend development
-cd backend
-pip install -r requirements.txt
-uvicorn app.main:app --reload --port 8000
 ```
 
 ---
 
 <p align="center">
-  <sub>Built with intellectual rigor for deep reading. Distributed under the [MIT License](docs/LICENSE).</sub>
+  <sub>Built with intellectual rigor for deep reading. Distributed under the <a href="docs/LICENSE">MIT License</a>.</sub>
 </p>
