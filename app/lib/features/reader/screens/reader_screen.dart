@@ -8,11 +8,13 @@ import 'package:scrollable_positioned_list/scrollable_positioned_list.dart';
 
 import 'package:athena/core/theme/theme.dart';
 import 'package:athena/core/theme/reader_theme.dart';
+import 'package:athena/core/config/config.dart';
 import 'package:athena/models/document.dart';
 import 'package:athena/services/local_database.dart';
 import 'package:athena/services/local_context_service.dart';
 import 'package:athena/features/library/screens/library_screen.dart';
 import 'package:athena/features/reader/controllers/reader_feed_builder.dart';
+import 'package:athena/features/reader/controllers/kinematic_scroll_governor.dart';
 import 'package:athena/features/reader/widgets/reader_top_bar.dart';
 import 'package:athena/features/reader/widgets/reader_bottom_bar.dart';
 import 'package:athena/features/reader/widgets/reader_feed_view.dart';
@@ -56,6 +58,7 @@ class _ReaderScreenState extends ConsumerState<ReaderScreen> {
   late PageController _pageController;
   late ItemScrollController _flowScrollController;
   late ItemPositionsListener _flowPositionsListener;
+  late final KinematicScrollGovernor _governor;
 
   String _readingMode = 'feed'; // 'feed' (1-swipe=1-card) or 'flow' (continuous)
   String _themeId = 'paper';
@@ -76,6 +79,22 @@ class _ReaderScreenState extends ConsumerState<ReaderScreen> {
     _pageController = PageController(initialPage: 0);
     _flowScrollController = ItemScrollController();
     _flowPositionsListener = ItemPositionsListener.create();
+
+    _governor = KinematicScrollGovernor(
+      localDwellDuration: const Duration(milliseconds: 450),
+      aiDwellDuration: const Duration(milliseconds: 1500),
+      onLocalDwell: (index) {
+        SharedPreferences.getInstance().then((prefs) {
+          prefs.setInt('reader_pos_${widget.documentId}', index);
+        });
+        if (AppConfig.apiBaseUrl.isNotEmpty) {
+          ref.read(apiClientProvider).syncReadingProgress(widget.documentId, index);
+        }
+      },
+      onAiDwell: (index) {
+        debugPrint('[Athena Governor] User dwelled on index $index (>= 1500ms). Background AI synthesis permitted.');
+      },
+    );
 
     _loadPreferences();
     _loadChunkEdits();
@@ -141,15 +160,14 @@ class _ReaderScreenState extends ConsumerState<ReaderScreen> {
 
   @override
   void dispose() {
+    _governor.dispose();
     _pageController.dispose();
     super.dispose();
   }
 
   void _onPageChanged(int index) {
     setState(() => _currentIndex = index);
-    SharedPreferences.getInstance().then((prefs) {
-      prefs.setInt('reader_pos_${widget.documentId}', index);
-    });
+    _governor.onPageTurn(index);
   }
 
   void _jumpTo(int index, int total) {

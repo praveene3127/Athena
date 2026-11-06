@@ -442,6 +442,75 @@ pub fn scan_banned_slop_phrase(text: &str) -> Option<&'static str> {
 }
 
 // ==============================================================================
+// Ultra-Fast 64-Bit SimHash & Popcount Similarity
+// ==============================================================================
+
+/// Computes a 64-bit SimHash locality-sensitive fingerprint for text.
+pub fn compute_simhash64(text: &str) -> u64 {
+    let mut v = [0i32; 64];
+    for word in text.split_whitespace() {
+        let clean: String = word.chars().filter(|c| c.is_alphanumeric()).collect();
+        if clean.len() < 3 {
+            continue;
+        }
+        // 64-bit FNV-1a hash
+        let mut h: u64 = 0xcbf29ce484222325;
+        for b in clean.to_lowercase().bytes() {
+            h ^= b as u64;
+            h = h.wrapping_mul(0x100000001b3);
+        }
+        for i in 0..64 {
+            if (h & (1u64 << i)) != 0 {
+                v[i] += 1;
+            } else {
+                v[i] -= 1;
+            }
+        }
+    }
+    let mut fingerprint: u64 = 0;
+    for i in 0..64 {
+        if v[i] > 0 {
+            fingerprint |= 1u64 << i;
+        }
+    }
+    fingerprint
+}
+
+/// Computes Hamming distance between two 64-bit SimHash fingerprints (0 to 64 diff bits).
+pub fn simhash_hamming_distance(hash_a: u64, hash_b: u64) -> u32 {
+    (hash_a ^ hash_b).count_ones()
+}
+
+/// Computes 0.0 to 1.0 similarity from Hamming distance.
+pub fn simhash_similarity(hash_a: u64, hash_b: u64) -> f64 {
+    let diff = (hash_a ^ hash_b).count_ones();
+    1.0 - (diff as f64 / 64.0)
+}
+
+/// Fast search across candidate chunk hashes returning (index, hamming_dist, similarity).
+pub fn find_similar_chunks_simhash_core(
+    target_hash: u64,
+    candidate_hashes: &[u64],
+    top_k: usize,
+) -> Vec<(usize, u32, f64)> {
+    let mut scored: Vec<(usize, u32, f64)> = candidate_hashes
+        .iter()
+        .enumerate()
+        .map(|(idx, &cand)| {
+            let dist = simhash_hamming_distance(target_hash, cand);
+            let sim = 1.0 - (dist as f64 / 64.0);
+            (idx, dist, sim)
+        })
+        .collect();
+
+    scored.sort_by(|a, b| a.1.cmp(&b.1));
+    if scored.len() > top_k {
+        scored.truncate(top_k);
+    }
+    scored
+}
+
+// ==============================================================================
 // PyO3 Extension Module Bindings
 // ==============================================================================
 
@@ -512,6 +581,42 @@ fn rust_check_slop_phrase(
     py.allow_threads(|| Ok(scan_banned_slop_phrase(text).map(|s| s.to_string())))
 }
 
+#[pyfunction]
+fn rust_simhash64(
+    py: Python<'_>,
+    text: &str,
+) -> PyResult<u64> {
+    py.allow_threads(|| Ok(compute_simhash64(text)))
+}
+
+#[pyfunction]
+fn rust_simhash_hamming_distance(
+    py: Python<'_>,
+    hash_a: u64,
+    hash_b: u64,
+) -> PyResult<u32> {
+    py.allow_threads(|| Ok(simhash_hamming_distance(hash_a, hash_b)))
+}
+
+#[pyfunction]
+fn rust_simhash_similarity(
+    py: Python<'_>,
+    hash_a: u64,
+    hash_b: u64,
+) -> PyResult<f64> {
+    py.allow_threads(|| Ok(simhash_similarity(hash_a, hash_b)))
+}
+
+#[pyfunction]
+fn rust_find_similar_chunks_simhash(
+    py: Python<'_>,
+    target_hash: u64,
+    candidate_hashes: Vec<u64>,
+    top_k: usize,
+) -> PyResult<Vec<(usize, u32, f64)>> {
+    py.allow_threads(|| Ok(find_similar_chunks_simhash_core(target_hash, &candidate_hashes, top_k)))
+}
+
 #[pymodule]
 fn athena_rust_core(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(rust_self_heal_prose_text, m)?)?;
@@ -520,6 +625,10 @@ fn athena_rust_core(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(rust_hybrid_bm25_search, m)?)?;
     m.add_function(wrap_pyfunction!(rust_cosine_similarity, m)?)?;
     m.add_function(wrap_pyfunction!(rust_check_slop_phrase, m)?)?;
+    m.add_function(wrap_pyfunction!(rust_simhash64, m)?)?;
+    m.add_function(wrap_pyfunction!(rust_simhash_hamming_distance, m)?)?;
+    m.add_function(wrap_pyfunction!(rust_simhash_similarity, m)?)?;
+    m.add_function(wrap_pyfunction!(rust_find_similar_chunks_simhash, m)?)?;
     Ok(())
 }
 
@@ -574,9 +683,50 @@ pub extern "C" fn athena_cosine_similarity(
     cosine_similarity_simd(s1, s2)
 }
 
+#[no_mangle]
+pub extern "C" fn athena_simhash64(raw_text: *const std::os::raw::c_char) -> u64 {
+    if raw_text.is_null() {
+        return 0;
+    }
+    let c_str = unsafe { std::ffi::CStr::from_ptr(raw_text) };
+    let input = match c_str.to_str() {
+        Ok(s) => s,
+        Err(_) => return 0,
+    };
+    compute_simhash64(input)
+}
+
+#[no_mangle]
+pub extern "C" fn athena_simhash_similarity(hash_a: u64, hash_b: u64) -> f64 {
+    simhash_similarity(hash_a, hash_b)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn test_simhash64_similarity() {
+        let text1 = "Marcus Aurelius was an emperor of Rome who practiced Stoic philosophy";
+        let text2 = "Marcus Aurelius was a Roman emperor practicing Stoic philosophy daily";
+        let text3 = "Quantum electrodynamics describes relativistic interaction of charged particles";
+
+        let hash1 = compute_simhash64(text1);
+        let hash2 = compute_simhash64(text2);
+        let hash3 = compute_simhash64(text3);
+
+        let dist_similar = simhash_hamming_distance(hash1, hash2);
+        let dist_diff = simhash_hamming_distance(hash1, hash3);
+
+        // Near-duplicate stoic passages have significantly lower Hamming distance
+        assert!(dist_similar < dist_diff);
+        let sim = simhash_similarity(hash1, hash2);
+        assert!(sim > 0.70);
+
+        let candidates = vec![hash2, hash3];
+        let ranked = find_similar_chunks_simhash_core(hash1, &candidates, 2);
+        assert_eq!(ranked[0].0, 0); // text2 should rank first
+    }
 
     #[test]
     fn test_self_heal_hygiene() {

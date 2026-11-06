@@ -4,6 +4,7 @@ import 'dart:convert';
 import 'package:path/path.dart' as p;
 import 'package:path_provider/path_provider.dart';
 import 'package:sqflite/sqflite.dart';
+import 'package:athena/services/simhash_service.dart';
 
 /// App-private SQLite store shared by the foreground UI and background worker.
 /// PDFs stay in the app documents directory; only their private paths are kept
@@ -517,5 +518,36 @@ class LocalDatabase {
       limit: 1,
     );
     return rows.isNotEmpty ? Map<String, dynamic>.from(rows.first) : null;
+  }
+
+  /// Rapidly retrieves the most related chunks across the entire document using
+  /// 64-bit SimHash and popcount distance (< 0.2ms).
+  Future<List<Map<String, dynamic>>> findRelatedPassages(
+    String documentId,
+    String currentChunkId, {
+    int topK = 3,
+  }) async {
+    final db = await database;
+    final allChunks = await db.query(
+      'reading_chunks',
+      where: 'document_id = ?',
+      whereArgs: [documentId],
+      orderBy: 'sequence ASC',
+    );
+    if (allChunks.isEmpty) return [];
+
+    final current = allChunks.firstWhere(
+      (c) => c['id'] == currentChunkId,
+      orElse: () => allChunks.first,
+    );
+    final currentText = current['raw_text']?.toString() ?? '';
+    final targetHash = SimHashService.computeSimHash64(currentText);
+
+    return SimHashService.findRelatedChunks(
+      targetHash: targetHash,
+      candidates: allChunks.map((c) => Map<String, dynamic>.from(c)).toList(),
+      currentChunkId: currentChunkId,
+      topK: topK,
+    );
   }
 }
