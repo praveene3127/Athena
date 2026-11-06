@@ -1,19 +1,19 @@
-library;
-
-/// L7 Dumb UI Widget: Reader Bottom Bar
-///
-/// Isolated footer bar placed BELOW the Expanded PageView/ListView inside a Column.
-/// NEVER floats inside a Stack over the text. Zero overlap with card content.
-///
-/// Height: 60dp fixed. Contains:
-/// - Previous/Next navigation buttons (chevron icons)
-/// - Progress indicator: "1 / 857" or "Context · #3"
-/// - Optional: + Context Card / Ask button (on-demand)
-
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
+import 'package:athena/core/theme/theme.dart';
 import 'package:athena/core/theme/reader_theme.dart';
 import 'package:athena/models/document.dart';
 
+/// L7 Dumb UI Widget: Reader Bottom Bar.
+///
+/// Isolated footer bar strictly positioned BELOW the viewport in a Column.
+/// Fixed 60dp height. Zero overlap with cards.
+///
+/// Contains:
+/// - Tabular progress navigation: < 1 / N >
+/// - Quick jump sheet trigger
+/// - Inline Edit / Note toggle
+/// - + Context / Ask Athena buttons
 class ReaderBottomBar extends StatelessWidget {
   final int currentIndex;
   final int totalItems;
@@ -23,8 +23,9 @@ class ReaderBottomBar extends StatelessWidget {
   final VoidCallback? onPrevious;
   final VoidCallback? onNext;
   final VoidCallback? onJumpToChapter;
-  final VoidCallback? onAsk;
+  final VoidCallback? onEditNote;
   final VoidCallback? onGenerateCard;
+  final VoidCallback? onAsk;
 
   const ReaderBottomBar({
     super.key,
@@ -36,8 +37,9 @@ class ReaderBottomBar extends StatelessWidget {
     this.onPrevious,
     this.onNext,
     this.onJumpToChapter,
-    this.onAsk,
+    this.onEditNote,
     this.onGenerateCard,
+    this.onAsk,
   });
 
   @override
@@ -48,74 +50,155 @@ class ReaderBottomBar extends StatelessWidget {
 
     final String counterLabel = _buildCounterLabel(currentItem);
 
-    return SafeArea(
-      top: false,
-      child: Padding(
-        padding: const EdgeInsets.only(bottom: 8.0, top: 4.0),
-        child: Center(
-          child: Container(
-            padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
-            decoration: BoxDecoration(
-              color: theme.isDark
-                  ? const Color(0xFF1E221E)
-                  : const Color(0xFF141714),
-              borderRadius: BorderRadius.circular(6),
-              border: Border.all(
-                color: Colors.white.withValues(alpha: 0.16),
-                width: 1.0,
-              ),
-              boxShadow: const [
-                BoxShadow(
-                  color: Color(0x38000000),
-                  blurRadius: 22,
-                  offset: Offset(0, 6),
-                ),
-              ],
+    return Container(
+      height: 60,
+      width: double.infinity,
+      color: theme.scaffoldBackground,
+      child: Center(
+        child: Container(
+          height: 44,
+          padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
+          decoration: BoxDecoration(
+            color: theme.innerCardColor,
+            borderRadius: BorderRadius.circular(8), // 8px architectural radius
+            border: Border.all(
+              color: theme.borderColor,
+              width: 1.0,
             ),
-            child: Row(
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                // Previous button
-                IconButton(
-                  icon: const Icon(Icons.chevron_left_rounded,
-                      color: Colors.white, size: 22),
-                  tooltip: 'Previous card (Up Arrow / Scroll Up)',
-                  padding: EdgeInsets.zero,
-                  constraints: const BoxConstraints(minWidth: 44, minHeight: 44),
-                  onPressed: currentIndex > 0 ? onPrevious : null,
+            boxShadow: [
+              BoxShadow(
+                color: theme.isDark
+                    ? const Color(0x33000000)
+                    : const Color(0x0A000000),
+                blurRadius: 12,
+                offset: const Offset(0, 3),
+              ),
+            ],
+          ),
+          child: Row(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.center,
+            children: [
+              // Previous button
+              IconButton(
+                icon: Icon(
+                  Icons.chevron_left_rounded,
+                  color: currentIndex > 0 ? theme.textColor : theme.textMutedColor,
+                  size: 22,
                 ),
-                const SizedBox(width: 4),
+                tooltip: 'Previous card',
+                padding: EdgeInsets.zero,
+                constraints: const BoxConstraints(minWidth: 36, minHeight: 36),
+                onPressed: currentIndex > 0
+                    ? () {
+                        HapticFeedback.selectionClick();
+                        onPrevious?.call();
+                      }
+                    : null,
+              ),
 
-                // Progress counter
-                Text(
-                  counterLabel,
-                  style: const TextStyle(
-                    color: Colors.white,
-                    fontWeight: FontWeight.w700,
-                    fontSize: 12,
-                    letterSpacing: 0.3,
+              // Tabular figures counter
+              InkWell(
+                borderRadius: BorderRadius.circular(6),
+                onTap: onJumpToChapter != null
+                    ? () {
+                        HapticFeedback.selectionClick();
+                        onJumpToChapter!();
+                      }
+                    : null,
+                child: Padding(
+                  padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                  child: Text(
+                    counterLabel,
+                    style: TextStyle(
+                      fontFamily: AppTheme.fontMono,
+                      fontFeatures: const [FontFeature.tabularFigures()],
+                      color: theme.textColor,
+                      fontWeight: FontWeight.w600,
+                      fontSize: 11.5,
+                      letterSpacing: 0.5,
+                    ),
                   ),
                 ),
+              ),
 
-                const SizedBox(width: 4),
+              // Next button
+              IconButton(
+                icon: Icon(
+                  Icons.chevron_right_rounded,
+                  color: currentIndex < totalItems - 1 ? theme.textColor : theme.textMutedColor,
+                  size: 22,
+                ),
+                tooltip: 'Next card',
+                padding: EdgeInsets.zero,
+                constraints: const BoxConstraints(minWidth: 36, minHeight: 36),
+                onPressed: currentIndex < totalItems - 1
+                    ? () {
+                        HapticFeedback.selectionClick();
+                        onNext?.call();
+                      }
+                    : null,
+              ),
 
-                // Next button
+              // Divider
+              Container(
+                height: 18,
+                width: 1,
+                margin: const EdgeInsets.symmetric(horizontal: 4),
+                color: theme.borderColor,
+              ),
+
+              // Inline Edit / Note button
+              if (onEditNote != null)
                 IconButton(
-                  icon: const Icon(Icons.chevron_right_rounded,
-                      color: Colors.white, size: 22),
-                  tooltip: 'Next card (Down Arrow / Space / Scroll Down)',
+                  icon: Icon(
+                    Icons.edit_note_rounded,
+                    color: theme.textColor,
+                    size: 20,
+                  ),
+                  tooltip: 'Edit / Personal Note',
                   padding: EdgeInsets.zero,
-                  constraints: const BoxConstraints(minWidth: 44, minHeight: 44),
-                  onPressed: currentIndex < totalItems - 1 ? onNext : null,
+                  constraints: const BoxConstraints(minWidth: 36, minHeight: 36),
+                  onPressed: () {
+                    HapticFeedback.selectionClick();
+                    onEditNote!();
+                  },
                 ),
 
-                // Optional: Jump to chapter / Ask / Generate Card
-                if (onJumpToChapter != null || onAsk != null || onGenerateCard != null) ...[
-                  const SizedBox(width: 8),
-                  _buildActionButtons(),
-                ],
-              ],
-            ),
+              // + Context Card trigger
+              if (onGenerateCard != null)
+                IconButton(
+                  icon: Icon(
+                    Icons.auto_awesome_rounded,
+                    color: theme.accentColor,
+                    size: 18,
+                  ),
+                  tooltip: '+ Context Card',
+                  padding: EdgeInsets.zero,
+                  constraints: const BoxConstraints(minWidth: 36, minHeight: 36),
+                  onPressed: () {
+                    HapticFeedback.lightImpact();
+                    onGenerateCard!();
+                  },
+                ),
+
+              // Ask Athena trigger
+              if (onAsk != null)
+                IconButton(
+                  icon: Icon(
+                    Icons.chat_bubble_outline_rounded,
+                    color: theme.textColor,
+                    size: 18,
+                  ),
+                  tooltip: 'Ask Athena',
+                  padding: EdgeInsets.zero,
+                  constraints: const BoxConstraints(minWidth: 36, minHeight: 36),
+                  onPressed: () {
+                    HapticFeedback.selectionClick();
+                    onAsk!();
+                  },
+                ),
+            ],
           ),
         ),
       ),
@@ -125,61 +208,13 @@ class ReaderBottomBar extends StatelessWidget {
   String _buildCounterLabel(ReaderItem? currentItem) {
     if (currentItem != null && currentItem.isReadingChunk) {
       final currentSeq = currentItem.sequence ?? (currentIndex + 1);
-      return '$currentSeq / ${readingChunks.length}';
+      final total = readingChunks.isNotEmpty ? readingChunks.length : totalItems;
+      return '$currentSeq / $total';
     } else if (currentItem != null && currentItem.isContextCard) {
-      final targetSeq = currentItem.sequence ?? '';
-      return targetSeq != '' ? 'Context · #$targetSeq' : 'Context';
+      final targetSeq = currentItem.sequence;
+      return targetSeq != null ? 'CARD · #$targetSeq' : 'CARD';
     } else {
       return '${(currentIndex + 1).clamp(1, totalItems)} / $totalItems';
     }
-  }
-
-  Widget _buildActionButtons() {
-    return Row(
-      mainAxisSize: MainAxisSize.min,
-      children: [
-        if (onJumpToChapter != null)
-          _ActionIconButton(
-            icon: Icons.menu_book_rounded,
-            tooltip: 'Table of Contents',
-            onPressed: onJumpToChapter!,
-          ),
-        if (onGenerateCard != null)
-          _ActionIconButton(
-            icon: Icons.auto_awesome_rounded,
-            tooltip: 'Generate Context Card',
-            onPressed: onGenerateCard!,
-          ),
-        if (onAsk != null)
-          _ActionIconButton(
-            icon: Icons.chat_bubble_outline_rounded,
-            tooltip: 'Ask Athena',
-            onPressed: onAsk!,
-          ),
-      ],
-    );
-  }
-}
-
-class _ActionIconButton extends StatelessWidget {
-  final IconData icon;
-  final String tooltip;
-  final VoidCallback onPressed;
-
-  const _ActionIconButton({
-    required this.icon,
-    required this.tooltip,
-    required this.onPressed,
-  });
-
-  @override
-  Widget build(BuildContext context) {
-    return IconButton(
-      icon: Icon(icon, color: Colors.white, size: 20),
-      tooltip: tooltip,
-      padding: EdgeInsets.zero,
-      constraints: const BoxConstraints(minWidth: 40, minHeight: 40),
-      onPressed: onPressed,
-    );
   }
 }

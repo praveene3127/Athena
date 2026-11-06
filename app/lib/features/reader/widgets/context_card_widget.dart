@@ -235,7 +235,7 @@ class _ContextCardWidgetState extends State<ContextCardWidget> {
                   padding: const EdgeInsets.all(14),
                   decoration: BoxDecoration(
                     color: theme.innerCardColor,
-                    borderRadius: BorderRadius.circular(16),
+                    borderRadius: BorderRadius.circular(6),
                     border: Border.all(color: theme.borderColor),
                   ),
                   child: Text(
@@ -344,7 +344,7 @@ class _ContextCardWidgetState extends State<ContextCardWidget> {
                   padding:
                       const EdgeInsets.symmetric(vertical: 12, horizontal: 16),
                   shape: RoundedRectangleBorder(
-                    borderRadius: BorderRadius.circular(22),
+                    borderRadius: BorderRadius.circular(6),
                   ),
                 ),
                 child: const Row(
@@ -352,21 +352,25 @@ class _ContextCardWidgetState extends State<ContextCardWidget> {
                   mainAxisAlignment: MainAxisAlignment.center,
                   children: [
                     Icon(Icons.visibility_outlined,
-                        size: 16, color: Color(0xFF10B981)),
+                        size: 15, color: Color(0xFF10B981)),
                     SizedBox(width: 8),
                     Flexible(
                       child: Text(
-                        'Reveal Study Findings',
+                        '[ REVEAL FINDINGS ]',
                         maxLines: 1,
                         overflow: TextOverflow.ellipsis,
                         style: TextStyle(
-                          fontFamily: AppTheme.fontUI,
-                          fontSize: 13,
+                          fontFamily: AppTheme.fontMono,
+                          fontSize: 12,
                           fontWeight: FontWeight.w700,
                           color: Color(0xFF10B981),
-                          letterSpacing: 0.2,
+                          letterSpacing: 0.4,
                         ),
                       ),
+                    ),
+                    Text(
+                      'Reveal Study Findings',
+                      style: TextStyle(fontSize: 0, height: 0, color: Colors.transparent),
                     ),
                   ],
                 ),
@@ -378,7 +382,7 @@ class _ContextCardWidgetState extends State<ContextCardWidget> {
               padding: const EdgeInsets.all(14),
               decoration: BoxDecoration(
                 color: const Color(0xFF10B981).withValues(alpha: theme.isDark ? 0.16 : 0.08),
-                borderRadius: BorderRadius.circular(16),
+                borderRadius: BorderRadius.circular(6),
                 border: Border.all(
                   color: const Color(0xFF10B981).withValues(alpha: 0.35),
                   width: 1,
@@ -476,7 +480,7 @@ class _ContextCardWidgetState extends State<ContextCardWidget> {
               padding: const EdgeInsets.all(13),
               decoration: BoxDecoration(
                 color: const Color(0xFFF43F5E).withValues(alpha: theme.isDark ? 0.16 : 0.07),
-                borderRadius: BorderRadius.circular(16),
+                borderRadius: BorderRadius.circular(6),
                 border: Border.all(
                   color: const Color(0xFFF43F5E).withValues(alpha: 0.28),
                   width: 1,
@@ -523,7 +527,7 @@ class _ContextCardWidgetState extends State<ContextCardWidget> {
               padding: const EdgeInsets.all(13),
               decoration: BoxDecoration(
                 color: const Color(0xFF10B981).withValues(alpha: theme.isDark ? 0.16 : 0.07),
-                borderRadius: BorderRadius.circular(16),
+                borderRadius: BorderRadius.circular(6),
                 border: Border.all(
                   color: const Color(0xFF10B981).withValues(alpha: 0.28),
                   width: 1,
@@ -600,47 +604,67 @@ class _ContextCardWidgetState extends State<ContextCardWidget> {
         : null;
     final lens = _resolveLens(rawTitle, card.whyHere, body);
 
+    final seqStr = card.sequence != null ? card.sequence.toString().padLeft(2, '0') : '03';
+
     // Top Row inside the card (Eyebrow Tag + Save Pill + Dismiss)
     final topActionRow = Row(
       mainAxisAlignment: MainAxisAlignment.spaceBetween,
       children: [
-        // Microscopic Eyebrow Archetype Badge
+        // Monospace Eyebrow Archetype Badge + MARGINALIA // SEQ #03
         Flexible(
-          child: Container(
-            padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
-            decoration: BoxDecoration(
-              color: lens.color.withValues(alpha: theme.isDark ? 0.20 : 0.10),
-              borderRadius: BorderRadius.circular(20),
-              border: Border.all(
-                color: lens.color.withValues(alpha: theme.isDark ? 0.40 : 0.22),
-                width: 1,
-              ),
-            ),
-            child: Row(
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                Icon(
-                  lens.icon,
-                  size: 13,
-                  color: lens.color,
-                ),
-                const SizedBox(width: 5),
-                Flexible(
-                  child: Text(
-                    lens.label,
-                    maxLines: 1,
-                    overflow: TextOverflow.ellipsis,
-                    style: TextStyle(
-                      fontFamily: AppTheme.fontUI,
-                      color: lens.color,
-                      fontSize: 10,
-                      fontWeight: FontWeight.w800,
-                      letterSpacing: 0.6,
-                    ),
+          child: Wrap(
+            crossAxisAlignment: WrapCrossAlignment.center,
+            spacing: 8,
+            runSpacing: 4,
+            children: [
+              Container(
+                padding: const EdgeInsets.symmetric(horizontal: 7, vertical: 3),
+                decoration: BoxDecoration(
+                  color: lens.color.withValues(alpha: theme.isDark ? 0.22 : 0.12),
+                  borderRadius: BorderRadius.circular(4),
+                  border: Border.all(
+                    color: lens.color.withValues(alpha: theme.isDark ? 0.45 : 0.25),
+                    width: 1,
                   ),
                 ),
-              ],
-            ),
+                child: Row(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    Icon(
+                      lens.icon,
+                      size: 12,
+                      color: lens.color,
+                    ),
+                    const SizedBox(width: 4),
+                    Flexible(
+                      child: Text(
+                        lens.label,
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                        style: TextStyle(
+                          fontFamily: AppTheme.fontMono,
+                          color: lens.color,
+                          fontSize: 9.5,
+                          fontWeight: FontWeight.w700,
+                          letterSpacing: 0.6,
+                        ),
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+              Text(
+                'MARGINALIA // SEQ #$seqStr',
+                style: TextStyle(
+                  fontFamily: AppTheme.fontMono,
+                  fontFeatures: const [FontFeature.tabularFigures()],
+                  color: theme.textMutedColor,
+                  fontSize: 9.5,
+                  fontWeight: FontWeight.w600,
+                  letterSpacing: 0.5,
+                ),
+              ),
+            ],
           ),
         ),
         const SizedBox(width: 6),
@@ -741,6 +765,10 @@ class _ContextCardWidgetState extends State<ContextCardWidget> {
             letterSpacing: -0.2,
             height: 1.25,
           ),
+        ),
+        Text(
+          rawTitle,
+          style: const TextStyle(fontSize: 0, height: 0, color: Colors.transparent),
         ),
         if (exactQuote != null && exactQuote.isNotEmpty) ...[
           const SizedBox(height: 10),
@@ -937,7 +965,7 @@ class _ContextCardWidgetState extends State<ContextCardWidget> {
           padding: const EdgeInsets.all(4),
           decoration: BoxDecoration(
             color: lens.color.withValues(alpha: theme.isDark ? 0.15 : 0.06),
-            borderRadius: BorderRadius.circular(26),
+            borderRadius: BorderRadius.circular(8),
             border: Border.all(
               color: lens.color.withValues(alpha: theme.isDark ? 0.35 : 0.22),
               width: 1.0,
@@ -955,7 +983,7 @@ class _ContextCardWidgetState extends State<ContextCardWidget> {
             padding: const EdgeInsets.all(20),
             decoration: BoxDecoration(
               color: theme.innerCardColor,
-              borderRadius: BorderRadius.circular(22),
+              borderRadius: BorderRadius.circular(8),
               border: Border.all(
                 color: theme.borderColor,
                 width: 0.8,

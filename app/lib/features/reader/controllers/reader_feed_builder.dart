@@ -185,20 +185,31 @@ FeedBuildResult buildFeedResult({
 /// 2. card.sequence
 /// 3. Regex suffix on insertAfter: (?:-c|_)(0*\d+)$
 int? _resolveCardSequence(ReaderItem card, Map<String, int> chunkSeqById) {
-  // Try insertAfter -> chunk ID lookup
-  if (card.insertAfter != null && chunkSeqById.containsKey(card.insertAfter)) {
-    final mapped = chunkSeqById[card.insertAfter]!;
+  // Tier 1: Try insertAfter or sourceChunkId -> chunk ID lookup
+  final targetId = card.insertAfter ?? card.sourceChunkId;
+  if (targetId != null && chunkSeqById.containsKey(targetId)) {
+    final mapped = chunkSeqById[targetId]!;
+    if (mapped > 0) return mapped;
+  }
+  if (card.sourceChunkId != null && chunkSeqById.containsKey(card.sourceChunkId)) {
+    final mapped = chunkSeqById[card.sourceChunkId]!;
     if (mapped > 0) return mapped;
   }
 
-  // Try card.sequence
+  // Tier 2: Try card.sequence
   if (card.sequence != null && card.sequence! > 0) {
     return card.sequence;
   }
 
-  // Try regex suffix on insertAfter
-  if (card.insertAfter != null) {
-    final m = RegExp(r'(?:-c|_)(0*\d+)$').firstMatch(card.insertAfter!);
+  // Tier 2b: Try regex suffix on insertAfter or sourceChunkId: (?:-c|_)(0*\d+)$
+  if (targetId != null) {
+    final m = RegExp(r'(?:-c|_)(0*\d+)$').firstMatch(targetId);
+    if (m != null) {
+      return int.tryParse(m.group(1)!);
+    }
+  }
+  if (card.sourceChunkId != null) {
+    final m = RegExp(r'(?:-c|_)(0*\d+)$').firstMatch(card.sourceChunkId!);
     if (m != null) {
       return int.tryParse(m.group(1)!);
     }

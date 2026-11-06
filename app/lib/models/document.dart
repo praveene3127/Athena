@@ -109,6 +109,7 @@ class ReaderItem {
   final String? sectionTitle;
   // Context card fields (Phase 5)
   final String? insertAfter;
+  final String? sourceChunkId;
   final String? cardType;
   final String? title;
   final String? body;
@@ -128,6 +129,7 @@ class ReaderItem {
     this.pageReference,
     this.sectionTitle,
     this.insertAfter,
+    this.sourceChunkId,
     this.cardType,
     this.title,
     this.body,
@@ -152,6 +154,7 @@ class ReaderItem {
     String? pageReference,
     String? sectionTitle,
     String? insertAfter,
+    String? sourceChunkId,
     String? cardType,
     String? title,
     String? body,
@@ -171,6 +174,7 @@ class ReaderItem {
       pageReference: pageReference ?? this.pageReference,
       sectionTitle: sectionTitle ?? this.sectionTitle,
       insertAfter: insertAfter ?? this.insertAfter,
+      sourceChunkId: sourceChunkId ?? this.sourceChunkId,
       cardType: cardType ?? this.cardType,
       title: title ?? this.title,
       body: body ?? this.body,
@@ -185,6 +189,8 @@ class ReaderItem {
   }
 
   factory ReaderItem.fromJson(Map<String, dynamic> json) {
+    final insertAfter = (json['insert_after'] ?? json['source_chunk_id'])?.toString();
+    final sourceChunkId = (json['source_chunk_id'] ?? json['insert_after'])?.toString();
     return ReaderItem(
       type: json['type']?.toString() ?? 'reading_chunk',
       id: json['id']?.toString() ?? '',
@@ -192,7 +198,8 @@ class ReaderItem {
       text: json['text']?.toString(),
       pageReference: json['page_reference']?.toString(),
       sectionTitle: json['section_title']?.toString(),
-      insertAfter: json['insert_after']?.toString(),
+      insertAfter: insertAfter,
+      sourceChunkId: sourceChunkId,
       cardType: json['card_type']?.toString(),
       title: json['title']?.toString(),
       body: json['body']?.toString(),

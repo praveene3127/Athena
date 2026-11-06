@@ -112,6 +112,8 @@ class AppTheme {
   static const String fontDisplay = 'DM Serif Display';
   static const String fontReading = 'Newsreader';
   static const String fontUI = 'Geist';
+  static const String fontMono = 'JetBrains Mono';
+  static const String fontSerif = 'Newsreader';
 
   static ThemeData get lightTheme {
     return ThemeData(

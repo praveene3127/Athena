@@ -32,14 +32,14 @@ class ReaderThemeConfig {
   static const ReaderThemeConfig paper = ReaderThemeConfig(
     id: 'paper',
     name: 'Paper',
-    scaffoldBackground: Color(0xFFFBFBF9),
-    outerCardColor: Color(0xFFF4F3EE),
-    innerCardColor: Color(0xFFFCFBF7),
-    borderColor: Color(0xFFE5E4DC),
-    textColor: Color(0xFF141714),
-    textMutedColor: Color(0xFF6B7280),
+    scaffoldBackground: Color(0xFFF6F3EC), // Warm archival paper
+    outerCardColor: Color(0xFFEFECE2),
+    innerCardColor: Color(0xFFFCFBF7), // Crisp archival card surface
+    borderColor: Color(0xFFE2DEC9), // 1px stone border
+    textColor: Color(0xFF1A1917), // Deep charcoal ink
+    textMutedColor: Color(0xFF6B665E),
     accentColor: Color(0xFF005E54),
-    pillBackground: Color(0xFFF2F4EB),
+    pillBackground: Color(0xFFEFECE2),
     pillText: Color(0xFF005E54),
     isDark: false,
   );
@@ -62,30 +62,30 @@ class ReaderThemeConfig {
   static const ReaderThemeConfig night = ReaderThemeConfig(
     id: 'night',
     name: 'Night',
-    scaffoldBackground: Color(0xFF141714),
-    outerCardColor: Color(0xFF1A1D1A),
-    innerCardColor: Color(0xFF222622),
-    borderColor: Color(0xFF2D332D),
-    textColor: Color(0xFFE3E7E3),
-    textMutedColor: Color(0xFF8E958E),
-    accentColor: Color(0xFF52B788),
-    pillBackground: Color(0xFF2D332D),
-    pillText: Color(0xFF52B788),
+    scaffoldBackground: Color(0xFF0D0E11), // Deep ink
+    outerCardColor: Color(0xFF111317),
+    innerCardColor: Color(0xFF14161B), // Crisp dark card surface
+    borderColor: Color(0xFF262932), // Hairline border
+    textColor: Color(0xFFE5E7EB),
+    textMutedColor: Color(0xFF9CA3AF),
+    accentColor: Color(0xFF2DD4BF),
+    pillBackground: Color(0xFF1E2129),
+    pillText: Color(0xFF2DD4BF),
     isDark: true,
   );
 
   static const ReaderThemeConfig obsidian = ReaderThemeConfig(
     id: 'obsidian',
     name: 'Obsidian',
-    scaffoldBackground: Color(0xFF000000),
-    outerCardColor: Color(0xFF0B0B0B),
-    innerCardColor: Color(0xFF121212),
-    borderColor: Color(0xFF222222),
-    textColor: Color(0xFFE0E0E0),
-    textMutedColor: Color(0xFF757575),
-    accentColor: Color(0xFF2A9D8F),
-    pillBackground: Color(0xFF1A1A1A),
-    pillText: Color(0xFF2A9D8F),
+    scaffoldBackground: Color(0xFF070709),
+    outerCardColor: Color(0xFF0D0E11),
+    innerCardColor: Color(0xFF14161B),
+    borderColor: Color(0xFF262932),
+    textColor: Color(0xFFEDEDED),
+    textMutedColor: Color(0xFF888888),
+    accentColor: Color(0xFF2DD4BF),
+    pillBackground: Color(0xFF181A20),
+    pillText: Color(0xFF2DD4BF),
     isDark: true,
   );
 

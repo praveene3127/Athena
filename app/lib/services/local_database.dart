@@ -33,8 +33,14 @@ class LocalDatabase {
   }
 
   Future<Database> _open() async {
-    final documentsDir = await getApplicationDocumentsDirectory();
-    final dbPath = p.join(documentsDir.path, 'athena_library.sqlite');
+    String dbPath;
+    try {
+      final documentsDir = await getApplicationDocumentsDirectory();
+      dbPath = p.join(documentsDir.path, 'athena_library.sqlite');
+    } catch (e) {
+      debugPrint('Athena LocalDatabase path_provider fallback: ');
+      dbPath = inMemoryDatabasePath;
+    }
     return openDatabase(
       dbPath,
       version: 1,
@@ -51,6 +57,15 @@ class LocalDatabase {
       },
       onOpen: (db) async {
         try {
+          await db.execute('''
+            CREATE TABLE IF NOT EXISTS chunk_user_edits (
+              chunk_id TEXT PRIMARY KEY,
+              document_id TEXT NOT NULL,
+              edited_text TEXT,
+              user_note TEXT,
+              updated_at TEXT NOT NULL
+            )
+          ''');
           await db.execute(
             'CREATE VIRTUAL TABLE IF NOT EXISTS reading_chunks_fts USING fts5('
             'chunk_id UNINDEXED, document_id UNINDEXED, raw_text, section_title, tokenize=\'unicode61\')'
@@ -136,6 +151,16 @@ class LocalDatabase {
         await db.execute(
           'CREATE INDEX context_cards_document ON context_cards(document_id, dismissed, saved)',
         );
+        await db.execute('''
+          CREATE TABLE chunk_user_edits (
+            chunk_id TEXT PRIMARY KEY,
+            document_id TEXT NOT NULL,
+            edited_text TEXT,
+            user_note TEXT,
+            updated_at TEXT NOT NULL
+          )
+        ''');
+        
       },
     );
   }
@@ -346,6 +371,7 @@ class LocalDatabase {
           'type': 'context_card',
           'id': card['id'],
           'insert_after': card['source_chunk_id'],
+          'source_chunk_id': card['source_chunk_id'],
           'sequence': chunk['sequence'],
           'concept_name': card['concept_name'],
           'card_type': card['card_type'] ?? 'context',
@@ -382,6 +408,7 @@ class LocalDatabase {
               'type': 'context_card',
               'id': card['id'],
               'insert_after': items[i]['id'],
+              'source_chunk_id': card['source_chunk_id'] ?? items[i]['id'],
               'sequence': seq,
               'concept_name': card['concept_name'],
               'card_type': card['card_type'] ?? 'context',
@@ -437,5 +464,58 @@ class LocalDatabase {
     final db = await database;
     await db.update('context_cards', {'dismissed': dismissed ? 1 : 0},
         where: 'id = ?', whereArgs: [cardId]);
+  }
+
+  Future<void> saveChunkEdit(
+    String chunkId,
+    String docId, {
+    String? editedText,
+    String? userNote,
+  }) async {
+    final db = await database;
+    final now = DateTime.now().toIso8601String();
+    if ((editedText == null || editedText.trim().isEmpty) &&
+        (userNote == null || userNote.trim().isEmpty)) {
+      await db.delete(
+        'chunk_user_edits',
+        where: 'chunk_id = ?',
+        whereArgs: [chunkId],
+      );
+      return;
+    }
+    await db.insert(
+      'chunk_user_edits',
+      {
+        'chunk_id': chunkId,
+        'document_id': docId,
+        'edited_text': editedText,
+        'user_note': userNote,
+        'updated_at': now,
+      },
+      conflictAlgorithm: ConflictAlgorithm.replace,
+    );
+  }
+
+  Future<Map<String, Map<String, dynamic>>> getChunkEdits(String docId) async {
+    final db = await database;
+    final rows = await db.query(
+      'chunk_user_edits',
+      where: 'document_id = ?',
+      whereArgs: [docId],
+    );
+    return {
+      for (final r in rows) (r['chunk_id'] as String): Map<String, dynamic>.from(r),
+    };
+  }
+
+  Future<Map<String, dynamic>?> getSingleChunkEdit(String chunkId) async {
+    final db = await database;
+    final rows = await db.query(
+      'chunk_user_edits',
+      where: 'chunk_id = ?',
+      whereArgs: [chunkId],
+      limit: 1,
+    );
+    return rows.isNotEmpty ? Map<String, dynamic>.from(rows.first) : null;
   }
 }

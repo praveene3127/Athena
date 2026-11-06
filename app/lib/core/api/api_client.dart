@@ -1570,7 +1570,7 @@ class ApiClient {
       final provider =
           prefs.getString('athena_ai_primary_provider') ?? 'gemini';
       final model =
-          prefs.getString('athena_ai_primary_model') ?? 'gemini-2.5-flash';
+          prefs.getString('athena_ai_primary_model') ?? '';
 
       if (key.isNotEmpty) {
         final prompt =
@@ -1580,7 +1580,7 @@ class ApiClient {
             'Please provide a clear, concise (under 120 words), insightful explanation directly answering the question.';
 
         if (provider == 'gemini') {
-          final effectiveModel = model.isNotEmpty ? model : 'gemini-2.5-flash';
+          final effectiveModel = model;
           final url =
               'https://generativelanguage.googleapis.com/v1beta/models/$effectiveModel:generateContent?key=$key';
           final resp = await Dio().post(
@@ -1636,8 +1636,8 @@ class ApiClient {
               'model': model.isNotEmpty
                   ? model
                   : (provider == 'groq'
-                      ? 'llama-3.3-70b-versatile'
-                      : 'gpt-4o-mini'),
+                      ? ''
+                      : ''),
               'messages': [
                 {
                   'role': 'system',
@@ -1959,7 +1959,7 @@ class ApiClient {
 
     try {
       if (pKey == 'gemini') {
-        final targetModel = (model != null && model.isNotEmpty) ? model : 'gemini-2.5-flash';
+        final targetModel = (model != null && model.isNotEmpty) ? model : '';
         final genUrl =
             'https://generativelanguage.googleapis.com/v1beta/models/$targetModel:generateContent?key=$cleanKey';
         final genResp = await client.post(
@@ -2034,7 +2034,7 @@ class ApiClient {
           data: {
             'model': (model != null && model.isNotEmpty)
                 ? model
-                : 'claude-3-5-haiku-20241022',
+                : '',
             'max_tokens': 5,
             'messages': [
               {'role': 'user', 'content': 'Say OK'}
@@ -2126,10 +2126,10 @@ class ApiClient {
             'model': (model != null && model.isNotEmpty)
                 ? model
                 : (pKey == 'groq'
-                    ? 'llama-3.3-70b-versatile'
+                    ? ''
                     : (pKey == 'deepseek'
-                        ? 'deepseek-chat'
-                        : 'gpt-4o-mini')),
+                        ? ''
+                        : '')),
             'messages': [
               {'role': 'user', 'content': 'OK'}
             ],

@@ -464,7 +464,7 @@ class _BYOKSettingsSheetState extends State<BYOKSettingsSheet> {
                                           Text(
                                             selectedProvObj.name,
                                             style: TextStyle(
-                                              fontFamily: AppTheme.fontUI,
+                                              fontFamily: AppTheme.fontMono,
                                               fontSize: 14,
                                               fontWeight: FontWeight.w600,
                                               color: isDark
@@ -475,7 +475,7 @@ class _BYOKSettingsSheetState extends State<BYOKSettingsSheet> {
                                           Text(
                                             selectedProvObj.description,
                                             style: TextStyle(
-                                              fontFamily: AppTheme.fontUI,
+                                              fontFamily: AppTheme.fontMono,
                                               fontSize: 11,
                                               color: isDark
                                                   ? const Color(0xFF888888)
@@ -531,7 +531,7 @@ class _BYOKSettingsSheetState extends State<BYOKSettingsSheet> {
                                       title: Text(
                                         p.name,
                                         style: TextStyle(
-                                          fontFamily: AppTheme.fontUI,
+                                          fontFamily: AppTheme.fontMono,
                                           fontSize: 13,
                                           fontWeight: selected
                                               ? FontWeight.w700
@@ -548,7 +548,7 @@ class _BYOKSettingsSheetState extends State<BYOKSettingsSheet> {
                                       subtitle: Text(
                                         p.description,
                                         style: TextStyle(
-                                          fontFamily: AppTheme.fontUI,
+                                          fontFamily: AppTheme.fontMono,
                                           fontSize: 11,
                                           color: isDark
                                               ? const Color(0xFF888888)
@@ -725,9 +725,9 @@ class _BYOKSettingsSheetState extends State<BYOKSettingsSheet> {
                               const SizedBox(width: 10),
                               Expanded(
                                 child: Text(
-                                  "Enter your API key and tap 'Check Connection' to load available models",
+                                  '[ ENTER API KEY & CLICK "CHECK CONNECTION" TO DISCOVER LIVE MODELS ]',
                                   style: TextStyle(
-                                    fontFamily: AppTheme.fontUI,
+                                    fontFamily: AppTheme.fontMono,
                                     fontSize: 12,
                                     color: isDark
                                         ? const Color(0xFF888888)
@@ -771,9 +771,9 @@ class _BYOKSettingsSheetState extends State<BYOKSettingsSheet> {
                                     children: [
                                       Expanded(
                                         child: Text(
-                                          _selectedModel ?? 'Select a model',
+                                          _models.where((m) => m.id == _selectedModel).firstOrNull?.name ?? _selectedModel ?? 'Select a model',
                                           style: TextStyle(
-                                            fontFamily: AppTheme.fontUI,
+                                            fontFamily: AppTheme.fontMono,
                                             fontSize: 14,
                                             fontWeight: FontWeight.w600,
                                             color: isDark
@@ -826,7 +826,7 @@ class _BYOKSettingsSheetState extends State<BYOKSettingsSheet> {
                                         title: Text(
                                           m.name,
                                           style: TextStyle(
-                                            fontFamily: AppTheme.fontUI,
+                                            fontFamily: AppTheme.fontMono,
                                             fontSize: 13,
                                             fontWeight: selected
                                                 ? FontWeight.w700
@@ -843,7 +843,7 @@ class _BYOKSettingsSheetState extends State<BYOKSettingsSheet> {
                                         subtitle: Text(
                                           m.id,
                                           style: TextStyle(
-                                            fontFamily: AppTheme.fontUI,
+                                            fontFamily: AppTheme.fontMono,
                                             fontSize: 11,
                                             color: isDark
                                                 ? const Color(0xFF888888)
@@ -909,7 +909,7 @@ class _BYOKSettingsSheetState extends State<BYOKSettingsSheet> {
                                 child: Text(
                                   _testMessage!,
                                   style: TextStyle(
-                                    fontFamily: AppTheme.fontUI,
+                                    fontFamily: AppTheme.fontMono,
                                     fontSize: 12,
                                     color: _testOk == true
                                         ? (isDark
@@ -951,7 +951,7 @@ class _BYOKSettingsSheetState extends State<BYOKSettingsSheet> {
                                   : Text(
                                       'Check Connection',
                                       style: TextStyle(
-                                        fontFamily: AppTheme.fontUI,
+                                        fontFamily: AppTheme.fontMono,
                                         fontSize: 13,
                                         fontWeight: FontWeight.w600,
                                         color: isDark
@@ -989,7 +989,7 @@ class _BYOKSettingsSheetState extends State<BYOKSettingsSheet> {
                                   : const Text(
                                       'Save & Apply',
                                       style: TextStyle(
-                                        fontFamily: AppTheme.fontUI,
+                                        fontFamily: AppTheme.fontMono,
                                         fontSize: 13,
                                         fontWeight: FontWeight.w700,
                                       ),

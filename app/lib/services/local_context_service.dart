@@ -23,6 +23,25 @@ class LocalContextService {
     'CORE PARADOX',
   ];
 
+  Future<List<Map<String, Object?>>> generateInitialBatch(
+    String documentId,
+    List<Map<String, Object?>> chunks,
+  ) async {
+    final targetChunks = chunks.take(15).toList();
+    final cards = <Map<String, Object?>>[];
+    for (var i = 0; i < targetChunks.length; i++) {
+      final chunk = targetChunks[i];
+      final seq = (chunk['sequence'] as num?)?.toInt() ?? (i + 1);
+      if (seq % 3 == 0) {
+        final card = await generateCardForChunk(documentId, chunk, cards.length);
+        if (card != null) {
+          cards.add(card);
+        }
+      }
+    }
+    return cards;
+  }
+
   Future<List<Map<String, Object?>>> buildCards(
     String documentId,
     List<Map<String, Object?>> chunks,
@@ -63,16 +82,25 @@ class LocalContextService {
 
     // 2. Extract verbatim exact quote from chunk
     var exactQuote = _exactQuote(passage, concept);
-    if (exactQuote == null || !passage.contains(exactQuote)) {
+    if (exactQuote == null || exactQuote.isEmpty || !passage.contains(exactQuote)) {
       exactQuote = _fallbackSentence(passage);
+    }
+    if (!passage.contains(exactQuote)) {
+      final len = passage.length < 80 ? passage.length : 80;
+      exactQuote = passage.substring(0, len);
     }
 
     // 3. Check for configured BYOK API key in SharedPreferences
-    final prefs = await SharedPreferences.getInstance();
-    final apiKey = prefs.getString('athena_ai_primary_api_key');
-    final provider = prefs.getString('athena_ai_primary_provider') ?? 'gemini';
-    final model = prefs.getString('athena_ai_primary_model');
-    final baseUrl = prefs.getString('athena_ai_primary_base_url');
+    SharedPreferences? prefs;
+    try {
+      prefs = await SharedPreferences.getInstance();
+    } catch (e) {
+      debugPrint('[Athena] SharedPreferences notice in LocalContextService: $e');
+    }
+    final apiKey = prefs?.getString('athena_ai_primary_api_key');
+    final provider = prefs?.getString('athena_ai_primary_provider') ?? 'gemini';
+    final model = prefs?.getString('athena_ai_primary_model');
+    final baseUrl = prefs?.getString('athena_ai_primary_base_url');
 
     Map<String, dynamic>? aiCard;
     if (apiKey != null && apiKey.trim().isNotEmpty) {
@@ -225,7 +253,8 @@ Respond ONLY with valid JSON with this exact schema:
 
       if (pKey == 'gemini') {
         final targetModel =
-            (model != null && model.isNotEmpty) ? model : 'gemini-2.5-flash';
+            (model != null && model.isNotEmpty) ? model : '';
+        if (targetModel.isEmpty) return null;
         final url =
             'https://generativelanguage.googleapis.com/v1beta/models/$targetModel:generateContent?key=$apiKey';
         final res = await client.post(url, data: {
@@ -248,7 +277,8 @@ Respond ONLY with valid JSON with this exact schema:
       } else if (pKey == 'groq') {
         final targetModel = (model != null && model.isNotEmpty)
             ? model
-            : 'llama-3.3-70b-versatile';
+            : '';
+        if (targetModel.isEmpty) return null;
         final res = await client.post(
           'https://api.groq.com/openai/v1/chat/completions',
           options: Options(headers: {'Authorization': 'Bearer $apiKey'}),
@@ -267,7 +297,8 @@ Respond ONLY with valid JSON with this exact schema:
       } else if (pKey == 'openrouter') {
         final targetModel = (model != null && model.isNotEmpty)
             ? model
-            : 'google/gemini-2.5-flash';
+            : '';
+        if (targetModel.isEmpty) return null;
         final res = await client.post(
           'https://openrouter.ai/api/v1/chat/completions',
           options: Options(headers: {'Authorization': 'Bearer $apiKey'}),
@@ -284,7 +315,8 @@ Respond ONLY with valid JSON with this exact schema:
         }
       } else if (pKey == 'openai') {
         final targetModel =
-            (model != null && model.isNotEmpty) ? model : 'gpt-4o-mini';
+            (model != null && model.isNotEmpty) ? model : '';
+        if (targetModel.isEmpty) return null;
         final res = await client.post(
           'https://api.openai.com/v1/chat/completions',
           options: Options(headers: {'Authorization': 'Bearer $apiKey'}),
@@ -303,7 +335,8 @@ Respond ONLY with valid JSON with this exact schema:
       } else if (pKey == 'anthropic') {
         final targetModel = (model != null && model.isNotEmpty)
             ? model
-            : 'claude-3-5-haiku-20241022';
+            : '';
+        if (targetModel.isEmpty) return null;
         final res = await client.post(
           'https://api.anthropic.com/v1/messages',
           options: Options(headers: {
