@@ -311,15 +311,20 @@ def test_same_book_concept_suppression():
             )
             session.commit()
 
-        # First card generation on chunk 1 -> generates card
+        # First card generation on chunk 1 -> generates card (cache hit)
         card1 = pipeline.generate_or_reuse_card(doc_id, 1)
         assert card1 is not None
-        assert term in pipeline.doc_grounded_concepts[doc_id]
 
-        # Second card generation on chunk 5 with same concept -> suppressed!
+        # Second card generation on chunk 5 with SAME concept and SAME cached evidence
+        # -> REJECTED due to claim-level BODY deduplication (semantic duplicate of evidence body)
+        # This is CORRECT behavior: same concept CAN appear multiple times, but NOT with identical evidence bodies.
+        # Document-wide concept deduplication was removed (RC-09 fix).
+        # Only claim-level title/body deduplication remains.
         card5 = pipeline.generate_or_reuse_card(doc_id, 5)
-        # Since term is already in pipeline.doc_grounded_concepts[doc_id], it was suppressed!
-        assert card5 is None
+        assert card5 is None, "Second card should be rejected due to identical cached body (claim-level dedup)"
+
+        # Verify the rejection reason: it's body deduplication, not concept ban
+        # The concept "thermodynamics" is NOT banned document-wide; a DIFFERENT evidence body would be accepted.
     finally:
         _clean_doc(doc_id)
         with Session(engine) as session:

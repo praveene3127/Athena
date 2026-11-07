@@ -79,7 +79,7 @@ FeedBuildResult buildFeedResult({
 
   // 3a. Process raw cards from API response
   for (final card in rawCards) {
-    final seq = _resolveCardSequence(card, chunkSeqById);
+    final seq = _resolveCardSequence(card, chunkSeqById, chunks);
     if (seq != null && seq > 0) {
       cardsBySeq.putIfAbsent(seq, () => []).add(card);
       assignedCardIds.add(card.id);
@@ -88,26 +88,33 @@ FeedBuildResult buildFeedResult({
 
   // 3b. Process dynamic cards (from SSE/polling)
   for (final entry in dynamicCardsBySeq.entries) {
-    final seq = entry.key;
     final card = entry.value;
-    if (!assignedCardIds.contains(card.id)) {
-      if (seq > 0 && seq <= chunks.length) {
-        cardsBySeq.putIfAbsent(seq, () => []).add(card);
-        assignedCardIds.add(card.id);
-      }
+    if (assignedCardIds.contains(card.id)) continue;
+
+    var seq = entry.key;
+    if (seq <= 0 || seq > chunks.length) {
+      seq = _resolveCardSequence(card, chunkSeqById, chunks) ?? 0;
+    }
+
+    if (seq > 0 && seq <= chunks.length) {
+      cardsBySeq.putIfAbsent(seq, () => []).add(card);
+      assignedCardIds.add(card.id);
     }
   }
 
-  // 4. Handle UNASSIGNED cards - deterministically attach to prevent orphans
-  final unassignedCards = rawCards.where((c) => !assignedCardIds.contains(c.id)).toList();
+  // 4. Handle remaining unassigned cards:
+  // Deterministically place at eligible spacing intervals so no valid card is ever dropped
+  final unassignedCards = <ReaderItem>[];
+  for (final card in rawCards) {
+    if (!assignedCardIds.contains(card.id)) unassignedCards.add(card);
+  }
   for (final entry in dynamicCardsBySeq.entries) {
     if (!assignedCardIds.contains(entry.value.id) && !unassignedCards.any((c) => c.id == entry.value.id)) {
       unassignedCards.add(entry.value);
     }
   }
-  int unassignedIdx = 0;
 
-  // 5. Build the interleaved feed
+  int unassignedIdx = 0;
   final feedItems = <ReaderItem>[];
 
   for (final chunk in chunks) {
@@ -116,7 +123,6 @@ FeedBuildResult buildFeedResult({
 
     final seq = chunk.sequence ?? 0;
 
-    // 5a. Add matched cards for this chunk sequence
     final matchedCards = cardsBySeq[seq];
     if (matchedCards != null && showContextCards) {
       for (final card in matchedCards) {
@@ -124,11 +130,9 @@ FeedBuildResult buildFeedResult({
           feedItems.add(card);
         }
       }
-    }
-    // 5b. If no matched cards, try to place an unassigned card (respecting min gap)
-    else if (showContextCards &&
-             unassignedIdx < unassignedCards.length &&
-             (seq % minChunkGapBetweenCards == 0 || seq == minChunkGapBetweenCards - 1)) {
+    } else if (showContextCards &&
+               unassignedIdx < unassignedCards.length &&
+               (seq % minChunkGapBetweenCards == 0 || seq == minChunkGapBetweenCards - 1)) {
       final card = unassignedCards[unassignedIdx++];
       if (!dismissedCardIds.contains(card.id)) {
         feedItems.add(card);
@@ -136,21 +140,12 @@ FeedBuildResult buildFeedResult({
     }
   }
 
-  // 5c. Fallback for any remaining unassigned cards: attach so no cards are lost
+  // Fallback for any trailing unassigned cards so none are lost
   if (showContextCards) {
     while (unassignedIdx < unassignedCards.length) {
       final card = unassignedCards[unassignedIdx++];
       if (!dismissedCardIds.contains(card.id) && !feedItems.any((c) => c.id == card.id)) {
         feedItems.add(card);
-      }
-    }
-    for (final entry in cardsBySeq.entries) {
-      if (entry.key > chunks.length || entry.key <= 0) {
-        for (final card in entry.value) {
-          if (!dismissedCardIds.contains(card.id) && !feedItems.any((c) => c.id == card.id)) {
-            feedItems.add(card);
-          }
-        }
       }
     }
   }
@@ -169,7 +164,8 @@ FeedBuildResult buildFeedResult({
 /// 1. insertAfter -> chunkSeqById lookup
 /// 2. card.sequence
 /// 3. Regex suffix on insertAfter: (?:-c|_)(0*\d+)$
-int? _resolveCardSequence(ReaderItem card, Map<String, int> chunkSeqById) {
+/// 4. Exact-quote text anchor resolution (RC-10)
+int? _resolveCardSequence(ReaderItem card, Map<String, int> chunkSeqById, [List<ReaderItem>? chunks]) {
   // Tier 1: Try insertAfter or sourceChunkId -> chunk ID lookup
   final targetId = card.insertAfter ?? card.sourceChunkId;
   if (targetId != null && chunkSeqById.containsKey(targetId)) {
@@ -197,6 +193,16 @@ int? _resolveCardSequence(ReaderItem card, Map<String, int> chunkSeqById) {
     final m = RegExp(r'(?:-c|_)(0*\d+)$').firstMatch(card.sourceChunkId!);
     if (m != null) {
       return int.tryParse(m.group(1)!);
+    }
+  }
+
+  // Tier 3: Exact-quote text anchor resolution (RC-10)
+  final quote = card.exactQuote?.trim();
+  if (quote != null && quote.length >= 10 && chunks != null) {
+    for (final chunk in chunks) {
+      if (chunk.rawText.contains(quote)) {
+        return chunk.sequence;
+      }
     }
   }
 

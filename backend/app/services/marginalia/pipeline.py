@@ -310,7 +310,7 @@ class ReadAheadPipeline:
 
             doc = session.get(Document, doc_id)
 
-            # Double check existing card
+            # Double check existing card for this chunk
             existing = session.exec(
                 select(ContextCard).where(
                     ContextCard.document_id == doc_id,
@@ -321,7 +321,7 @@ class ReadAheadPipeline:
             if existing:
                 return card_to_dict(existing)
 
-            # Query all existing active cards in this document for document-wide deduplication
+            # Query existing cards for claim-level deduplication and archetype rotation
             existing_cards = session.exec(
                 select(ContextCard).where(
                     ContextCard.document_id == doc_id,
@@ -329,16 +329,11 @@ class ReadAheadPipeline:
                 )
             ).all()
 
-            used_concepts: Set[str] = set()
+            # Track used titles and bodies for claim-level deduplication
+            # (NOT document-wide concept bans - a concept can appear multiple times with distinct claims)
             used_titles: Set[str] = set()
             existing_bodies: List[str] = []
             for ec in existing_cards:
-                if ec.concept_name:
-                    c_norm = ec.concept_name.strip().lower()
-                    used_concepts.add(c_norm)
-                    ec_slug = re.sub(r"[^a-z0-9]+", "_", c_norm).strip("_")
-                    if ec_slug:
-                        used_concepts.add(ec_slug)
                 if ec.title:
                     clean_t = re.sub(
                         r"^(?:What is\s+|EMPIRICAL STUDY:\s*|CRITICAL DEBATE:\s*|HISTORICAL CONTEXT:\s*|CORE PARADOX:\s*)+",
@@ -351,14 +346,10 @@ class ReadAheadPipeline:
                 if ec.body:
                     existing_bodies.append(ec.body.strip())
 
-            # Slot in the deterministic 4-archetype rotation
+            # Slot in the deterministic 4-archetype rotation (based on total cards in doc)
             active_slot = len(existing_cards) % 4
             archetype_names = ["REAL-WORLD STUDY", "COUNTER-INTUITIVE FACT", "HISTORICAL BACKSTORY", "THE HIDDEN MECHANISM"]
             active_archetype = archetype_names[active_slot]
-
-            grounded_in_doc = self.doc_grounded_concepts.setdefault(doc_id, set())
-            for ec_slug in used_concepts:
-                grounded_in_doc.add(ec_slug)
 
             # Retrieve candidate concepts for this chunk or extract on the fly
             concepts = session.exec(
@@ -395,12 +386,8 @@ class ReadAheadPipeline:
                 ):
                     continue
 
-                # Document-Wide Deduplication Hard Rule:
-                # NEVER reuse a concept already carded anywhere in this book
-                if slug in grounded_in_doc or concept_norm in used_concepts or slug in used_concepts:
-                    logger.debug("Document-wide deduplication: '%s' already carded in %s. Skipping.", concept.name, doc_id)
-                    continue
-
+                # Claim-level deduplication: check if this exact claim/evidence combination
+                # has already been used. We allow the same concept with different evidence.
                 exact_quote = find_exact_quote(chunk.raw_text, concept.name)
                 if not exact_quote or exact_quote not in chunk.raw_text:
                     continue
@@ -418,6 +405,7 @@ class ReadAheadPipeline:
                     ).strip()
                     card_title = f"{active_archetype}: {clean_cached_title}"
 
+                    # Claim-level deduplication: check title and semantic similarity of body
                     if clean_cached_title.lower() not in used_titles and not is_semantic_duplicate(cached.body, existing_bodies, threshold=0.78):
                         logger.info("Concept cache HIT for '%s' in chunk %s (cross-book reuse)", concept.name, chunk_index)
                         cached_body = cached.body.replace("||REVEAL||", " ")
@@ -441,9 +429,6 @@ class ReadAheadPipeline:
                         session.add(card)
                         session.commit()
                         session.refresh(card)
-                        grounded_in_doc.add(slug)
-                        used_concepts.add(concept_norm)
-                        used_concepts.add(slug)
                         used_titles.add(card_title.lower())
                         existing_bodies.append(cached_body.strip())
                         return card_to_dict(card)
@@ -577,9 +562,6 @@ class ReadAheadPipeline:
                         session.add(card)
                         session.commit()
                         session.refresh(card)
-                        grounded_in_doc.add(slug)
-                        used_concepts.add(concept_norm)
-                        used_concepts.add(slug)
                         used_titles.add(card_title.lower())
                         existing_bodies.append(body.strip())
                         return card_to_dict(card)
@@ -687,9 +669,6 @@ class ReadAheadPipeline:
                     session.add(card)
                     session.commit()
                     session.refresh(card)
-                    grounded_in_doc.add(slug)
-                    used_concepts.add(concept_norm)
-                    used_concepts.add(slug)
                     used_titles.add(card_title.lower())
                     existing_bodies.append(final_body.strip())
                     return card_to_dict(card)

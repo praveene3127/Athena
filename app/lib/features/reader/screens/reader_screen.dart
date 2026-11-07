@@ -145,12 +145,10 @@ class _ReaderScreenState extends ConsumerState<ReaderScreen> {
             _cardsByChunkSeq.length,
           );
 
-          // Single-flight check: If page turned during generation, abort
-          if (!mounted || _activeDwellChunkSeq != chunkSeq || _cardsByChunkSeq.containsKey(chunkSeq)) {
-            return;
-          }
-
           if (cardMap != null) {
+            // ALWAYS persist valid generated cards to SQLite so the work is never lost (RC-07)
+            await LocalDatabase.instance.insertCards([cardMap]);
+
             final cardItem = ReaderItem.fromJson({
               ...cardMap,
               'type': 'context_card',
@@ -159,10 +157,12 @@ class _ReaderScreenState extends ConsumerState<ReaderScreen> {
               'sequence': chunkSeq,
               'is_speculative_draft': false,
             });
-            await LocalDatabase.instance.insertCards([cardMap]);
+
+            _cardsByChunkSeq[chunkSeq] = cardItem;
+
+            // Only trigger UI feed recomputation if reader is still dwelling on this chunk
             if (mounted && _activeDwellChunkSeq == chunkSeq) {
               setState(() {
-                _cardsByChunkSeq[chunkSeq] = cardItem;
                 _recomputeCachedFeed();
               });
             }

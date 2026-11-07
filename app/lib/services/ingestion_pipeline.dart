@@ -896,6 +896,16 @@ class DocumentIngestionPipeline {
       score += 30;
     }
 
+    // Substantive narrative prose protection (RC-04)
+    // A preface, foreword, or prologue containing substantive prose (>= 50 words, >= 3 sentences)
+    // must never be scored as blank front matter.
+    if (sentencePunctCount >= 3 && wordCount >= 50) {
+      final hasSubstantiveTitle = RegExp(r'\b(preface|foreword|introduction|prologue)\b', caseSensitive: false).hasMatch(lower);
+      if (hasSubstantiveTitle && !compact.contains('intentionallyleftblank')) {
+        score = 0;
+      }
+    }
+
     return score;
   }
 
@@ -1165,9 +1175,12 @@ class DocumentIngestionPipeline {
       if (item == null) continue;
 
       final href = item.href;
-      final isExcluded = RegExp(r'^(toc|nav|ncx|cover|titlepage|copyright)', caseSensitive: false)
-          .hasMatch(href.split('/').last);
-      if (isExcluded) continue;
+      final fileNameOnly = href.split('/').last.toLowerCase();
+      final isNavDoc = item.properties.contains('nav') || RegExp(r'^(toc|ncx)(?:[-_.]|$)', caseSensitive: false).hasMatch(fileNameOnly);
+      final isPureCoverOrCopyright = RegExp(r'^(cover|titlepage|copyright)(?:[-_.]|$)', caseSensitive: false).hasMatch(fileNameOnly);
+      final isSubstantiveProse = RegExp(r'(preface|foreword|prologue|intro)', caseSensitive: false).hasMatch(fileNameOnly);
+
+      if ((isNavDoc || isPureCoverOrCopyright) && !isSubstantiveProse) continue;
 
       final resolvedPath = _resolveEpubHref(opfPath, href);
       final contentBytes = files[resolvedPath]?.content;

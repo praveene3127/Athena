@@ -207,11 +207,6 @@ def _paragraph_units(
 
 def _target_words_for_document(units: List[Dict[str, Any]]) -> int:
     """Estimate a steady feed-card size from this book's paragraph profile."""
-    body_lengths = [
-        _word_count(unit["text"])
-        for unit in units
-        if unit["type"] != UnitType.HEADING and _word_count(unit["text"]) > 0
-    ]
     return TARGET_CHUNK_WORDS
 
 
@@ -255,7 +250,7 @@ def _make_reading_atoms(
                     continue
 
                 body_word_count = _word_count(body_text)
-                if body_word_count > _FEED_MAX_WORDS:
+                if body_word_count > _FEED_MAX_WORDS or len(body_text) > MAX_CHUNK_CHARS:
                     relative_slices = _split_oversized_unit(
                         body_text, max_words=_FEED_MAX_WORDS
                     )
@@ -295,7 +290,7 @@ def _make_reading_atoms(
 
         paragraph_text = unit["text"]
         word_count = _word_count(paragraph_text)
-        if word_count > _FEED_MAX_WORDS:
+        if word_count > _FEED_MAX_WORDS or len(paragraph_text) > MAX_CHUNK_CHARS:
             relative_slices = _split_oversized_unit(
                 paragraph_text, max_words=_FEED_MAX_WORDS
             )

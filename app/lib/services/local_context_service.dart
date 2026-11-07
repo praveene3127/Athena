@@ -94,22 +94,27 @@ class LocalContextService {
   }
 
   /// Checks whether a passage satisfies the prose quality gate:
-  /// >= 25 words, >= 2 complete sentences, and not front/back matter.
+  /// >= 25 words, >= 1 complete sentence, and not purely front/back matter boilerplate.
+  /// Section roles (preface, foreword, etc.) should drive exclusion, not lexical matching.
   bool passesProseQualityGate(String text) {
     final trimmed = text.trim();
     if (trimmed.isEmpty) return false;
+    // Use Unicode whitespace for consistent word counting
     final words =
-        trimmed.split(RegExp(r'\s+')).where((w) => w.isNotEmpty).toList();
+        trimmed.split(RegExp(r'[\u0009-\u000D \u0085   -   　]+'))
+            .where((w) => w.isNotEmpty).toList();
     if (words.length < 25) return false;
 
     final sentences = SentenceSplitter.split(trimmed);
-    if (sentences.length < 2) return false;
+    if (sentences.isEmpty) return false; // Allow valid single-sentence arguments
 
-    final frontMatterRe = RegExp(
-      r'\b(copyright|all rights reserved|table of contents|isbn\b|published by|printed in|edition|cataloging-in-publication|dedication|acknowledgements?|preface|foreword|index of)\b',
+    // Only reject pure boilerplate (copyright, ISBN, etc.) - NOT section names like "preface"
+    // Section roles should be determined by document structure, not keyword matching
+    final boilerplateRe = RegExp(
+      r'\b(copyright|all rights reserved|table of contents|isbn\b|published by|printed in|edition|cataloging-in-publication)\b',
       caseSensitive: false,
     );
-    if (frontMatterRe.hasMatch(trimmed)) return false;
+    if (boilerplateRe.hasMatch(trimmed)) return false;
 
     return true;
   }
@@ -118,7 +123,9 @@ class LocalContextService {
     String documentId,
     List<Map<String, Object?>> chunks,
   ) async {
-    return buildCards(documentId, chunks.take(25).toList());
+    // Use wider chunk window for warm-start: cover enough chunks to yield diverse cards
+    // Aligned with backend WARM_START_MAX_CARDS (24) and WARM_START_CHUNK_GAP (3)
+    return buildCards(documentId, chunks.take(75).toList());
   }
 
   Future<List<Map<String, Object?>>> buildCards(
@@ -139,7 +146,7 @@ class LocalContextService {
     // Prioritize chunks by tension score
     candidateChunks.sort((a, b) => scoreChunkTension(b).compareTo(scoreChunkTension(a)));
 
-    for (var i = 0; i < candidateChunks.length && cards.length < 5; i++) {
+    for (var i = 0; i < candidateChunks.length && cards.length < 24; i++) {
       final chunk = candidateChunks[i];
       final card = await generateCardForChunk(documentId, chunk, cards.length);
       if (card != null) {

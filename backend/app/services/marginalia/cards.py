@@ -24,6 +24,11 @@ from typing import Any, Dict, List, Optional, Tuple
 
 from app.config import (
     CARD_MAX_WORDS,
+    WARM_START_MAX_CARDS,
+    WARM_START_WIKI_LOOKUPS,
+    WARM_START_CHUNK_GAP,
+    WARM_START_MAX_PER_SECTION,
+    # Legacy aliases
     MAX_CARDS_PER_DOC,
     MAX_WIKI_LOOKUPS_PER_DOC,
     MIN_CHUNK_GAP_BETWEEN_CARDS,
@@ -497,9 +502,10 @@ def generate_context_cards(
     except Exception as err:
         logger.warning("Could not pre-load existing cards for deduplication: %s", err)
 
-    # Guardrail tracking:
-    # 1. Spacing: MIN_CHUNK_GAP_BETWEEN_CARDS
-    # 2. Section limit: Max 3 cards per section
+    # Guardrail tracking (Warm-Start Budget):
+    # 1. Spacing: WARM_START_CHUNK_GAP
+    # 2. Section limit: WARM_START_MAX_PER_SECTION cards per section
+    # 3. Total budget: WARM_START_MAX_CARDS (not a whole-book limit!)
     accepted_sequences: list[int] = []
     seen_wiki_titles: set[str] = set()
     section_card_counts: Counter[str] = Counter()
@@ -507,15 +513,16 @@ def generate_context_cards(
 
     wiki_lookups_done = 0
     candidates_evaluated = 0
-    total_candidates = min(len(concepts), MAX_WIKI_LOOKUPS_PER_DOC)
+    total_candidates = min(len(concepts), WARM_START_WIKI_LOOKUPS)
 
     archetype_names = ["REAL-WORLD STUDY", "COUNTER-INTUITIVE FACT", "HISTORICAL BACKSTORY", "THE HIDDEN MECHANISM"]
 
     for concept in concepts:
-        if len(cards) >= MAX_CARDS_PER_DOC:
+        # Warm-start budget check - this is NOT a whole-book limit
+        if len(cards) >= WARM_START_MAX_CARDS:
             break
 
-        if candidates_evaluated >= MAX_WIKI_LOOKUPS_PER_DOC:
+        if candidates_evaluated >= WARM_START_WIKI_LOOKUPS:
             break
 
         concept_norm = concept.name.strip().lower()
@@ -529,26 +536,30 @@ def generate_context_cards(
             concept.status = "skipped_trivial"
             continue
 
-        # Document-wide concept deduplication: NEVER reuse an already carded concept in this book
-        if concept_norm in used_concepts or (slug and slug in used_concepts):
-            concept.status = "skipped_duplicate"
-            continue
+        # NOTE: Document-wide concept deduplication REMOVED for warm-start.
+        # Deduplication now happens at claim/evidence level, not concept level.
+        # A concept can appear in multiple cards if each card has distinct evidence/claims.
 
         chunk = chunk_map.get(concept.chunk_id or "")
         if not chunk:
             concept.status = "skipped"
             continue
 
-        # Guardrail 1: Gap check (max 1 card every 2-4 chunks)
+        # Guardrail 1: Gap check (minimum spacing between cards)
         seq = chunk.sequence
-        gap_ok = all(abs(seq - s) >= MIN_CHUNK_GAP_BETWEEN_CARDS for s in accepted_sequences)
+        gap_ok = all(abs(seq - s) >= WARM_START_CHUNK_GAP for s in accepted_sequences)
         if not gap_ok:
             concept.status = "skipped"
             continue
 
-        # Guardrail 2: Section limit (max 3 cards per section)
-        sec_title = chunk.section_title or "__doc_body__"
-        if section_card_counts[sec_title] >= 3:
+        # Guardrail 2: Section limit (per-section quota for warm-start)
+        # Use stable section ID if available, otherwise generate from chunk range
+        sec_title = chunk.section_title
+        if not sec_title:
+            # Generate a stable section identifier from chunk sequence range
+            # This prevents all unrecognized sections from collapsing into one bucket
+            sec_title = f"section_unknown_{((seq - 1) // 10) * 10 + 1}-{((seq - 1) // 10) * 10 + 10}"
+        if section_card_counts[sec_title] >= WARM_START_MAX_PER_SECTION:
             concept.status = "skipped"
             continue
 

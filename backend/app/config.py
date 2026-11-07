@@ -53,14 +53,29 @@ MIN_CHUNK_WORDS: int = 35
 MAX_CHUNK_WORDS: int = 65
 MAX_CHUNK_CHARS: int = 380
 MARGIN_FRACTION: float = 0.07
-MAX_CARDS_PER_DOC: int = 8
-MIN_CHUNK_GAP_BETWEEN_CARDS: int = 3
+
+# Card Generation - Warm Start Budget (initial batch at ingestion time)
+# This is NOT a whole-book limit. Full coverage is handled by ReadAheadPipeline.
+WARM_START_MAX_CARDS: int = 24  # 3x previous, allows diverse initial coverage
+WARM_START_WIKI_LOOKUPS: int = 24
+WARM_START_CHUNK_GAP: int = 3
+WARM_START_MAX_PER_SECTION: int = 5  # Per-section quota for warm start
+
+# Card Generation - Coverage-Based Ongoing (ReadAheadPipeline)
+COVERAGE_CARDS_PER_1000_WORDS: int = 4  # Target: ~1 card per 250 eligible words
+COVERAGE_MIN_CHUNK_GAP: int = 3
+COVERAGE_MAX_SECTION_QUOTA: int = 8  # Per-section max for ongoing generation
+
+# Legacy aliases for backward compatibility (DEPRECATED - use warm_start/coverage constants)
+MAX_CARDS_PER_DOC: int = WARM_START_MAX_CARDS
+MIN_CHUNK_GAP_BETWEEN_CARDS: int = WARM_START_CHUNK_GAP
+MAX_WIKI_LOOKUPS_PER_DOC: int = WARM_START_WIKI_LOOKUPS
+
 CARD_MAX_WORDS: int = 80
 ASK_MAX_QUESTION_CHARS: int = 300
 ASK_MAX_ANSWER_WORDS: int = 120
 WIKI_TIMEOUT_S: float = 8.0
 LLM_TIMEOUT_S: float = 20.0
-MAX_WIKI_LOOKUPS_PER_DOC: int = 14
 STATUS_POLL_MS: int = 1500
 ASK_RATE_LIMIT: int = 12  # requests per minute
 MAX_UPLOAD_SIZE_BYTES: int = settings.MAX_UPLOAD_SIZE_BYTES

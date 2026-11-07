@@ -68,8 +68,20 @@ def assemble_canonical_text(
     if not units:
         return "", []
 
-    # Semantic Zone Partitioning: Exclude printed TOC entries, front matter, noise, footnotes, and back matter from reading prose
-    body_units = [u for u in units if u.get("type") not in ("contents_entry", "front_matter", "noise", "footnote", "back_matter")]
+    # Semantic Zone Partitioning: Exclude printed TOC entries, noise, and footnotes while preserving substantive preface/foreword prose (RC-04)
+    def _is_droppable_unit(u: Dict[str, Any]) -> bool:
+        u_type = u.get("type")
+        if u_type in ("contents_entry", "noise", "footnote"):
+            return True
+        if u_type in ("front_matter", "back_matter"):
+            text_low = u.get("text", "").lower()
+            if any(term in text_low for term in ("preface", "foreword", "prologue", "introduction")):
+                if len(text_low.split()) >= 40:
+                    return False
+            return True
+        return False
+
+    body_units = [u for u in units if not _is_droppable_unit(u)]
     target_units = body_units if body_units else units
 
     # 1. Dehyphenate and stitch cross-unit splits (e.g. page-break hyphens like 'responsi-' and 'bility')

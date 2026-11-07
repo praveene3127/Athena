@@ -247,7 +247,7 @@ pub fn plan_feed_chunks_core(
         return Err("Mismatched atom slice lengths".to_string());
     }
 
-    let min_words = 35.max((target_words as f64 * 0.70) as usize);
+    let min_words = 35.max((target_words as f64 * 0.55) as usize);
     let max_words = 65usize;
     let max_chars = 380usize;
 

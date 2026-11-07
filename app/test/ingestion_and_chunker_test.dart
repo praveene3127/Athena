@@ -491,5 +491,56 @@ void main() {
       final reconstructedDigest = sha256.convert(utf8.encode(reconstructed)).toString();
       expect(reconstructedDigest, equals(originalDigest), reason: 'Lossless SHA-256 digest must match exactly');
     });
+
+    test('9. whitespaceSafeRanges never bisects an oversized lexical token (RC-01)', () {
+      final text = 'x' * 500;
+      final ranges = whitespaceSafeRanges(text);
+      expect(ranges, [(0, text.length)]);
+      expect(text.substring(ranges.first.$1, ranges.first.$2), equals(text));
+    });
+
+    test('10. unicode whitespace yields intact canonical slices (RC-01)', () {
+      final text = List.filled(120, 'word').join('\u00A0');
+      final ranges = whitespaceSafeRanges(text);
+      expect(ranges.map((r) => text.substring(r.$1, r.$2)).join(), text);
+      for (final r in ranges.take(ranges.length - 1)) {
+        expect(text[r.$2 - 1], '\u00A0');
+      }
+    });
+
+    test('11. short-word inputs respect the selected word budget (RC-01)', () {
+      final text = List.filled(200, 'a').join(' ');
+      final ranges = whitespaceSafeRanges(text, maxWords: 65);
+      for (final r in ranges) {
+        final count = text.substring(r.$1, r.$2).trim().split(' ').length;
+        expect(count, lessThanOrEqualTo(65));
+      }
+    });
+
+    test('12. derived complex words are preserved without blind segmentation (RC-02)', () {
+      const derivedWords = [
+        'understanding',
+        'counterintuitive',
+        'electromagnetism',
+        'reconstruction',
+        'subconscious',
+      ];
+      for (final word in derivedWords) {
+        final sanitized = sanitizeProseSpacing(word);
+        expect(sanitized, equals(word), reason: '$word must not be segmented into pieces');
+      }
+    });
+
+    test('13. substantive preface with authentic prose is preserved (RC-04)', () {
+      final prefaceLines = [
+        LineFragment(text: 'PREFACE TO THE SECOND EDITION', top: 10, bottom: 25, left: 50, right: 350, height: 15, width: 300),
+        LineFragment(text: 'This work explores the foundations of psychological and cognitive principles.', top: 35, bottom: 50, left: 50, right: 400, height: 15, width: 350),
+        LineFragment(text: 'Over the last decade, empirical studies have illuminated many obscure mechanisms.', top: 55, bottom: 70, left: 50, right: 400, height: 15, width: 350),
+        LineFragment(text: 'We now present the complete revised findings for scientific consideration.', top: 75, bottom: 90, left: 50, right: 400, height: 15, width: 350),
+      ];
+      final rawText = prefaceLines.map((l) => l.text).join('\n');
+      final score = DocumentIngestionPipeline.scoreFrontOrBackMatter(prefaceLines, rawText);
+      expect(score < 40, isTrue, reason: 'Substantive preface must not be classified as droppable front matter');
+    });
   });
 }
