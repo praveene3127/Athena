@@ -1,5 +1,6 @@
 import 'dart:convert';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:sqflite_common_ffi/sqflite_ffi.dart';
 import 'package:athena/core/config/config.dart';
 import 'package:athena/services/lossless_chunker.dart';
 import 'package:athena/models/document.dart';
@@ -7,6 +8,10 @@ import 'package:athena/features/reader/controllers/reader_feed_builder.dart';
 import 'package:athena/core/api/api_client.dart';
 
 void main() {
+  TestWidgetsFlutterBinding.ensureInitialized();
+  sqfliteFfiInit();
+  databaseFactory = databaseFactoryFfi;
+
   group('Standalone Mobile Mode & Speed Parity Tests', () {
     test('AppConfig resolves standalone mobile mode without loopback trap', () {
       final url = AppConfig.resolveBaseUrl(

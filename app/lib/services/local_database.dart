@@ -47,7 +47,7 @@ class LocalDatabase {
     }
     return openDatabase(
       dbPath,
-      version: 1,
+      version: 2,
       onConfigure: (db) async {
         await db.execute('PRAGMA foreign_keys = ON');
         try {
@@ -59,8 +59,64 @@ class LocalDatabase {
           debugPrint('Athena SQLite pragma notice: $e');
         }
       },
+      onUpgrade: (db, oldVersion, newVersion) async {
+        if (oldVersion < 2) {
+          try {
+            final docColumns =
+                await db.rawQuery('PRAGMA table_info(documents)');
+            final docColumnNames = docColumns
+                .map((row) => row['name'])
+                .whereType<String>()
+                .toSet();
+            if (!docColumnNames.contains('cards_generated')) {
+              await db.execute('ALTER TABLE documents ADD COLUMN cards_generated INTEGER DEFAULT 0');
+            }
+            if (!docColumnNames.contains('current_chunk_index')) {
+              await db.execute('ALTER TABLE documents ADD COLUMN current_chunk_index INTEGER DEFAULT 0');
+            }
+            if (!docColumnNames.contains('current_chunk_id')) {
+              await db.execute('ALTER TABLE documents ADD COLUMN current_chunk_id TEXT');
+            }
+            if (!docColumnNames.contains('reading_mode')) {
+              await db.execute('ALTER TABLE documents ADD COLUMN reading_mode TEXT DEFAULT \'feed\'');
+            }
+          } catch (e) {
+            debugPrint('Athena SQLite upgrade v2 notice: $e');
+          }
+        }
+      },
       onOpen: (db) async {
         try {
+          final docColumns =
+              await db.rawQuery('PRAGMA table_info(documents)');
+          final docColumnNames = docColumns
+              .map((row) => row['name'])
+              .whereType<String>()
+              .toSet();
+          if (docColumnNames.isNotEmpty) {
+            if (!docColumnNames.contains('total_words')) {
+              await db.execute('ALTER TABLE documents ADD COLUMN total_words INTEGER DEFAULT 0');
+            }
+            if (!docColumnNames.contains('total_characters')) {
+              await db.execute('ALTER TABLE documents ADD COLUMN total_characters INTEGER DEFAULT 0');
+            }
+            if (!docColumnNames.contains('reading_time_minutes')) {
+              await db.execute('ALTER TABLE documents ADD COLUMN reading_time_minutes INTEGER DEFAULT 0');
+            }
+            if (!docColumnNames.contains('cards_generated')) {
+              await db.execute('ALTER TABLE documents ADD COLUMN cards_generated INTEGER DEFAULT 0');
+            }
+            if (!docColumnNames.contains('current_chunk_index')) {
+              await db.execute('ALTER TABLE documents ADD COLUMN current_chunk_index INTEGER DEFAULT 0');
+            }
+            if (!docColumnNames.contains('current_chunk_id')) {
+              await db.execute('ALTER TABLE documents ADD COLUMN current_chunk_id TEXT');
+            }
+            if (!docColumnNames.contains('reading_mode')) {
+              await db.execute('ALTER TABLE documents ADD COLUMN reading_mode TEXT DEFAULT \'feed\'');
+            }
+          }
+
           final chunkColumns =
               await db.rawQuery('PRAGMA table_info(reading_chunks)');
           final columnNames = chunkColumns
@@ -121,6 +177,13 @@ class LocalDatabase {
             integrity_verified INTEGER NOT NULL DEFAULT 0,
             original_checksum TEXT,
             reconstructed_checksum TEXT,
+            total_words INTEGER DEFAULT 0,
+            total_characters INTEGER DEFAULT 0,
+            reading_time_minutes INTEGER DEFAULT 0,
+            current_chunk_index INTEGER DEFAULT 0,
+            current_chunk_id TEXT,
+            reading_mode TEXT DEFAULT 'feed',
+            cards_generated INTEGER DEFAULT 0,
             layout_warning TEXT,
             context_status TEXT NOT NULL DEFAULT 'pending',
             error_code TEXT,
@@ -167,10 +230,10 @@ class LocalDatabase {
             why_here TEXT NOT NULL,
             citations_json TEXT NOT NULL DEFAULT '[]',
             exact_quote TEXT,
-            support_status TEXT NOT NULL DEFAULT 'fully_supported',
+            support_status TEXT NOT NULL DEFAULT 'unverified',
             canonical_sha256 TEXT NOT NULL,
             generation_mode TEXT NOT NULL DEFAULT 'extractive',
-            verified INTEGER NOT NULL DEFAULT 1,
+            verified INTEGER NOT NULL DEFAULT 0,
             saved INTEGER NOT NULL DEFAULT 0,
             dismissed INTEGER NOT NULL DEFAULT 0,
             created_at TEXT NOT NULL
@@ -382,6 +445,8 @@ class LocalDatabase {
     int? totalWords,
     int? totalCharacters,
     int? readingTimeMinutes,
+    String? canonicalSha256,
+    int? integrityVerified,
   }) async {
     final db = await database;
     final updates = <String, Object?>{
@@ -398,6 +463,13 @@ class LocalDatabase {
     if (totalCharacters != null) updates['total_characters'] = totalCharacters;
     if (readingTimeMinutes != null) {
       updates['reading_time_minutes'] = readingTimeMinutes;
+    }
+    if (canonicalSha256 != null) {
+      updates['original_checksum'] = canonicalSha256;
+      updates['reconstructed_checksum'] = canonicalSha256;
+    }
+    if (integrityVerified != null) {
+      updates['integrity_verified'] = integrityVerified;
     }
 
     await db.update('documents', updates, where: 'id = ?', whereArgs: [id]);
@@ -465,23 +537,77 @@ class LocalDatabase {
   };
 
   Future<void> insertCards(List<Map<String, Object?>> cards) async {
+    if (cards.isEmpty) return;
     final db = await database;
-    final batch = db.batch();
-    for (final c in cards) {
-      final sanitized = <String, Object?>{};
-      for (final entry in c.entries) {
-        if (_validCardColumns.contains(entry.key)) {
-          if (entry.value is bool) {
-            sanitized[entry.key] = (entry.value as bool) ? 1 : 0;
-          } else {
-            sanitized[entry.key] = entry.value;
+    await db.transaction((txn) async {
+      final batch = txn.batch();
+      for (final c in cards) {
+        final sanitized = <String, Object?>{};
+        for (final entry in c.entries) {
+          if (_validCardColumns.contains(entry.key)) {
+            if (entry.value is bool) {
+              sanitized[entry.key] = (entry.value as bool) ? 1 : 0;
+            } else {
+              sanitized[entry.key] = entry.value;
+            }
           }
         }
+        final id = sanitized['id']?.toString() ?? '';
+        if (id.isEmpty) continue;
+
+        batch.rawInsert('''
+          INSERT INTO context_cards (
+            id, document_id, source_chunk_id, concept_name, card_type, title, body,
+            why_here, citations_json, exact_quote, support_status, canonical_sha256,
+            generation_mode, verified, saved, dismissed, created_at
+          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+          ON CONFLICT(id) DO UPDATE SET
+            document_id = excluded.document_id,
+            source_chunk_id = excluded.source_chunk_id,
+            concept_name = excluded.concept_name,
+            card_type = excluded.card_type,
+            title = excluded.title,
+            body = excluded.body,
+            why_here = excluded.why_here,
+            citations_json = excluded.citations_json,
+            exact_quote = excluded.exact_quote,
+            support_status = excluded.support_status,
+            canonical_sha256 = excluded.canonical_sha256,
+            generation_mode = excluded.generation_mode,
+            verified = excluded.verified,
+            saved = context_cards.saved,
+            dismissed = context_cards.dismissed
+        ''', [
+          sanitized['id'],
+          sanitized['document_id'],
+          sanitized['source_chunk_id'],
+          sanitized['concept_name'] ?? '',
+          sanitized['card_type'] ?? 'context',
+          sanitized['title'] ?? '',
+          sanitized['body'] ?? '',
+          sanitized['why_here'] ?? '',
+          sanitized['citations_json'] ?? '[]',
+          sanitized['exact_quote'],
+          sanitized['support_status'] ?? 'unverified',
+          sanitized['canonical_sha256'] ?? '',
+          sanitized['generation_mode'] ?? 'grounded',
+          sanitized['verified'] ?? 0,
+          sanitized['saved'] ?? 0,
+          sanitized['dismissed'] ?? 0,
+          sanitized['created_at'] ?? DateTime.now().toIso8601String(),
+        ]);
       }
-      batch.insert('context_cards', sanitized,
-          conflictAlgorithm: ConflictAlgorithm.replace);
+      await batch.commit(noResult: true);
+    });
+
+    try {
+      final docId = cards.first['document_id']?.toString();
+      if (docId != null && docId.isNotEmpty) {
+        await markCardsGenerated(docId, generated: true);
+      }
+    } catch (e) {
+      debugPrint('Athena markCardsGenerated notice: $e');
     }
-    await batch.commit(noResult: true);
   }
 
   Future<void> deleteDocument(String id) async {
@@ -579,6 +705,10 @@ class LocalDatabase {
     final db = await database;
     final docRows = await db.query('documents',
         where: 'id = ?', whereArgs: [documentId], limit: 1);
+    final docMap = docRows.isNotEmpty
+        ? Map<String, dynamic>.from(docRows.first)
+        : <String, dynamic>{};
+
     final chunkRows = await db.query('reading_chunks',
         where: 'document_id = ?',
         whereArgs: [documentId],
@@ -586,8 +716,10 @@ class LocalDatabase {
     var cardRows = await db.query('context_cards',
         where: 'document_id = ? AND dismissed = 0', whereArgs: [documentId]);
 
-    // Safety fallback: If context_cards are empty for this document, synthesize cards now!
-    if (cardRows.isEmpty && chunkRows.isNotEmpty) {
+    final int cardsGenerated = (docMap['cards_generated'] as num?)?.toInt() ?? 0;
+
+    // Safety fallback: If context_cards are empty for this document AND cards were never generated before, synthesize cards now!
+    if (cardsGenerated == 0 && cardRows.isEmpty && chunkRows.isNotEmpty) {
       final chunkMaps =
           chunkRows.map((r) => Map<String, Object?>.from(r)).toList();
       final contextService = LocalContextService();
@@ -599,6 +731,8 @@ class LocalDatabase {
             where: 'document_id = ? AND dismissed = 0',
             whereArgs: [documentId]);
       }
+      await markCardsGenerated(documentId, generated: true);
+      docMap['cards_generated'] = 1;
     }
 
     final chunks = chunkRows.map((r) => Map<String, dynamic>.from(r)).toList();
@@ -619,7 +753,21 @@ class LocalDatabase {
         debugPrint('Athena BinaryBookTape read fallback: $e');
       }
     }
-    final cards = cardRows.map((r) => Map<String, dynamic>.from(r)).toList();
+
+    final cards = cardRows.map((r) {
+      final m = Map<String, dynamic>.from(r);
+      m['type'] = 'context_card';
+      return m;
+    }).toList();
+
+    // Group cards by chunk ID in O(M) time
+    final cardsByChunkId = <String, List<Map<String, dynamic>>>{};
+    for (final card in cards) {
+      final srcId = card['source_chunk_id']?.toString() ?? '';
+      if (srcId.isNotEmpty) {
+        (cardsByChunkId[srcId] ??= []).add(card);
+      }
+    }
 
     final items = <Map<String, dynamic>>[];
     final assignedCardIds = <String>{};
@@ -652,8 +800,7 @@ class LocalDatabase {
         'boundary_method': chunk['boundary_method'] ?? 'paragraph',
       });
 
-      final matchingCards =
-          cards.where((c) => c['source_chunk_id'] == chunk['id']).toList();
+      final matchingCards = cardsByChunkId[chunk['id']] ?? const [];
       for (final card in matchingCards) {
         assignedCardIds.add(card['id'] as String);
         List citations = [];
@@ -676,7 +823,8 @@ class LocalDatabase {
           'body': card['body'] ?? '',
           'why_here': card['why_here'] ?? '',
           'exact_quote': card['exact_quote'],
-          'support_status': card['support_status'] ?? 'fully_supported',
+          'support_status': card['support_status'] ?? 'unverified',
+          'verified': card['verified'] == 1,
           'generation_mode': card['generation_mode'] ?? 'grounded',
           'is_speculative_draft':
               card['generation_mode'] == 'speculative_draft',
@@ -717,7 +865,8 @@ class LocalDatabase {
               'body': card['body'] ?? '',
               'why_here': card['why_here'] ?? '',
               'exact_quote': card['exact_quote'],
-              'support_status': card['support_status'] ?? 'fully_supported',
+              'support_status': card['support_status'] ?? 'unverified',
+              'verified': card['verified'] == 1,
               'generation_mode': card['generation_mode'] ?? 'grounded',
               'is_speculative_draft':
                   card['generation_mode'] == 'speculative_draft',
@@ -730,9 +879,6 @@ class LocalDatabase {
       }
     }
 
-    final docMap = docRows.isNotEmpty
-        ? Map<String, dynamic>.from(docRows.first)
-        : <String, dynamic>{};
     if (!docMap.containsKey('integrity')) {
       docMap['integrity'] = {
         'verified': true,
@@ -740,12 +886,61 @@ class LocalDatabase {
       };
     }
 
+    // Preload chunk edits
+    final editsRows = await db.query(
+      'chunk_user_edits',
+      where: 'document_id = ?',
+      whereArgs: [documentId],
+    );
+    final chunkEditsMap = <String, Map<String, dynamic>>{
+      for (final r in editsRows)
+        (r['chunk_id'] as String): Map<String, dynamic>.from(r),
+    };
+
     return {
       'document': docMap,
       'items': items,
       'chunks': chunks,
       'cards': cards,
+      'chunk_edits': chunkEditsMap,
     };
+  }
+
+  Future<void> markCardsGenerated(String documentId, {bool generated = true}) async {
+    final db = await database;
+    await db.update(
+      'documents',
+      {'cards_generated': generated ? 1 : 0},
+      where: 'id = ?',
+      whereArgs: [documentId],
+    );
+  }
+
+  Future<Map<String, dynamic>?> getChunkById(String chunkId) async {
+    return getChunk(chunkId);
+  }
+
+  Future<void> updateReadingPosition(
+    String documentId, {
+    required int chunkIndex,
+    String? chunkId,
+    String readingMode = 'feed',
+  }) async {
+    final db = await database;
+    final updates = <String, Object?>{
+      'current_chunk_index': chunkIndex,
+      'reading_mode': readingMode,
+      'updated_at': DateTime.now().toIso8601String(),
+    };
+    if (chunkId != null) {
+      updates['current_chunk_id'] = chunkId;
+    }
+    await db.update(
+      'documents',
+      updates,
+      where: 'id = ?',
+      whereArgs: [documentId],
+    );
   }
 
   Future<List<Map<String, dynamic>>> getSavedCards() async {

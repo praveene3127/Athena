@@ -68,29 +68,48 @@ def is_healthy(url: str) -> bool:
 
 def main():
     lan_ip = get_lan_ip()
+    bind_lan = "--lan" in sys.argv or os.environ.get("ATHENA_BIND_LAN", "").lower() in {"1", "true"}
+    host = "0.0.0.0" if bind_lan else "127.0.0.1"
+
+    pairing_token = os.environ.get("ATHENA_PAIRING_TOKEN", "").strip()
+    if not pairing_token and bind_lan:
+        import secrets
+        pairing_token = secrets.token_hex(16)
+        os.environ["ATHENA_PAIRING_TOKEN"] = pairing_token
+
     print("=" * 68)
     print("           ATHENA UNIFIED PIPELINE SUPERVISOR")
     print(f"  Local API   : http://127.0.0.1:8000/api/health")
-    print(f"  Wi-Fi LAN   : http://{lan_ip}:8000  (Connect phone wirelessly)")
+    if bind_lan:
+        print(f"  Wi-Fi LAN   : http://{lan_ip}:8000  (Connect phone wirelessly)")
+        print(f"  Pair Token  : {pairing_token}  (Enter in App -> Server Settings)")
+    else:
+        print(f"  Host Mode   : Localhost (127.0.0.1) — pass --lan to expose on Wi-Fi")
     print(f"  Web Reader  : http://127.0.0.1:8080")
     print(f"  Pair Info   : http://127.0.0.1:8000/api/pair-info")
     print("=" * 68)
 
     try_adb_reverse()
 
-    # Bind Uvicorn to 0.0.0.0 so both localhost and LAN phone can reach it
+    backend_env = os.environ.copy()
+    if pairing_token:
+        backend_env["ATHENA_PAIRING_TOKEN"] = pairing_token
+    if bind_lan:
+        backend_env["ATHENA_BIND_LAN"] = "1"
+
+    # Default to 127.0.0.1 unless --lan is passed
     backend_cmd = [
         VENV_PYTHON,
         "-m",
         "uvicorn",
         "app.main:app",
         "--host",
-        "0.0.0.0",
+        host,
         "--port",
         "8000",
     ]
-    print("[Athena] Starting FastAPI backend on 0.0.0.0:8000...")
-    backend_proc = subprocess.Popen(backend_cmd, cwd=BACKEND_DIR)
+    print(f"[Athena] Starting FastAPI backend on {host}:8000...")
+    backend_proc = subprocess.Popen(backend_cmd, cwd=BACKEND_DIR, env=backend_env)
 
     proxy_cmd = [VENV_PYTHON, os.path.join(ROOT_DIR, "scripts", "port_8080_forwarder.py")]
     print("[Athena] Starting Web Reader bridge on 0.0.0.0:8080...")
@@ -101,7 +120,7 @@ def main():
             if backend_proc.poll() is not None:
                 print("[Athena] Backend exited unexpectedly. Restarting in 2s...")
                 time.sleep(2)
-                backend_proc = subprocess.Popen(backend_cmd, cwd=BACKEND_DIR)
+                backend_proc = subprocess.Popen(backend_cmd, cwd=BACKEND_DIR, env=backend_env)
 
             if proxy_proc.poll() is not None:
                 proxy_proc = subprocess.Popen(proxy_cmd, cwd=ROOT_DIR)

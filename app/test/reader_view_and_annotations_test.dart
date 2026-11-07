@@ -16,21 +16,21 @@ void main() {
     // -------------------------------------------------------------
     test('Test 1 - Word Spacing & Single-Screen Chunk Invariant', () {
       const rawTextWithKerning =
-          'candle.HeadmasterGaleNolan,ahusky boy who carried banners.\n'
-          'Thefourboyswhocarriedbannersmarchedsolemnlytothedais, '
-          'followedslowlybytheelderlymen, thelastofwhomproudlycarriedthelightedcandle. '
-          'Headmaster Gale Nolan, '
-          'ahuskymaninhisearlysixties, stoodatthepodiumwatchingexpectantlyastheprocessionconcluded. '
-          '“Ladiesandgentlemen...boys...” '
-          'hesaiddramatically, pointingtowardthemanwiththecandle. '
-          '“Thelightofknowledge.” Theaudienceapplaudedpolitelyastheoldergentlemansteppedslowlyforwardwiththecandle.';
+          'light.ProfessorJamesAllen,aquiet student who carried books.\n'
+          'Thefouryoungstudentswhocarriedbookswalkedslowlytotheschool, '
+          'followedslowlybytheelderlymen, thelastofwhomproudlycarriedthelight. '
+          'Professor James Allen, '
+          'aquietmaninhisearlysixties, stoodatthepodiumwatchingexpectantlyastheprocessionconcluded. '
+          '“Ladiesandgentlemen...students...” '
+          'hesaiddramatically, pointingtowardthemanwiththelight. '
+          '“Thelightofknowledge.” Theaudienceapplaudedpolitelyastheoldergentlemansteppedslowlyforwardwiththelight.';
 
       final sanitized = sanitizeProseSpacing(rawTextWithKerning);
 
       // 1. Spacing invariant: words separated properly
-      expect(sanitized, contains('Headmaster Gale Nolan'));
-      expect(sanitized, contains('a husky man in his early sixties'));
-      expect(sanitized, contains('The four boys who carried banners marched solemnly to the dais'));
+      expect(sanitized, contains('Professor James Allen'));
+      expect(sanitized, contains('a quiet man in his early sixties'));
+      expect(sanitized, contains('The four young students who carried books walked slowly to the school'));
       expect(sanitized, contains('followed slowly by the elderly men'));
 
       // 2. Chunker invariant: chunks must not overflow single mobile screen (< 75 words, <= 450 chars)

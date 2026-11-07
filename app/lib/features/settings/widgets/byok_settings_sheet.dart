@@ -100,10 +100,15 @@ class _BYOKSettingsSheetState extends State<BYOKSettingsSheet> {
   final _keyController = TextEditingController();
   final _baseUrlController = TextEditingController();
   final _serverUrlController = TextEditingController();
+  final _pairingTokenController = TextEditingController();
 
   List<AIModelOption> _models = [];
   bool? _testOk;
   String? _testMessage;
+
+  bool _testingServer = false;
+  bool? _serverTestOk;
+  String? _serverTestMessage;
 
   bool _providerMenuOpen = false;
   bool _modelMenuOpen = false;
@@ -121,6 +126,7 @@ class _BYOKSettingsSheetState extends State<BYOKSettingsSheet> {
     _keyController.dispose();
     _baseUrlController.dispose();
     _serverUrlController.dispose();
+    _pairingTokenController.dispose();
     super.dispose();
   }
 
@@ -141,12 +147,14 @@ class _BYOKSettingsSheetState extends State<BYOKSettingsSheet> {
       final savedBaseUrl = prefs.getString('athena_ai_primary_base_url') ??
           (config.primaryBaseUrl ?? '');
       final serverUrl = await SecureStorageService.instance.getBackendUrl();
+      final pairingToken = await SecureStorageService.instance.getPairingToken();
 
       setState(() {
         _provider = savedProvider;
         _keyController.text = savedKey;
         _baseUrlController.text = savedBaseUrl;
         _serverUrlController.text = serverUrl;
+        _pairingTokenController.text = pairingToken;
         _serverExpanded = widget.initialExpandServer;
         _selectedModel = savedModel;
         _models = savedModel != null && savedModel.isNotEmpty
@@ -157,6 +165,35 @@ class _BYOKSettingsSheetState extends State<BYOKSettingsSheet> {
     } catch (e) {
       if (mounted) setState(() => _loading = false);
     }
+  }
+
+  Future<void> _testServerConnection() async {
+    final serverUrl = _serverUrlController.text.trim();
+    if (serverUrl.isEmpty) {
+      setState(() {
+        _serverTestOk = false;
+        _serverTestMessage = 'Please enter a desktop server URL to test (e.g. http://192.168.1.100:8000)';
+      });
+      return;
+    }
+    setState(() {
+      _testingServer = true;
+      _serverTestOk = null;
+      _serverTestMessage = null;
+    });
+
+    final res = await _api.testServerConnection(
+      serverUrl: serverUrl,
+      pairingToken: _pairingTokenController.text.trim(),
+    );
+
+    if (!mounted) return;
+    setState(() {
+      _testingServer = false;
+      _serverTestOk = res['ok'] == true;
+      _serverTestMessage = res['message']?.toString() ??
+          (res['ok'] == true ? 'Connected successfully!' : 'Connection failed');
+    });
   }
 
   Future<void> _pasteFromClipboard() async {
@@ -261,6 +298,8 @@ class _BYOKSettingsSheetState extends State<BYOKSettingsSheet> {
       );
       await SecureStorageService.instance
           .setBackendUrl(_serverUrlController.text.trim());
+      await SecureStorageService.instance
+          .setPairingToken(_pairingTokenController.text.trim());
 
       if (!mounted) return;
       setState(() => _saving = false);
@@ -991,6 +1030,85 @@ class _BYOKSettingsSheetState extends State<BYOKSettingsSheet> {
                                     : AppTheme.textPrimary,
                               ),
                             ),
+                            const SizedBox(height: 8),
+                            TextField(
+                              controller: _pairingTokenController,
+                              keyboardType: TextInputType.text,
+                              autocorrect: false,
+                              decoration: _buildInputDecoration(
+                                isDark,
+                                hintText: 'Pairing Token (from desktop terminal)',
+                              ),
+                              style: TextStyle(
+                                fontFamily: AppTheme.fontMono,
+                                fontSize: 13,
+                                color: isDark
+                                    ? Colors.white
+                                    : AppTheme.textPrimary,
+                              ),
+                            ),
+                            const SizedBox(height: 10),
+                            Row(
+                              children: [
+                                OutlinedButton(
+                                  onPressed: _testingServer
+                                      ? null
+                                      : _testServerConnection,
+                                  style: OutlinedButton.styleFrom(
+                                    padding: const EdgeInsets.symmetric(
+                                        horizontal: 14, vertical: 8),
+                                    side: BorderSide(color: borderColor),
+                                    shape: RoundedRectangleBorder(
+                                      borderRadius: BorderRadius.circular(8),
+                                    ),
+                                  ),
+                                  child: _testingServer
+                                      ? const SizedBox(
+                                          width: 14,
+                                          height: 14,
+                                          child: CircularProgressIndicator(
+                                              strokeWidth: 2),
+                                        )
+                                      : const Text(
+                                          'Test Server Connection',
+                                          style: TextStyle(
+                                            fontSize: 12,
+                                            fontWeight: FontWeight.w600,
+                                          ),
+                                        ),
+                                ),
+                              ],
+                            ),
+                            if (_serverTestMessage != null) ...[
+                              const SizedBox(height: 8),
+                              Container(
+                                width: double.infinity,
+                                padding: const EdgeInsets.all(10),
+                                decoration: BoxDecoration(
+                                  color: _serverTestOk == true
+                                      ? const Color(0xFF2D6A4F)
+                                          .withValues(alpha: 0.12)
+                                      : Colors.red.withValues(alpha: 0.12),
+                                  borderRadius: BorderRadius.circular(8),
+                                  border: Border.all(
+                                    color: _serverTestOk == true
+                                        ? const Color(0xFF2D6A4F)
+                                        : Colors.redAccent,
+                                    width: 1.0,
+                                  ),
+                                ),
+                                child: Text(
+                                  _serverTestMessage!,
+                                  style: TextStyle(
+                                    fontFamily: AppTheme.fontUI,
+                                    fontSize: 12,
+                                    color: _serverTestOk == true
+                                        ? const Color(0xFF2D6A4F)
+                                        : Colors.redAccent,
+                                  ),
+                                ),
+                              ),
+                            ],
                             const SizedBox(height: 6),
                             Text(
                               'Leave blank to use Athena locally on this device.',

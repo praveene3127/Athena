@@ -10,8 +10,50 @@ permissions:
   contents: write
 
 jobs:
+  test:
+    name: quality-gates-test
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python 3.11
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          cache: 'pip'
+
+      - name: Install backend dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r backend/requirements.txt
+          pip install pytest httpx
+
+      - name: Run backend pytest suite
+        run: |
+          pytest backend/tests -q
+
+      - name: Set up Java 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - name: Set up Flutter
+        uses: subosito/flutter-action@v2
+        with:
+          channel: stable
+          cache: true
+
+      - name: Run Flutter analyze and test
+        working-directory: app
+        run: |
+          flutter pub get
+          flutter analyze lib
+          flutter test
+
   build-android:
     name: build-android
+    needs: [test]
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4

@@ -198,21 +198,22 @@ class ContextCardWidget extends StatelessWidget {
     return b;
   }
 
-  static Map<String, String> _extractSource(ReaderItem item) {
+  static Map<String, String>? _extractSource(ReaderItem item) {
     if (item.citations != null && item.citations!.isNotEmpty) {
       try {
         final first = item.citations!.first;
         final pub =
-            (first['publisher'] ?? first['title'] ?? 'Academic Registry')
-                .toString();
-        final url = (first['url'] ?? '').toString();
-        return {'publisher': pub, 'url': url};
+            (first['publisher'] ?? first['title'] ?? '').toString().trim();
+        final url = (first['url'] ?? '').toString().trim();
+        if (pub.isNotEmpty || url.isNotEmpty) {
+          return {
+            'publisher': pub.isNotEmpty ? pub : 'External Reference',
+            'url': url,
+          };
+        }
       } catch (_) {}
     }
-    return {
-      'publisher': 'Peer-Reviewed Literature',
-      'url': 'https://doi.org'
-    };
+    return null;
   }
 
   Future<void> _openUrl(String? url) async {
@@ -278,7 +279,7 @@ class ContextCardWidget extends StatelessWidget {
     ({String label, IconData icon, Color color}) lens,
     String displayTitle,
     String displayBody,
-    Map<String, String> sourceInfo,
+    Map<String, String>? sourceInfo,
     bool isSaved,
     String exactQuote,
   ) {
@@ -351,7 +352,7 @@ class ContextCardWidget extends StatelessWidget {
     ({String label, IconData icon, Color color}) lens,
     String displayTitle,
     String displayBody,
-    Map<String, String> sourceInfo,
+    Map<String, String>? sourceInfo,
     bool isSaved,
     String exactQuote,
   ) {
@@ -443,7 +444,7 @@ class ContextCardWidget extends StatelessWidget {
     ({String label, IconData icon, Color color}) lens,
     String displayTitle,
     String displayBody,
-    Map<String, String> sourceInfo,
+    Map<String, String>? sourceInfo,
     bool isSaved,
     String exactQuote,
   ) {
@@ -559,29 +560,6 @@ class ContextCardWidget extends StatelessWidget {
                   ],
                 ),
               ),
-              if (card.isSpeculativeDraft)
-                Container(
-                  padding:
-                      const EdgeInsets.symmetric(horizontal: 5, vertical: 2),
-                  decoration: BoxDecoration(
-                    color: lens.color.withValues(alpha: 0.12),
-                    borderRadius: BorderRadius.circular(4),
-                    border: Border.all(
-                      color: lens.color.withValues(alpha: 0.3),
-                      width: 0.5,
-                    ),
-                  ),
-                  child: Text(
-                    '[ LOCAL SYNTHESIS // UPGRADING... ]',
-                    style: TextStyle(
-                      fontFamily: AppTheme.fontMono,
-                      color: lens.color,
-                      fontSize: 8.5,
-                      fontWeight: FontWeight.w700,
-                      letterSpacing: 0.4,
-                    ),
-                  ),
-                ),
             ],
           ),
         ),
@@ -668,50 +646,56 @@ class ContextCardWidget extends StatelessWidget {
   }
 
   Widget _buildSourceFooter(
-      ReaderThemeConfig theme, Map<String, String> sourceInfo) {
+      ReaderThemeConfig theme, Map<String, String>? sourceInfo) {
+    final hasVerifiedSource =
+        card.isVerified && card.sourceUrl.isNotEmpty && sourceInfo != null;
     return Row(
       children: [
-        Expanded(
-          child: InkWell(
-            borderRadius: BorderRadius.circular(8),
-            onTap: () => _openUrl(sourceInfo['url']),
-            child: Container(
-              padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
-              decoration: BoxDecoration(
-                color: theme.pillBackground,
-                borderRadius: BorderRadius.circular(8),
-                border: Border.all(
-                  color: theme.borderColor.withValues(alpha: 0.8),
+        if (hasVerifiedSource)
+          Expanded(
+            child: InkWell(
+              borderRadius: BorderRadius.circular(8),
+              onTap: () => _openUrl(sourceInfo['url']),
+              child: Container(
+                padding:
+                    const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+                decoration: BoxDecoration(
+                  color: theme.pillBackground,
+                  borderRadius: BorderRadius.circular(8),
+                  border: Border.all(
+                    color: theme.borderColor.withValues(alpha: 0.8),
+                  ),
                 ),
-              ),
-              child: Row(
-                mainAxisSize: MainAxisSize.min,
-                children: [
-                  Icon(Icons.verified_rounded,
-                      size: 14, color: theme.accentColor),
-                  const SizedBox(width: 6),
-                  Flexible(
-                    child: Text(
-                      'SOURCE: ${sourceInfo['publisher']!.toUpperCase()}',
-                      maxLines: 1,
-                      overflow: TextOverflow.ellipsis,
-                      style: TextStyle(
-                        fontFamily: AppTheme.fontUI,
-                        fontSize: 11,
-                        fontWeight: FontWeight.w600,
-                        letterSpacing: 0.5,
-                        color: theme.accentColor,
+                child: Row(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    Icon(Icons.verified_rounded,
+                        size: 14, color: theme.accentColor),
+                    const SizedBox(width: 6),
+                    Flexible(
+                      child: Text(
+                        'SOURCE: ${sourceInfo['publisher']!.toUpperCase()}',
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                        style: TextStyle(
+                          fontFamily: AppTheme.fontUI,
+                          fontSize: 11,
+                          fontWeight: FontWeight.w600,
+                          letterSpacing: 0.5,
+                          color: theme.accentColor,
+                        ),
                       ),
                     ),
-                  ),
-                  const SizedBox(width: 4),
-                  Icon(Icons.open_in_new_rounded,
-                      size: 12, color: theme.accentColor),
-                ],
+                    const SizedBox(width: 4),
+                    Icon(Icons.open_in_new_rounded,
+                        size: 12, color: theme.accentColor),
+                  ],
+                ),
               ),
             ),
-          ),
-        ),
+          )
+        else
+          const Spacer(),
         if (onAskAthena != null) ...[
           const SizedBox(width: 8),
           IconButton(

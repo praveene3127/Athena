@@ -35,8 +35,8 @@ RE_STUDY_TRIGGER = re.compile(
 RE_PHILOSOPHY_TRIGGER = re.compile(
     r"\b(suffering\s+is|meaning\s+(of|requires|in)|paradoxically|human\s+nature|"
     r"freedom\s+(is|to|from)|morality|illusion\s+of|virtue|existential|"
-    r"stoic|epictetus|marcus\s+aurelius|seneca|camus|kierkegaard|nietzsche|"
-    r"buddhis[mt]|taoism|consciousness|epistemolog(y|ical)|ontolog(y|ical)|"
+    r"paradox|contradiction|ethical\s+dilemma|first\s+principles|causality|"
+    r"dialectic|moral\s+imperative|consciousness|epistemolog(y|ical)|ontolog(y|ical)|"
     r"truth\s+is|nature\s+of\s+reality|ethics)\b",
     re.IGNORECASE,
 )
@@ -53,9 +53,10 @@ RE_DIALECTIC_TRIGGER = re.compile(
 
 # 4. Historical / Real-World Case Trigger
 RE_RABBIT_HOLE_TRIGGER = re.compile(
-    r"\b(in\s+ancient\s+(greece|rome|egypt|china)|world\s+war\s+[i|ii]|"
+    r"\b(in\s+ancient\s+(times|civilization|history)|historical\s+precedent|"
+    r"archival\s+record|foundational\s+case|primary\s+source|chronicle|"
     r"natural\s+selection|evolutionary\s+(psychology|biology|advantage)|"
-    r"charles\s+darwin|william\s+james|stanley\s+milgram|stanford\s+prison|"
+    r"watershed\s+moment|pioneering\s+inquiry|historical\s+account|"
     r"anecdote|biography|backstory|little-known\s+fact)\b",
     re.IGNORECASE,
 )
@@ -91,7 +92,7 @@ def card_to_dict(card: ContextCard) -> Dict[str, Any]:
         "body": card.body,
         "why_here": card.why_here,
         "exact_quote": card.exact_quote,
-        "support_status": getattr(card, "support_status", "fully_supported"),
+        "support_status": getattr(card, "support_status", "unverified"),
         "generation_mode": card.generation_mode,
         "saved": card.saved,
         "citations": citations,

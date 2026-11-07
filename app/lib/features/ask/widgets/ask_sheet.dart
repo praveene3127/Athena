@@ -88,6 +88,8 @@ class _AskSheetState extends State<AskSheet> {
 
   String? _errorMessage;
 
+  String _lastAskedQuestion = '';
+
   @override
   void initState() {
     super.initState();
@@ -117,6 +119,7 @@ class _AskSheetState extends State<AskSheet> {
     final trimmed = question.trim();
 
     if (trimmed.isEmpty) return;
+    _lastAskedQuestion = trimmed;
 
     setState(() {
       _loading = true;
@@ -706,52 +709,58 @@ class _AskSheetState extends State<AskSheet> {
     switch (_status) {
       case 'unverified':
         title = 'Unverified in passage';
-
         message = 'Athena could not verify an answer from this passage alone.';
-
         accentColor = const Color(0xFFD97706);
-
         icon = Icons.warning_amber_rounded;
-
         break;
 
+      case 'no_key':
       case 'not_configured':
-        title = 'AI Engine not configured';
-
-        message =
+        title = 'AI Engine Not Configured';
+        message = _errorMessage ??
             'Passage inquiry needs an API key. Configure your preferred AI engine in Settings.';
-
         accentColor = const Color(0xFF777777);
-
         icon = Icons.key_off_rounded;
+        break;
 
+      case 'auth_error':
+        title = 'Authentication Failed';
+        message = _errorMessage ??
+            'Your API key was rejected. Please verify your credentials in Settings.';
+        accentColor = const Color(0xFFDC2626);
+        icon = Icons.lock_outline_rounded;
         break;
 
       case 'rate_limited':
-        title = 'Rate limit reached';
-
-        message =
-            'Too many requests. Please wait a brief moment before asking again.';
-
+        title = 'Rate Limit Reached';
+        message = _errorMessage ??
+            'Too many requests (429). Please wait a brief moment before asking again.';
         accentColor = const Color(0xFFD97706);
-
         icon = Icons.hourglass_empty_rounded;
-
         break;
 
+      case 'network_error':
       case 'unavailable':
       default:
-        title = 'Service unavailable';
-
+        title = 'Service Unavailable';
         message = _errorMessage ??
-            'AI service is currently unavailable. Please verify backend connection.';
-
+            'AI service is currently unavailable. Please check connection.';
         accentColor = const Color(0xFFDC2626);
-
         icon = Icons.error_outline_rounded;
-
         break;
     }
+
+    final bool showConfigureKey = _status == 'no_key' ||
+        _status == 'not_configured' ||
+        _status == 'auth_error' ||
+        _status == 'rate_limited' ||
+        _status == 'network_error' ||
+        _status == 'unavailable';
+
+    final bool showRetry = _status == 'rate_limited' ||
+        _status == 'network_error' ||
+        _status == 'unavailable' ||
+        _status == 'auth_error';
 
     return Container(
       width: double.infinity,
@@ -798,28 +807,55 @@ class _AskSheetState extends State<AskSheet> {
                       height: 1.4,
                     ),
                   ),
-                  if (_status == 'not_configured') ...[
-                    const SizedBox(height: 10),
-                    ElevatedButton.icon(
-                      onPressed: () {
-                        Navigator.pop(context);
-
-                        BYOKSettingsSheet.show(context,
-                            apiClient: widget.apiClient);
-                      },
-                      style: ElevatedButton.styleFrom(
-                        backgroundColor: const Color(0xFF2D6A4F),
-                        foregroundColor: Colors.white,
-                        padding: const EdgeInsets.symmetric(
-                            horizontal: 14, vertical: 8),
-                        shape: RoundedRectangleBorder(
-                          borderRadius: BorderRadius.circular(8),
-                        ),
-                        elevation: 0,
-                      ),
-                      icon: const Icon(Icons.key_rounded, size: 14),
-                      label: const Text('Configure AI Key',
-                          style: TextStyle(fontSize: 12)),
+                  if (showConfigureKey || showRetry) ...[
+                    const SizedBox(height: 12),
+                    Wrap(
+                      spacing: 8,
+                      runSpacing: 8,
+                      children: [
+                        if (showRetry && _lastAskedQuestion.isNotEmpty)
+                          ElevatedButton.icon(
+                            onPressed: () => _submitQuestion(_lastAskedQuestion),
+                            style: ElevatedButton.styleFrom(
+                              backgroundColor: isDark
+                                  ? const Color(0xFF333333)
+                                  : const Color(0xFFE5E7DC),
+                              foregroundColor: isDark
+                                  ? Colors.white
+                                  : const Color(0xFF141714),
+                              padding: const EdgeInsets.symmetric(
+                                  horizontal: 12, vertical: 8),
+                              shape: RoundedRectangleBorder(
+                                borderRadius: BorderRadius.circular(8),
+                              ),
+                              elevation: 0,
+                            ),
+                            icon: const Icon(Icons.refresh_rounded, size: 14),
+                            label: const Text('Retry',
+                                style: TextStyle(fontSize: 12)),
+                          ),
+                        if (showConfigureKey)
+                          ElevatedButton.icon(
+                            onPressed: () {
+                              Navigator.pop(context);
+                              BYOKSettingsSheet.show(context,
+                                  apiClient: widget.apiClient);
+                            },
+                            style: ElevatedButton.styleFrom(
+                              backgroundColor: const Color(0xFF2D6A4F),
+                              foregroundColor: Colors.white,
+                              padding: const EdgeInsets.symmetric(
+                                  horizontal: 14, vertical: 8),
+                              shape: RoundedRectangleBorder(
+                                borderRadius: BorderRadius.circular(8),
+                              ),
+                              elevation: 0,
+                            ),
+                            icon: const Icon(Icons.key_rounded, size: 14),
+                            label: const Text('Configure AI Key',
+                                style: TextStyle(fontSize: 12)),
+                          ),
+                      ],
                     ),
                   ],
                 ],

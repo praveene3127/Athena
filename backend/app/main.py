@@ -54,6 +54,31 @@ _EXPLICIT_ALLOWED_ORIGINS = {
 
 
 @app.middleware("http")
+async def require_lan_pairing_token(request: Request, call_next):
+    pairing_token = os.environ.get("ATHENA_PAIRING_TOKEN", "").strip()
+    if pairing_token:
+        client_host = getattr(request.client, "host", "") if request.client else ""
+        is_loopback = client_host in {"127.0.0.1", "::1", "localhost", "testclient"}
+        path = request.url.path
+        is_mutating = request.method not in {"GET", "HEAD", "OPTIONS"}
+        is_protected_settings = path.startswith("/api/settings")
+        is_protected_api = path.startswith("/api/") and path not in {"/api/health", "/api/pair-info", "/api"}
+        if not is_loopback and ((is_mutating and is_protected_api) or is_protected_settings):
+            token = request.headers.get("X-Athena-Pairing-Token", "").strip()
+            if not token or token != pairing_token:
+                return JSONResponse(
+                    status_code=401,
+                    content={
+                        "error": {
+                            "code": "UNAUTHORIZED_PAIRING",
+                            "message": "Valid X-Athena-Pairing-Token header is required for remote LAN access.",
+                        }
+                    },
+                )
+    return await call_next(request)
+
+
+@app.middleware("http")
 async def reject_untrusted_browser_mutations(request, call_next):
     origin = request.headers.get("origin")
     host = request.headers.get("host")
@@ -98,7 +123,7 @@ app.add_middleware(
     allow_origin_regex=_ALLOWED_ORIGIN.pattern,
     allow_credentials=True,
     allow_methods=["GET", "POST", "PUT", "DELETE", "OPTIONS", "HEAD"],
-    allow_headers=["Content-Type", "X-Athena-Context-Token", "Authorization", "Accept"],
+    allow_headers=["Content-Type", "X-Athena-Context-Token", "X-Athena-Pairing-Token", "Authorization", "Accept"],
 )
 
 # Exception handlers
@@ -187,6 +212,7 @@ def get_pair_info():
         "phone_wifi_url": f"http://{lan_ip}:8000",
         "desktop_url": "http://127.0.0.1:8080",
         "tunnel_url": tunnel_url,
+        "pairing_required": bool(os.environ.get("ATHENA_PAIRING_TOKEN", "").strip()),
     }
 
 

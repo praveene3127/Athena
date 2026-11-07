@@ -211,8 +211,11 @@ class ReaderBottomBar extends StatelessWidget {
       final total = readingChunks.isNotEmpty ? readingChunks.length : totalItems;
       return '$currentSeq / $total';
     } else if (currentItem != null && currentItem.isContextCard) {
-      final targetSeq = currentItem.sequence;
-      return targetSeq != null ? 'CARD · #$targetSeq' : 'CARD';
+      final contextCards = feedItems.where((i) => i.isContextCard).toList();
+      final cardIdx = contextCards.indexWhere((c) => c.id == currentItem.id);
+      final m = cardIdx >= 0 ? cardIdx + 1 : 1;
+      final totalM = contextCards.isNotEmpty ? contextCards.length : 1;
+      return 'CARD $m OF $totalM';
     } else {
       return '${(currentIndex + 1).clamp(1, totalItems)} / $totalItems';
     }

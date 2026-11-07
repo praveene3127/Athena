@@ -13,6 +13,7 @@ class SecureStorageService {
   static final SecureStorageService instance = SecureStorageService._();
 
   static const _backendUrlKey = 'athena_backend_url';
+  static const _pairingTokenKey = 'athena_pairing_token';
   static const _contextTokenKey = 'athena_context_token';
   static const _aiKeyNames = {
     'athena_ai_primary_api_key',
@@ -69,6 +70,35 @@ class SecureStorageService {
     } else {
       await _storage.write(key: _contextTokenKey, value: sanitized);
     }
+  }
+
+  /// Retrieves the pairing token for companion server authentication.
+  Future<String> getPairingToken() async {
+    try {
+      final token = await _storage.read(key: _pairingTokenKey);
+      if (token != null && token.trim().isNotEmpty) {
+        return token.trim();
+      }
+    } catch (e) {
+      // Keystore read fallback
+    }
+    final prefs = await SharedPreferences.getInstance();
+    return prefs.getString(_pairingTokenKey) ?? AppConfig.pairingToken;
+  }
+
+  /// Saves the pairing token to secure storage and runtime AppConfig.
+  Future<void> setPairingToken(String token) async {
+    final sanitized = token.trim();
+    try {
+      if (sanitized.isEmpty) {
+        await _storage.delete(key: _pairingTokenKey);
+      } else {
+        await _storage.write(key: _pairingTokenKey, value: sanitized);
+      }
+    } catch (e) {
+      debugPrint('Athena secure pairing token write notice: $e');
+    }
+    await AppConfig.setPairingToken(sanitized);
   }
 
   /// Reads an AI credential from OS secure storage. Existing plaintext values

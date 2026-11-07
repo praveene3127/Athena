@@ -4,6 +4,9 @@ import 'package:shared_preferences/shared_preferences.dart';
 
 class AppConfig {
   static String? _runtimeBaseUrl;
+  static String _pairingToken = '';
+
+  static String get pairingToken => _pairingToken;
 
   static const String _configured = String.fromEnvironment(
     'ATHENA_DEFAULT_SERVER_URL',
@@ -30,7 +33,7 @@ class AppConfig {
 
   static String? get runtimeBaseUrl => _runtimeBaseUrl;
 
-  /// Load runtime URL from local preferences (native Server URL).
+  /// Load runtime URL and pairing token from local preferences.
   static Future<void> init() async {
     try {
       final prefs = await SharedPreferences.getInstance();
@@ -42,9 +45,10 @@ class AppConfig {
       } else if (!kIsWeb && _configured.isNotEmpty) {
         _runtimeBaseUrl = _configured.trim().replaceAll(RegExp(r'/+$'), '');
       }
+      _pairingToken = prefs.getString('athena_pairing_token') ?? '';
     } catch (e) {
-        debugPrint('Athena caught error: $e');
-      }
+      debugPrint('Athena caught error: $e');
+    }
   }
 
   /// Save and update runtime URL.
@@ -63,8 +67,24 @@ class AppConfig {
         await prefs.setString('athena_server_url', sanitized);
       }
     } catch (e) {
-        debugPrint('Athena caught error: $e');
+      debugPrint('Athena caught error: $e');
+    }
+  }
+
+  /// Save and update pairing token.
+  static Future<void> setPairingToken(String token) async {
+    final sanitized = token.trim();
+    _pairingToken = sanitized;
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      if (sanitized.isEmpty) {
+        await prefs.remove('athena_pairing_token');
+      } else {
+        await prefs.setString('athena_pairing_token', sanitized);
       }
+    } catch (e) {
+      debugPrint('Athena caught error: $e');
+    }
   }
 
   /// Pure host resolver used by [apiBaseUrl] and unit tests.

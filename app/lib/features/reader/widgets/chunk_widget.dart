@@ -66,39 +66,19 @@ class _ChunkWidgetState extends State<ChunkWidget> {
     _userNote = widget.initialUserNote;
     _textController = TextEditingController(text: _editedText ?? widget.chunk.rawText);
     _noteController = TextEditingController(text: _userNote ?? '');
-
-    // Load any persisted user edits from LocalDatabase if not passed in props
-    if (_editedText == null && _userNote == null) {
-      _loadPersistedEdit();
-    }
-  }
-
-  Future<void> _loadPersistedEdit() async {
-    try {
-      final edit = await LocalDatabase.instance.getSingleChunkEdit(widget.chunk.id);
-      if (edit != null && mounted) {
-        setState(() {
-          _editedText = edit['edited_text'] as String?;
-          _userNote = edit['user_note'] as String?;
-          _textController.text = _editedText ?? widget.chunk.rawText;
-          _noteController.text = _userNote ?? '';
-        });
-      }
-    } catch (e) {
-      debugPrint('[Athena] ChunkWidget edit load notice: $e');
-    }
   }
 
   @override
   void didUpdateWidget(covariant ChunkWidget oldWidget) {
     super.didUpdateWidget(oldWidget);
-    if (oldWidget.chunk.id != widget.chunk.id) {
+    if (oldWidget.chunk.id != widget.chunk.id ||
+        oldWidget.initialEditedText != widget.initialEditedText ||
+        oldWidget.initialUserNote != widget.initialUserNote) {
       _editedText = widget.initialEditedText;
       _userNote = widget.initialUserNote;
       _textController.text = _editedText ?? widget.chunk.rawText;
       _noteController.text = _userNote ?? '';
       _isEditing = false;
-      _loadPersistedEdit();
     }
   }
 
@@ -205,20 +185,30 @@ class _ChunkWidgetState extends State<ChunkWidget> {
               crossAxisAlignment: CrossAxisAlignment.start,
               mainAxisSize: MainAxisSize.min,
               children: [
-                // Top Metadata Row inside Card
+                // Top Metadata Row inside Card (Fixed outside scroll area)
                 _buildMetadataHeader(theme),
 
-                // Card Body: Edit Mode vs. High-Craft Reading Mode
-                if (_isEditing)
-                  _buildInlineEditor(theme, hasCode)
-                else
-                  _buildReadingContent(theme, rawText, hasCode),
+                // Card Body: Scrollable middle prose area wrapped in Flexible + SingleChildScrollView
+                Flexible(
+                  child: SingleChildScrollView(
+                    physics: const BouncingScrollPhysics(),
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        if (_isEditing)
+                          _buildInlineEditor(theme, hasCode)
+                        else ...[
+                          _buildReadingContent(theme, rawText, hasCode),
+                          if (_userNote != null && _userNote!.isNotEmpty)
+                            _buildNoteCallout(theme),
+                        ],
+                      ],
+                    ),
+                  ),
+                ),
 
-                // Saved Personal Note Callout Box (if present)
-                if (!_isEditing && _userNote != null && _userNote!.isNotEmpty)
-                  _buildNoteCallout(theme),
-
-                // Card Footer Actions
+                // Card Footer Actions (Fixed outside scroll area, 100% visible)
                 if (!_isEditing) _buildCardFooter(theme),
               ],
             ),

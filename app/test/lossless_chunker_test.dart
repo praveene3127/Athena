@@ -52,25 +52,25 @@ void main() {
     final sanitizedQuote = sanitizeProseSpacing(quoteFused);
     expect(sanitizedQuote, 'He said "Focus" and walked; then paused.');
 
-    const deadPoetsSample = 'Thefourboyswhocarriedbannersmarchedsolemnlytothedais, '
-        'followedslowlybytheelderlymen, thelastofwhomproudlycarriedthelightedcandle. '
-        'Headmaster Gale Nolan, '
-        'ahuskymaninhisearlysixties, stoodatthepodiumwatchingexpectantlyastheprocessionconcluded. '
-        '“Ladiesandgentlemen...boys...” '
-        'hesaiddramatically, pointingtowardthemanwiththecandle. '
-        '“Thelightofknowledge.” Theaudienceapplaudedpolitelyastheoldergentlemansteppedslowlyforwardwiththecandle.';
-    final sanitizedProse = sanitizeProseSpacing(deadPoetsSample);
-    expect(sanitizedProse, contains('The four boys who carried banners marched solemnly to the dais'));
+    const literatureSample = 'Thefouryoungstudentswhocarriedbookswalkedslowlytotheschool, '
+        'followedslowlybytheelderlymen, thelastofwhomproudlycarriedthelight. '
+        'Professor James Allen, '
+        'aquietmaninhisearlysixties, stoodatthepodiumwatchingexpectantlyastheprocessionconcluded. '
+        '“Ladiesandgentlemen...students...” '
+        'hesaiddramatically, pointingtowardthemanwiththelight. '
+        '“Thelightofknowledge.” Theaudienceapplaudedpolitelyastheoldergentlemansteppedslowlyforwardwiththelight.';
+    final sanitizedProse = sanitizeProseSpacing(literatureSample);
+    expect(sanitizedProse, contains('The four young students who carried books walked slowly to the school'));
     expect(sanitizedProse, contains('followed slowly by the elderly men'));
-    expect(sanitizedProse, contains('the last of whom proudly carried the lighted candle'));
-    expect(sanitizedProse, contains('Headmaster Gale Nolan'));
-    expect(sanitizedProse, contains('a husky man in his early sixties'));
+    expect(sanitizedProse, contains('the last of whom proudly carried the light'));
+    expect(sanitizedProse, contains('Professor James Allen'));
+    expect(sanitizedProse, contains('a quiet man in his early sixties'));
     expect(sanitizedProse, contains('stood at the podium watching expectantly as the procession concluded'));
     expect(sanitizedProse, contains('Ladies and gentlemen'));
     expect(sanitizedProse, contains('he said dramatically'));
-    expect(sanitizedProse, contains('pointing toward the man with the candle'));
+    expect(sanitizedProse, contains('pointing toward the man with the light'));
     expect(sanitizedProse, contains('The light of knowledge'));
-    expect(sanitizedProse, contains('The audience applauded politely as the older gentleman stepped slowly forward with the candle'));
+    expect(sanitizedProse, contains('The audience applauded politely as the older gentleman stepped slowly forward with the light'));
   });
 
   test('sanitizeProseSpacing preserves technical compounds', () {

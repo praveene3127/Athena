@@ -2,43 +2,145 @@ import 'package:crypto/crypto.dart';
 import 'dart:convert';
 
 // Pre-compiled top-level RegExps (Zero runtime re-compilation)
-final _punctLetterRe = RegExp(r'([.,!?;:])([A-Za-z“"‘\x27])');
 final _ellipsisLetterRe = RegExp(r'(\x2e{2,})([A-Za-z“"‘\x27])');
 final _letterEllipsisRe = RegExp(r'([A-Za-z])(\x2e{2,})');
-final _letterDigitRe = RegExp(r'([A-Za-z])(\d)');
-final _digitLetterRe =
-    RegExp(r'(\d)(?!(?:st|nd|rd|th)\b)([A-Za-z])', caseSensitive: false);
 final _multiSpaceRe = RegExp(r'[ \t]+');
 final _spaceNewlineRe = RegExp(r' *\n *');
 final _multiNewlineRe = RegExp(r'\n{3,}');
 final _isLetterRe = RegExp(r'[A-Za-z]');
 
+const Set<String> _protectedSurnamePrefixes = {
+  'mc',
+  'mac',
+  'de',
+  'di',
+  'van',
+  'von',
+  'le',
+  'la',
+  'st',
+};
+
+const Set<String> _protectedMixedCaseWords = {
+  'mccarthy',
+  'delillo',
+  'macarthur',
+  'vangogh',
+  'dicaprio',
+  'youtube',
+  'javascript',
+  'openai',
+  'iphone',
+  'ipad',
+  'macos',
+  'github',
+  'linkedin',
+  'chatgpt',
+  'playwright',
+  'typescript',
+};
+
 /// Normalizes spacing in extracted PDF/EPUB prose.
-/// Repairs obvious lost spaces in extracted prose before chunking. It avoids
-/// splitting mixed-case words and leaves content inside quotation marks intact.
+/// Repairs obvious lost spaces in extracted prose before chunking.
+/// Protects valid domain terms, technical compounds (H2O, COVID19, 5mg),
+/// abbreviations (U.S.A., Ph.D, e.g.), URLs (www.example.com, doi.org/10.x),
+/// and mixed-case proper nouns/brands (McCarthy, DeLillo, YouTube, JavaScript).
 String sanitizeProseSpacing(String text) {
   if (text.isEmpty) return text;
   var result = text;
 
-  // 1a. Space after punctuation if immediately followed by letter or quote:
-  // e.g. "candle.Headmaster" -> "candle. Headmaster", "Nolan,ahusky" -> "Nolan, ahusky"
-  result = result.replaceAllMapped(_punctLetterRe, (m) => '${m[1]} ${m[2]}');
+  // 1. Conditional punctuation spacing (protecting abbreviations, numbers, and URLs)
+  result = _spaceConditionalPunctuation(result);
   result = result.replaceAllMapped(_ellipsisLetterRe, (m) => '${m[1]} ${m[2]}');
   result = result.replaceAllMapped(_letterEllipsisRe, (m) => '${m[1]} ${m[2]}');
   result = _spaceQuoteBoundaries(result);
-  result = result.replaceAllMapped(_letterDigitRe, (m) => '${m[1]} ${m[2]}');
-  result = result.replaceAllMapped(_digitLetterRe, (m) => '${m[1]} ${m[2]}');
   result = result.replaceAll(_multiSpaceRe, ' ');
   result = result.replaceAll(_spaceNewlineRe, '\n');
   result = result.replaceAll(_multiNewlineRe, '\n\n');
 
-  // 7. Split fused lowercase tokens caused by PDF kerning / justification space drops
-  // e.g. "Thefourboyswhocarriedbannersmarchedsolemnlytothedais" -> "The four boys who carried banners marched solemnly to the dais"
+  // 2. Split fused lowercase tokens caused by PDF kerning / justification space drops
   result = result.split('\n').map((line) {
     return line.split(' ').map(_segmentFusedWord).join(' ');
   }).join('\n');
 
   return result.trim();
+}
+
+String _spaceConditionalPunctuation(String text) {
+  if (text.isEmpty) return text;
+
+  // 1. Protect URLs, DOIs, web domains, and email addresses
+  final protectedUrls = <String>[];
+  var result = text.replaceAllMapped(
+    RegExp(
+        r'\b(?:https?://|www\.|doi\.org/)[^\s]+|\b[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}\b|\b[a-zA-Z0-9-]+\.(?:com|org|net|edu|gov|io|ai|dev)/?[^\s]*'),
+    (m) {
+      protectedUrls.add(m.group(0)!);
+      return '___ATHENA_PROTECTED_URL_${protectedUrls.length - 1}___';
+    },
+  );
+
+  // 2. Protect numbers with decimals (e.g. 3.5, 3.14159)
+  result = result.replaceAllMapped(
+    RegExp(r'(\d+)\.(\d+)'),
+    (m) => '${m[1]}___DECIMAL_POINT___${m[2]}',
+  );
+
+  // 3. Conditional period spacing:
+  // Only insert a space after `.` when:
+  // - the next character is uppercase [A-Z]
+  // - the preceding token is >= 3 lowercase letters
+  // - AND not an abbreviation / title (SentenceSplitter.abbreviations)
+  result = result.replaceAllMapped(
+    RegExp(r'\b([A-Za-z]{3,})\.([A-Z])'),
+    (m) {
+      final token = m.group(1)!;
+      final lower = token.toLowerCase();
+      final lowerDot = '$lower.';
+      if (SentenceSplitter.abbreviations.contains(lowerDot) ||
+          SentenceSplitter.abbreviations.contains(lower) ||
+          lower == 'etc' ||
+          lower == 'vol' ||
+          lower == 'fig' ||
+          lower == 'inc' ||
+          lower == 'ltd' ||
+          lower == 'univ') {
+        return m.group(0)!;
+      }
+      return '$token. ${m.group(2)}';
+    },
+  );
+
+  // 4. Non-period punctuation (comma, semicolon, exclamation, question mark)
+  // followed by letter or quote: "water,a" -> "water, a"
+  result = result.replaceAllMapped(
+    RegExp(r'([,;!?])([A-Za-z“"‘\x27])'),
+    (m) => '${m[1]} ${m[2]}',
+  );
+
+  // 5. Colon followed by letter (not digits, protecting ISBN:978, 12:30)
+  result = result.replaceAllMapped(
+    RegExp(r'(:)([A-Za-z])'),
+    (m) => '${m[1]} ${m[2]}',
+  );
+
+  // 6. Structural headings and chapters: "Chapter1" -> "Chapter 1"
+  result = result.replaceAllMapped(
+    RegExp(r'\b(Chapter|Section|Part|Book|Page|Figure|Fig|Volume|Vol)\s*(\d+)\b',
+        caseSensitive: false),
+    (m) => '${m[1]} ${m[2]}',
+  );
+
+  // 7. Restore decimal points
+  result = result.replaceAll('___DECIMAL_POINT___', '.');
+
+  // 8. Restore protected URLs
+  for (var i = 0; i < protectedUrls.length; i++) {
+    result = result.replaceAll(
+        '___ATHENA_PROTECTED_URL_${i}___', protectedUrls[i]);
+  }
+
+  return result;
 }
 
 String _spaceQuoteBoundaries(String text) {
@@ -102,8 +204,6 @@ const Set<String> _scientificCompounds = {
 };
 
 const Set<String> _singleDictionaryWords = {
-  'mcdonald',
-  'headmaster',
   'dramatically',
   'expectantly',
   'procession',
@@ -113,8 +213,6 @@ const Set<String> _singleDictionaryWords = {
   'applauded',
   'politely',
   'gentleman',
-  'banners',
-  'solemnly',
   'lighted',
   'sixties',
   'watching',
@@ -276,8 +374,6 @@ final Set<String> _fusedDictWords = <String>{
   'away',
   'back',
   'bad',
-  'banner',
-  'banners',
   'be',
   'beat',
   'beautiful',
@@ -327,7 +423,6 @@ final Set<String> _fusedDictWords = <String>{
   'calling',
   'came',
   'can',
-  'candle',
   'cannot',
   'car',
   'care',
@@ -368,7 +463,6 @@ final Set<String> _fusedDictWords = <String>{
   'cry',
   'cried',
   'cut',
-  'dais',
   'dark',
   'darkness',
   'day',
@@ -532,7 +626,6 @@ final Set<String> _fusedDictWords = <String>{
   'he',
   'head',
   'heads',
-  'headmaster',
   'hear',
   'heard',
   'hearing',
@@ -746,7 +839,6 @@ final Set<String> _fusedDictWords = <String>{
   'nights',
   'nine',
   'no',
-  'nolan',
   'none',
   'nor',
   'not',
@@ -916,7 +1008,6 @@ final Set<String> _fusedDictWords = <String>{
   'smaller',
   'so',
   'solemn',
-  'solemnly',
   'some',
   'someone',
   'something',
@@ -1232,13 +1323,29 @@ String _segmentFusedWord(String rawWord) {
     return rawWord;
   }
 
-  // Explicit capitalization boundaries are reliable word boundaries in
-  // fused PDF text (including acronym-to-title transitions such as
-  // "CONTENTSCover"). Keep lowercase-leading forms such as "iPhone" intact.
+  // Protect mixed-case brands/nouns and surname prefixes (F09)
+  if (_protectedMixedCaseWords.contains(lower)) {
+    return rawWord;
+  }
+  for (final prefix in _protectedSurnamePrefixes) {
+    if (lower.startsWith(prefix) && core.length > prefix.length) {
+      final nextChar = core[prefix.length];
+      if (nextChar == nextChar.toUpperCase() &&
+          nextChar != nextChar.toLowerCase()) {
+        return rawWord;
+      }
+    }
+  }
+
+  if (core.contains('.') || core.contains('-') || core.contains('/')) {
+    return rawWord;
+  }
+
+  // Explicit capitalization boundaries in fused text (e.g. "HeadmasterGaleNolan", "CONTENTSCover", "TitlePage")
   final camelParts = core.split(
     RegExp(r'(?<=[a-z])(?=[A-Z])|(?<=[A-Z])(?=[A-Z][a-z])'),
   );
-  if (camelParts.length > 1 && camelParts.every((part) => part.length > 1)) {
+  if (camelParts.length > 1 && camelParts.every((part) => part.length >= 2)) {
     return '$prefixPunct${camelParts.join(' ')}$suffixPunct';
   }
 
@@ -1313,6 +1420,79 @@ List<String>? _wordBreakDP(String s) {
 
 /// Reproduces Athena's adaptive feed chunking rules on the device. Every
 /// returned range is a direct slice of canonicalText; no text is regenerated.
+/// Abbreviation-safe sentence splitter (§ F16).
+/// Splits text into complete sentences without breaking at common abbreviations or titles (Dr., Mr., etc.).
+class SentenceSplitter {
+  static const Set<String> abbreviations = {
+    'dr.',
+    'mr.',
+    'mrs.',
+    'ms.',
+    'prof.',
+    'st.',
+    'vol.',
+    'fig.',
+    'figs.',
+    'no.',
+    'pp.',
+    'p.',
+    'e.g.',
+    'i.e.',
+    'vs.',
+    'etc.',
+    'jr.',
+    'sr.',
+    'ca.',
+    'cf.',
+    'al.',
+    'inc.',
+    'ltd.',
+    'univ.',
+    'ed.',
+    'eds.',
+    'ch.',
+    'rev.',
+  };
+
+  /// Splits [text] into sentences while protecting abbreviations and normalizing inner whitespace.
+  static List<String> split(String text) {
+    if (text.isEmpty) return const [];
+    final sentences = <String>[];
+    int start = 0;
+
+    final boundaryRegex = RegExp(r'([.!?])(\s+)(?=[A-Z0-9"(]|\z)');
+    for (final match in boundaryRegex.allMatches(text)) {
+      final punctIndex = match.start;
+      final prePunctText = text.substring(0, punctIndex + 1);
+
+      // Check if word immediately before punct is an abbreviation
+      final wordMatch = RegExp(r'\b([A-Za-z]+)\.?$').firstMatch(prePunctText);
+      if (wordMatch != null) {
+        final lastWordWithDot = '${wordMatch.group(1)!.toLowerCase()}.';
+        final fullMatchLower = wordMatch.group(0)!.toLowerCase();
+        if (abbreviations.contains(lastWordWithDot) ||
+            abbreviations.contains(fullMatchLower)) {
+          continue; // Skip abbreviation dot
+        }
+      }
+
+      final sentence = text.substring(start, match.start + 1).trim();
+      if (sentence.isNotEmpty) {
+        sentences.add(sentence.replaceAll(RegExp(r'\s+'), ' '));
+      }
+      start = match.end;
+    }
+
+    if (start < text.length) {
+      final remaining = text.substring(start).trim();
+      if (remaining.isNotEmpty) {
+        sentences.add(remaining.replaceAll(RegExp(r'\s+'), ' '));
+      }
+    }
+    return sentences;
+  }
+}
+
 class LosslessChunker {
   static const int _minWords = 25;
   static const int _maxWords = 65;

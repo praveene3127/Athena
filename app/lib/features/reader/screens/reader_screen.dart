@@ -8,7 +8,6 @@ import 'package:scrollable_positioned_list/scrollable_positioned_list.dart';
 
 import 'package:athena/core/theme/theme.dart';
 import 'package:athena/core/theme/reader_theme.dart';
-import 'package:athena/core/config/config.dart';
 import 'package:athena/models/document.dart';
 import 'package:athena/services/local_database.dart';
 import 'package:athena/services/local_context_service.dart';
@@ -75,9 +74,14 @@ class _ReaderScreenState extends ConsumerState<ReaderScreen> {
   final Map<String, String> _chunkEdits = {};
   final Map<String, String> _chunkNotes = {};
   List<ReaderItem> _currentFeed = const [];
+  List<ReaderItem> _cachedFeedItems = const [];
+  ReaderData? _lastReaderData;
   bool _initialPositionResolved = false;
   bool _preferencesLoaded = false;
-  bool _hasLocalSavedPosition = false;
+  String? _savedChunkId;
+  int? _savedChunkSeq;
+  int? _activeDwellChunkSeq;
+  bool _isGeneratingCard = false;
 
   @override
   void initState() {
@@ -91,29 +95,120 @@ class _ReaderScreenState extends ConsumerState<ReaderScreen> {
       localDwellDuration: const Duration(milliseconds: 450),
       aiDwellDuration: const Duration(milliseconds: 1500),
       onLocalDwell: (index) {
+        if (index < 0 || index >= _cachedFeedItems.length) return;
+        final chunk = _readingChunkAt(index, _cachedFeedItems);
+        final chunkSeq = chunk?.sequence;
+        final chunkId = chunk?.id;
+
         SharedPreferences.getInstance().then((prefs) {
           prefs.setInt('reader_pos_${widget.documentId}', index);
-        });
-        if (AppConfig.apiBaseUrl.isNotEmpty) {
-          final chunk = _readingChunkAt(index, _currentFeed);
-          if (chunk?.sequence != null) {
-            ref.read(apiClientProvider).syncReadingProgress(
-                  widget.documentId,
-                  chunk!.sequence!,
-                  chunkId: chunk.id,
-                  feedIndex: index,
-                );
+          if (chunkId != null) {
+            prefs.setString('reader_chunk_id_${widget.documentId}', chunkId);
           }
+          if (chunkSeq != null) {
+            prefs.setInt('reader_chunk_seq_${widget.documentId}', chunkSeq);
+          }
+        });
+
+        if (chunkSeq != null) {
+          ref.read(apiClientProvider).syncReadingProgress(
+                widget.documentId,
+                chunkSeq,
+                chunkId: chunkId,
+                feedIndex: index,
+                readingMode: _readingMode,
+              );
         }
       },
-      onAiDwell: (index) {
-        debugPrint(
-            '[Athena Governor] User dwelled on index $index (>= 1500ms). Background AI synthesis permitted.');
+      onAiDwell: (index) async {
+        if (index < 0 || index >= _cachedFeedItems.length) return;
+        final currentItem = _cachedFeedItems[index];
+        if (!currentItem.isReadingChunk) return;
+        final chunkSeq = currentItem.sequence;
+        if (chunkSeq == null || _cardsByChunkSeq.containsKey(chunkSeq)) return;
+
+        _activeDwellChunkSeq = chunkSeq;
+        final chunkId = currentItem.id;
+
+        try {
+          final chunkDb = await LocalDatabase.instance.getChunkById(chunkId);
+          final chunkMap = chunkDb ?? {
+            'id': currentItem.id,
+            'raw_text': currentItem.rawText,
+            'sequence': chunkSeq,
+          };
+
+          final service = LocalContextService();
+          final cardMap = await service.generateCardForChunk(
+            widget.documentId,
+            chunkMap,
+            _cardsByChunkSeq.length,
+          );
+
+          // Single-flight check: If page turned during generation, abort
+          if (!mounted || _activeDwellChunkSeq != chunkSeq || _cardsByChunkSeq.containsKey(chunkSeq)) {
+            return;
+          }
+
+          if (cardMap != null) {
+            final cardItem = ReaderItem.fromJson({
+              ...cardMap,
+              'type': 'context_card',
+              'insert_after': currentItem.id,
+              'source_chunk_id': currentItem.id,
+              'sequence': chunkSeq,
+              'is_speculative_draft': false,
+            });
+            await LocalDatabase.instance.insertCards([cardMap]);
+            if (mounted && _activeDwellChunkSeq == chunkSeq) {
+              setState(() {
+                _cardsByChunkSeq[chunkSeq] = cardItem;
+                _recomputeCachedFeed();
+              });
+            }
+          }
+        } catch (e) {
+          debugPrint('[Athena Dwell Notice] Background card generation: $e');
+        }
       },
     );
 
     _loadPreferences();
     _loadChunkEdits();
+  }
+
+  void _syncData(ReaderData data) {
+    _lastReaderData = data;
+
+    if (data.chunkEditsMap.isNotEmpty) {
+      for (final entry in data.chunkEditsMap.entries) {
+        final text = entry.value['edited_text'] as String?;
+        final note = entry.value['user_note'] as String?;
+        if (text != null && text.isNotEmpty) _chunkEdits[entry.key] = text;
+        if (note != null && note.isNotEmpty) _chunkNotes[entry.key] = note;
+      }
+    }
+
+    for (final it in data.cards) {
+      final seq = it.sequence;
+      if (seq != null && seq > 0) {
+        _cardsByChunkSeq[seq] = it;
+      }
+    }
+
+    _recomputeCachedFeed(data);
+  }
+
+  void _recomputeCachedFeed([ReaderData? data]) {
+    final d = data ?? _lastReaderData;
+    if (d == null) return;
+    _cachedFeedItems = buildInterleavedFeed(
+      rawItems: d.items,
+      dynamicCardsBySeq: _cardsByChunkSeq,
+      dismissedCardIds: _dismissedCardIds,
+      showContextCards: true,
+    );
+    _currentFeed = _cachedFeedItems;
   }
 
   Future<void> _loadPreferences() async {
@@ -126,6 +221,8 @@ class _ReaderScreenState extends ConsumerState<ReaderScreen> {
       final savedLineHeight = prefs.getDouble('reader_line_height');
       final savedBionic = prefs.getBool('reader_bionic_reading');
       final savedPos = prefs.getInt('reader_pos_${widget.documentId}');
+      final savedChunkId = prefs.getString('reader_chunk_id_${widget.documentId}');
+      final savedChunkSeq = prefs.getInt('reader_chunk_seq_${widget.documentId}');
 
       if (mounted) {
         setState(() {
@@ -143,9 +240,10 @@ class _ReaderScreenState extends ConsumerState<ReaderScreen> {
           }
           if (savedLineHeight != null) _lineHeight = savedLineHeight;
           if (savedBionic != null) _bionic = savedBionic;
+          if (savedChunkId != null) _savedChunkId = savedChunkId;
+          if (savedChunkSeq != null) _savedChunkSeq = savedChunkSeq;
           if (savedPos != null) {
             _currentIndex = savedPos;
-            _hasLocalSavedPosition = true;
           }
           _preferencesLoaded = true;
         });
@@ -201,15 +299,25 @@ class _ReaderScreenState extends ConsumerState<ReaderScreen> {
     final index = visible.first.index.clamp(0, _currentFeed.length - 1);
     if (index != _currentIndex) {
       setState(() => _currentIndex = index);
-      unawaited(SharedPreferences.getInstance().then(
-          (prefs) => prefs.setInt('reader_pos_${widget.documentId}', index)));
       final chunk = _readingChunkAt(index, _currentFeed);
-      if (chunk?.sequence != null) {
+      final chunkSeq = chunk?.sequence;
+      final chunkId = chunk?.id;
+      unawaited(SharedPreferences.getInstance().then((prefs) {
+        prefs.setInt('reader_pos_${widget.documentId}', index);
+        if (chunkId != null) {
+          prefs.setString('reader_chunk_id_${widget.documentId}', chunkId);
+        }
+        if (chunkSeq != null) {
+          prefs.setInt('reader_chunk_seq_${widget.documentId}', chunkSeq);
+        }
+      }));
+      if (chunkSeq != null) {
         ref.read(apiClientProvider).syncReadingProgress(
               widget.documentId,
-              chunk!.sequence!,
-              chunkId: chunk.id,
+              chunkSeq,
+              chunkId: chunkId,
               feedIndex: index,
+              readingMode: _readingMode,
             );
       }
       _governor.onPageTurn(index);
@@ -236,6 +344,7 @@ class _ReaderScreenState extends ConsumerState<ReaderScreen> {
   }
 
   void _onPageChanged(int index) {
+    _activeDwellChunkSeq = null;
     setState(() => _currentIndex = index);
     _governor.onPageTurn(index);
   }
@@ -284,12 +393,17 @@ class _ReaderScreenState extends ConsumerState<ReaderScreen> {
       key: _scaffoldKey,
       backgroundColor: theme.scaffoldBackground,
       drawer: readerAsync.maybeWhen(
-        data: (d) => ChaptersDrawer(
-          title: d.title,
-          feedItems: _buildFeed(d),
-          theme: theme,
-          onSelectIndex: (idx) => _jumpTo(idx, d.items.length),
-        ),
+        data: (d) {
+          if (!identical(_lastReaderData, d)) {
+            _syncData(d);
+          }
+          return ChaptersDrawer(
+            title: d.title,
+            feedItems: _cachedFeedItems,
+            theme: theme,
+            onSelectIndex: (idx) => _jumpTo(idx, _cachedFeedItems.length),
+          );
+        },
         orElse: () => null,
       ),
       appBar: ReaderTopBar(
@@ -308,15 +422,12 @@ class _ReaderScreenState extends ConsumerState<ReaderScreen> {
               (p) => p.setString('reader_mode_${widget.documentId}', mode));
         },
         onSearch: () {
-          final items = readerAsync.value != null
-              ? _buildFeed(readerAsync.value!)
-              : <ReaderItem>[];
           ReaderSearchSheet.show(
             context,
             documentId: widget.documentId,
             themeId: _themeId,
-            feedItems: items,
-            onJumpToItemIndex: (idx) => _jumpTo(idx, items.length),
+            feedItems: _cachedFeedItems,
+            onJumpToItemIndex: (idx) => _jumpTo(idx, _cachedFeedItems.length),
           );
         },
         onOpenToc: () => _scaffoldKey.currentState?.openDrawer(),
@@ -358,32 +469,52 @@ class _ReaderScreenState extends ConsumerState<ReaderScreen> {
               child: Text('Error loading reader: $e',
                   style: TextStyle(color: theme.textColor))),
           data: (data) {
-            final feedItems = _buildFeed(data);
+            if (!identical(_lastReaderData, data)) {
+              _syncData(data);
+            }
+            final feedItems = _cachedFeedItems;
             final chunks = feedItems.where((it) => it.isReadingChunk).toList();
             if (!_initialPositionResolved &&
                 _preferencesLoaded &&
                 feedItems.isNotEmpty) {
               _initialPositionResolved = true;
-              var target = _currentIndex.clamp(0, feedItems.length - 1);
-              final serverSequence = data.currentChunkIndex;
-              final serverTarget = serverSequence == null
-                  ? -1
-                  : feedItems.indexWhere((item) =>
-                      item.isReadingChunk && item.sequence == serverSequence);
-              final localChunk = _hasLocalSavedPosition
-                  ? _readingChunkAt(target, feedItems)
-                  : null;
-              if (serverTarget >= 0 &&
-                  (!_hasLocalSavedPosition ||
-                      (localChunk?.sequence ?? 0) < serverSequence!)) {
-                target = serverTarget;
-              }
+              var target = -1;
+
+              // 1. Deep link takes highest priority
               final deepLink = widget.initialChunkId;
               if (deepLink != null && deepLink.isNotEmpty) {
                 final match = feedItems.indexWhere((item) =>
                     item.id == deepLink || item.sourceChunkId == deepLink);
                 if (match >= 0) target = match;
               }
+
+              // 2. Saved chunk_id
+              if (target < 0 && _savedChunkId != null && _savedChunkId!.isNotEmpty) {
+                final match = feedItems.indexWhere((item) =>
+                    item.isReadingChunk && item.id == _savedChunkId);
+                if (match >= 0) target = match;
+              }
+
+              // 3. Saved sequence
+              if (target < 0 && _savedChunkSeq != null && _savedChunkSeq! > 0) {
+                final match = feedItems.indexWhere((item) =>
+                    item.isReadingChunk && item.sequence == _savedChunkSeq);
+                if (match >= 0) target = match;
+              }
+
+              // 4. Server progress sequence
+              final serverSequence = data.currentChunkIndex;
+              if (target < 0 && serverSequence != null && serverSequence > 0) {
+                final match = feedItems.indexWhere((item) =>
+                    item.isReadingChunk && item.sequence == serverSequence);
+                if (match >= 0) target = match;
+              }
+
+              // 5. Fallback
+              if (target < 0) {
+                target = _currentIndex.clamp(0, feedItems.length - 1);
+              }
+
               _currentIndex = target;
               WidgetsBinding.instance.addPostFrameCallback((_) {
                 if (!mounted) return;
@@ -509,23 +640,6 @@ class _ReaderScreenState extends ConsumerState<ReaderScreen> {
     );
   }
 
-  List<ReaderItem> _buildFeed(ReaderData data) {
-    for (final it in data.cards) {
-      final seq = it.sequence;
-      if (seq != null && seq > 0) {
-        _cardsByChunkSeq[seq] = it;
-      }
-    }
-
-    final items = buildInterleavedFeed(
-      rawItems: data.items,
-      dynamicCardsBySeq: _cardsByChunkSeq,
-      dismissedCardIds: _dismissedCardIds,
-      showContextCards: true,
-    );
-    _currentFeed = items;
-    return items;
-  }
 
   void _showOriginalPage(ReaderItem chunk) {
     int page = 1;
@@ -582,7 +696,10 @@ class _ReaderScreenState extends ConsumerState<ReaderScreen> {
   }
 
   Future<void> _dismissCard(ReaderItem card) async {
-    setState(() => _dismissedCardIds.add(card.id));
+    setState(() {
+      _dismissedCardIds.add(card.id);
+      _recomputeCachedFeed();
+    });
     try {
       await LocalDatabase.instance.setCardDismissed(card.id, true);
       await ref.read(apiClientProvider).dismissCard(card.id);
@@ -627,7 +744,7 @@ class _ReaderScreenState extends ConsumerState<ReaderScreen> {
 
   Future<void> _handleGenerateCard(
       List<ReaderItem> feedItems, List<ReaderItem> chunks) async {
-    if (chunks.isEmpty) return;
+    if (chunks.isEmpty || _isGeneratingCard) return;
     final currentItem = (_currentIndex >= 0 && _currentIndex < feedItems.length)
         ? feedItems[_currentIndex]
         : null;
@@ -636,56 +753,65 @@ class _ReaderScreenState extends ConsumerState<ReaderScreen> {
         : chunks.first;
     final chunkSeq = currentChunk.sequence ?? 1;
 
+    if (_cardsByChunkSeq.containsKey(chunkSeq)) return;
+
+    setState(() => _isGeneratingCard = true);
+    HapticFeedback.lightImpact();
+
     final service = LocalContextService();
-    final chunkMap = {
+    final chunkDb = await LocalDatabase.instance.getChunkById(currentChunk.id);
+    final chunkMap = chunkDb ?? {
       'id': currentChunk.id,
       'raw_text': currentChunk.rawText,
       'sequence': chunkSeq,
     };
 
-    // Stage 1: Instant Local Structural Draft (< 1ms)
-    final draftMap = service.generateSpeculativeDraftCard(
-      widget.documentId,
-      chunkMap,
-      _cardsByChunkSeq.length,
-    );
-    final draftItem = ReaderItem.fromJson({
-      ...draftMap,
-      'type': 'context_card',
-      'insert_after': currentChunk.id,
-      'source_chunk_id': currentChunk.id,
-      'sequence': chunkSeq,
-      'is_speculative_draft': true,
-    });
-
-    setState(() => _cardsByChunkSeq[chunkSeq] = draftItem);
-    HapticFeedback.lightImpact();
-
-    WidgetsBinding.instance.addPostFrameCallback((_) {
-      if (mounted && _currentIndex + 1 < feedItems.length + 1) {
-        _jumpTo(_currentIndex + 1, feedItems.length + 1);
-      }
-    });
-
-    // Stage 2: Seamless In-Place Cloud Upgrade
-    unawaited(service
-        .generateCardForChunk(
-            widget.documentId, chunkMap, _cardsByChunkSeq.length)
-        .then((deepMap) async {
-      if (deepMap != null && mounted) {
-        final deepItem = ReaderItem.fromJson({
-          ...deepMap,
+    try {
+      final cardMap = await service.generateCardForChunk(
+        widget.documentId,
+        chunkMap,
+        _cardsByChunkSeq.length,
+      );
+      if (cardMap != null && mounted) {
+        final cardItem = ReaderItem.fromJson({
+          ...cardMap,
           'type': 'context_card',
           'insert_after': currentChunk.id,
           'source_chunk_id': currentChunk.id,
           'sequence': chunkSeq,
           'is_speculative_draft': false,
         });
-        await LocalDatabase.instance.insertCards([deepMap]);
-        if (mounted) setState(() => _cardsByChunkSeq[chunkSeq] = deepItem);
+        await LocalDatabase.instance.insertCards([cardMap]);
+        if (mounted) {
+          setState(() {
+            _cardsByChunkSeq[chunkSeq] = cardItem;
+            _recomputeCachedFeed();
+            _isGeneratingCard = false;
+          });
+          HapticFeedback.mediumImpact();
+          final newCardIndex = _cachedFeedItems.indexWhere(
+              (i) => i.isContextCard && i.sourceChunkId == currentChunk.id);
+          if (newCardIndex >= 0) {
+            _jumpTo(newCardIndex, _cachedFeedItems.length);
+          }
+        }
+      } else {
+        if (mounted) {
+          setState(() => _isGeneratingCard = false);
+          ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(
+              content: Text(
+                  'No verified academic evidence found for this passage.'),
+              duration: Duration(seconds: 2),
+            ),
+          );
+        }
       }
-    }).catchError((e) {
-      debugPrint('[Athena Notice] Stage 2 upgrade notice: $e');
-    }));
+    } catch (e) {
+      if (mounted) {
+        setState(() => _isGeneratingCard = false);
+        debugPrint('[Athena Notice] Card generation notice: $e');
+      }
+    }
   }
 }

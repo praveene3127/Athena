@@ -111,23 +111,8 @@ FeedBuildResult buildFeedResult({
   final feedItems = <ReaderItem>[];
 
   for (final chunk in chunks) {
-    final raw = chunk.rawText;
-    final beats = _splitChunkIntoMicroBeats(raw, maxChars: maxCharsPerBeat);
-
-    // Add chunk (or its micro-beats)
-    if (beats.length <= 1) {
-      feedItems.add(chunk);
-    } else {
-      for (int bIdx = 0; bIdx < beats.length; bIdx++) {
-        feedItems.add(chunk.copyWith(
-          id: '${chunk.id}_beat_$bIdx',
-          text: beats[bIdx],
-          pageReference: chunk.pageReference != null
-              ? '${chunk.pageReference} (${bIdx + 1}/${beats.length})'
-              : null,
-        ));
-      }
-    }
+    // 1-to-1 canonical ReadingChunk mapping (F21)
+    feedItems.add(chunk);
 
     final seq = chunk.sequence ?? 0;
 
@@ -216,55 +201,4 @@ int? _resolveCardSequence(ReaderItem card, Map<String, int> chunkSeqById) {
   }
 
   return null;
-}
-
-/// Split a chunk's text into micro-beats for Feed Mode (vertical page-snapping)
-///
-/// Each beat <= maxChars characters, split at sentence boundaries when possible.
-/// This ensures one vertical swipe = one readable page in Feed Mode.
-List<String> _splitChunkIntoMicroBeats(String text, {int maxChars = 380}) {
-  if (text.length <= maxChars) return [text];
-
-  final sentences = text.split(RegExp(r'(?<=[.!?])\s+'));
-
-  // If only one sentence or no sentence boundaries, hard-split by words
-  if (sentences.length <= 1) {
-    final words = text.split(RegExp(r'\s+'));
-    final parts = <String>[];
-    var current = StringBuffer();
-    for (final w in words) {
-      if (current.isNotEmpty && current.length + w.length + 1 > maxChars) {
-        parts.add(current.toString().trim());
-        current = StringBuffer();
-      }
-      if (current.isNotEmpty) current.write(' ');
-      current.write(w);
-    }
-    if (current.isNotEmpty) parts.add(current.toString().trim());
-    return parts.isNotEmpty ? parts : [text];
-  }
-
-  // Split at sentence boundaries
-  final beats = <String>[];
-  var currentBeat = StringBuffer();
-  for (final s in sentences) {
-    final trimmed = s.trim();
-    if (trimmed.isEmpty) continue;
-    if (currentBeat.isNotEmpty && currentBeat.length + trimmed.length + 1 > maxChars) {
-      beats.add(currentBeat.toString().trim());
-      currentBeat = StringBuffer();
-    }
-    if (currentBeat.isNotEmpty) currentBeat.write(' ');
-    currentBeat.write(trimmed);
-  }
-  if (currentBeat.isNotEmpty) {
-    // Merge tiny trailing beat into previous
-    if (beats.isNotEmpty && currentBeat.length < 80 &&
-        (beats.last.length + currentBeat.length + 1) <= maxChars + 60) {
-      beats[beats.length - 1] = '${beats.last} ${currentBeat.toString().trim()}';
-    } else {
-      beats.add(currentBeat.toString().trim());
-    }
-  }
-  return beats.isNotEmpty ? beats : [text];
 }

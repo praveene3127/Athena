@@ -223,9 +223,9 @@ void main() {
     // Test 4: Data Integrity & Word Spacing
     // -------------------------------------------------------------
     test('4. Data Integrity: Word spacing sanitized & Context Cards interleaved', () {
-      const fusedRaw = 'Thefourboyswhocarriedbannersmarchedsolemnlytothedais.';
+      const fusedRaw = 'Thefouryoungstudentswhocarriedbookswalkedslowlytotheschool.';
       final clean = sanitizeProseSpacing(fusedRaw);
-      expect(clean, equals('The four boys who carried banners marched solemnly to the dais.'));
+      expect(clean, equals('The four young students who carried books walked slowly to the school.'));
 
       final chunks = [
         ReaderItem(id: 'c1', type: 'reading_chunk', sequence: 1, text: clean),

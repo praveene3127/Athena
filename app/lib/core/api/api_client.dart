@@ -1,4 +1,3 @@
-import 'dart:isolate';
 import 'dart:typed_data';
 import 'dart:async';
 import 'dart:convert';
@@ -14,7 +13,7 @@ import 'package:athena/core/config/config.dart';
 import 'package:athena/core/api/lan_discovery.dart';
 import 'package:athena/core/errors.dart';
 import 'package:athena/models/ai_provider.dart';
-import 'package:syncfusion_flutter_pdf/pdf.dart';
+import 'package:athena/services/ingestion_pipeline.dart';
 import 'package:athena/services/local_context_service.dart';
 import 'package:athena/services/local_database.dart';
 import 'package:athena/services/lossless_chunker.dart';
@@ -170,453 +169,7 @@ String _epubMarkupToText(String source) {
       .trim();
 }
 
-class _ParseDocumentArgs {
-  final String docId;
-  final String fileName;
-  final String? filePath;
-  final Uint8List? fileBytes;
-
-  const _ParseDocumentArgs({
-    required this.docId,
-    required this.fileName,
-    this.filePath,
-    this.fileBytes,
-  });
-}
-
-_ParseDocumentResult _parseDocumentTopLevel(_ParseDocumentArgs args) {
-  return _parseAndChunkDocumentInBackground(_ParseDocumentParams(
-    bytes: args.fileBytes ?? <int>[],
-    fileName: args.fileName,
-    docId: args.docId,
-  ));
-}
-
-class _ParseDocumentParams {
-  final List<int> bytes;
-  final String fileName;
-  final String docId;
-
-  const _ParseDocumentParams({
-    required this.bytes,
-    required this.fileName,
-    required this.docId,
-  });
-}
-
-class _ParseDocumentResult {
-  final String canonicalText;
-  final int pageCount;
-  final List<Map<String, Object?>> chunkMaps;
-
-  const _ParseDocumentResult({
-    required this.canonicalText,
-    required this.pageCount,
-    required this.chunkMaps,
-  });
-}
-
-bool _isTocOrFrontMatter(String text) {
-  final lower = text.toLowerCase().trim();
-  if (lower.isEmpty) return true;
-  final lines = text
-      .split('\n')
-      .map((l) => l.trim())
-      .where((l) => l.isNotEmpty)
-      .toList();
-  if (lines.isEmpty) return true;
-  if (lower.contains('table of contents') ||
-      lower.startsWith('contents') ||
-      lower.contains('\ncontents\n')) {
-    return true;
-  }
-  final chapterMatches =
-      RegExp(r'\bchapter\s+\d+\b', caseSensitive: false)
-          .allMatches(lower)
-          .length;
-  if (chapterMatches >= 4) return true;
-  if ((lower.contains('all rights reserved') ||
-          lower.contains('printed in the united states') ||
-          lower.contains('isbn:')) &&
-      lines.length < 20) {
-    return true;
-  }
-  return false;
-}
-
-final _closingPunctRe = RegExp(r'^[.,!?;:)\]}"”’]');
-final _openingPunctRe = RegExp(r'[(\[{"“‘\-]$');
-
-String _reconstructWordWithGlyphSpacing(TextWord word) {
-  if (word.glyphs.isEmpty) return word.text.trim();
-  if (word.glyphs.length == 1) return word.glyphs.first.text.trim();
-
-  final sb = StringBuffer();
-  for (int g = 0; g < word.glyphs.length; g++) {
-    final currGlyph = word.glyphs[g];
-    if (g > 0) {
-      final prevGlyph = word.glyphs[g - 1];
-      final horizontalGap =
-          currGlyph.bounds.left - prevGlyph.bounds.right;
-      final gapThreshold =
-          (currGlyph.bounds.width * 0.18).clamp(1.0, 3.5);
-      if (horizontalGap > gapThreshold || horizontalGap >= 1.2) {
-        final prevText = sb.toString();
-        if (prevText.isNotEmpty &&
-            !prevText.endsWith(' ') &&
-            !prevText.endsWith('-')) {
-          sb.write(' ');
-        }
-      }
-    }
-    sb.write(currGlyph.text);
-  }
-  return sb.toString().trim();
-}
-
-String _extractSinglePageText(PdfTextExtractor extractor, int index) {
-  try {
-    final lines = extractor.extractTextLines(
-        startPageIndex: index, endPageIndex: index);
-    if (lines.isNotEmpty) {
-      final lineStrings = <String>[];
-      for (final line in lines) {
-        if (line.wordCollection.isNotEmpty) {
-          final lineBuffer = StringBuffer();
-          for (int w = 0; w < line.wordCollection.length; w++) {
-            final wordStr =
-                _reconstructWordWithGlyphSpacing(line.wordCollection[w]);
-            if (wordStr.isEmpty) continue;
-            if (lineBuffer.isNotEmpty) {
-              final prev = lineBuffer.toString();
-              final prevEndsOpening = _openingPunctRe.hasMatch(prev);
-              final currStartsClosing = _closingPunctRe.hasMatch(wordStr);
-              if (!prevEndsOpening &&
-                  !currStartsClosing &&
-                  !prev.endsWith(' ')) {
-                lineBuffer.write(' ');
-              }
-            }
-            lineBuffer.write(wordStr);
-          }
-          final lineStr = lineBuffer.toString().trim();
-          if (lineStr.isNotEmpty) {
-            lineStrings.add(lineStr);
-          }
-        } else if (line.text.trim().isNotEmpty) {
-          lineStrings.add(line.text.trim());
-        }
-      }
-      if (lineStrings.isNotEmpty) {
-        return lineStrings.join('\n');
-      }
-    }
-  } catch (e) {
-    debugPrint('Athena caught error: $e');
-  }
-
-  try {
-    return extractor.extractText(
-      startPageIndex: index,
-      endPageIndex: index,
-      layoutText: true,
-    );
-  } catch (e) {
-    try {
-      return extractor.extractText(
-        startPageIndex: index,
-        endPageIndex: index,
-      );
-    } catch (e) {
-      return '';
-    }
-  }
-}
-
-class _PdfWindowBatchArgs {
-  final String? filePath;
-  final List<int>? fileBytes;
-  final int startPageIndex;
-  final int endPageIndex;
-  final int totalPages;
-
-  const _PdfWindowBatchArgs({
-    this.filePath,
-    this.fileBytes,
-    required this.startPageIndex,
-    required this.endPageIndex,
-    required this.totalPages,
-  });
-}
-
-class _PdfWindowBatchResult {
-  final Map<int, String> pageTexts;
-
-  const _PdfWindowBatchResult({required this.pageTexts});
-}
-
-Future<_PdfWindowBatchResult> _extractPdfWindowBatchTopLevel(
-    _PdfWindowBatchArgs args) async {
-  List<int>? bytes = args.fileBytes;
-  if ((bytes == null || bytes.isEmpty) &&
-      args.filePath != null &&
-      args.filePath!.isNotEmpty) {
-    try {
-      bytes = await XFile(args.filePath!).readAsBytes();
-    } catch (e) {
-      debugPrint('[Athena] File read error in window batch isolate: $e');
-    }
-  }
-  if (bytes == null || bytes.isEmpty) {
-    return const _PdfWindowBatchResult(pageTexts: {});
-  }
-
-  final Map<int, String> pageTexts = {};
-  PdfDocument? pdfDoc;
-  try {
-    pdfDoc = PdfDocument(inputBytes: bytes);
-    final extractor = PdfTextExtractor(pdfDoc);
-    final frontMatterCutoff = (args.totalPages * 0.15).ceil().clamp(1, 15);
-    final maxPage = pdfDoc.pages.count;
-
-    for (int i = args.startPageIndex;
-        i <= args.endPageIndex && i < maxPage;
-        i++) {
-      final pageNum = i + 1;
-      final rawText = _extractSinglePageText(extractor, i);
-
-      // Fast-skip guard for empty or scanned image pages without text layer (< 10 chars)
-      if (rawText.trim().length < 10) {
-        continue;
-      }
-
-      if (i < frontMatterCutoff && _isTocOrFrontMatter(rawText)) {
-        continue;
-      }
-
-      final sanitized = sanitizeProseSpacing(rawText).trim();
-      if (sanitized.length >= 10) {
-        pageTexts[pageNum] = sanitized;
-      }
-    }
-  } catch (e) {
-    debugPrint('[Athena] Batch extraction error in isolate: $e');
-  } finally {
-    try {
-      pdfDoc?.dispose(); // CRITICAL: Immediate memory disposal!
-    } catch (_) {}
-  }
-
-  return _PdfWindowBatchResult(pageTexts: pageTexts);
-}
-
-class _PdfPageCountArgs {
-  final String? filePath;
-  final List<int>? fileBytes;
-
-  const _PdfPageCountArgs({this.filePath, this.fileBytes});
-}
-
-Future<int> _getPdfPageCountTopLevel(_PdfPageCountArgs args) async {
-  List<int>? bytes = args.fileBytes;
-  if ((bytes == null || bytes.isEmpty) &&
-      args.filePath != null &&
-      args.filePath!.isNotEmpty) {
-    try {
-      bytes = await XFile(args.filePath!).readAsBytes();
-    } catch (e) {
-      debugPrint('[Athena] Error reading file for page count: $e');
-    }
-  }
-  if (bytes == null || bytes.isEmpty) return 1;
-
-  PdfDocument? doc;
-  try {
-    doc = PdfDocument(inputBytes: bytes);
-    return doc.pages.count;
-  } catch (e) {
-    return 1;
-  } finally {
-    try {
-      doc?.dispose();
-    } catch (_) {}
-  }
-}
-
-_ParseDocumentResult _parseAndChunkDocumentInBackground(
-    _ParseDocumentParams params) {
-  final bytes = params.bytes;
-  final fileName = params.fileName;
-  final docId = params.docId;
-  final lowerName = fileName.toLowerCase();
-  String canonicalText = '';
-  int pageCount = 1;
-  final spans = <Map<String, dynamic>>[];
-
-  if (lowerName.endsWith('.pdf')) {
-    try {
-      final PdfDocument pdfDoc = PdfDocument(inputBytes: bytes);
-      pageCount = pdfDoc.pages.count;
-      final PdfTextExtractor extractor = PdfTextExtractor(pdfDoc);
-      final buffer = StringBuffer();
-      final frontMatterCutoff = (pageCount * 0.15).ceil().clamp(1, 15);
-
-      for (int i = 0; i < pageCount; i++) {
-        final pageNum = i + 1;
-        final pageText = _extractSinglePageText(extractor, i);
-
-        // Fast-skip guard for empty or scanned image pages (< 10 chars)
-        if (pageText.trim().length < 10) {
-          continue;
-        }
-
-        if (i < frontMatterCutoff && _isTocOrFrontMatter(pageText)) {
-          continue;
-        }
-
-        final sanitizedPage = sanitizeProseSpacing(pageText).trim();
-        if (sanitizedPage.length < 10) continue;
-
-        if (buffer.isNotEmpty) {
-          buffer.write('\n\n');
-        }
-        final pageStart = buffer.length;
-        buffer.write(sanitizedPage);
-        final pageEnd = buffer.length;
-
-        spans.add({
-          'start': pageStart,
-          'end': pageEnd,
-          'page_start': pageNum,
-          'page_end': pageNum,
-          'type': 'paragraph',
-        });
-      }
-
-      // If everything got filtered out, fallback to extracting all pages
-      if (buffer.isEmpty) {
-        for (int i = 0; i < pageCount; i++) {
-          final pageNum = i + 1;
-          final pageText = _extractSinglePageText(extractor, i);
-          final sanitizedPage = sanitizeProseSpacing(pageText).trim();
-          if (sanitizedPage.isEmpty) continue;
-
-          if (buffer.isNotEmpty) {
-            buffer.write('\n\n');
-          }
-          final pageStart = buffer.length;
-          buffer.write(sanitizedPage);
-          final pageEnd = buffer.length;
-
-          spans.add({
-            'start': pageStart,
-            'end': pageEnd,
-            'page_start': pageNum,
-            'page_end': pageNum,
-            'type': 'paragraph',
-          });
-        }
-      }
-
-      pdfDoc.dispose();
-      canonicalText = buffer.toString().trim();
-    } catch (e) {
-      try {
-        canonicalText =
-            sanitizeProseSpacing(utf8.decode(bytes, allowMalformed: true));
-      } catch (e) {
-        canonicalText = sanitizeProseSpacing(String.fromCharCodes(bytes));
-      }
-    }
-  } else if (lowerName.endsWith('.epub')) {
-    canonicalText = extractEpubText(bytes);
-    if (canonicalText.isEmpty) {
-      try {
-        canonicalText =
-            sanitizeProseSpacing(utf8.decode(bytes, allowMalformed: true));
-      } catch (e) {
-        canonicalText = sanitizeProseSpacing(String.fromCharCodes(bytes));
-      }
-    }
-  } else {
-    try {
-      canonicalText =
-          sanitizeProseSpacing(utf8.decode(bytes, allowMalformed: true));
-    } catch (e) {
-      canonicalText = sanitizeProseSpacing(String.fromCharCodes(bytes));
-    }
-  }
-
-  canonicalText = canonicalText.trim();
-  if (canonicalText.isEmpty) {
-    canonicalText = 'Document: $fileName\n\nPreserved text content.';
-  }
-
-  if (spans.isEmpty) {
-    spans.add({
-      'start': 0,
-      'end': canonicalText.length,
-      'page_start': 1,
-      'page_end': pageCount,
-      'type': 'paragraph',
-    });
-  }
-
-  final chunkMaps = LosslessChunker().build(
-    documentId: docId,
-    canonicalText: canonicalText,
-    spans: spans,
-  );
-
-  return _ParseDocumentResult(
-    canonicalText: canonicalText,
-    pageCount: pageCount,
-    chunkMaps: chunkMaps,
-  );
-}
-
 class ApiClient {
-  static Future<int> _getPdfPageCount({
-    String? filePath,
-    List<int>? fileBytes,
-  }) async {
-    final countArgs =
-        _PdfPageCountArgs(filePath: filePath, fileBytes: fileBytes);
-    if (kIsWeb) {
-      return await _getPdfPageCountTopLevel(countArgs);
-    }
-    try {
-      return await Isolate.run(
-          () async => await _getPdfPageCountTopLevel(countArgs));
-    } catch (e) {
-      debugPrint('[Athena Error] Page count isolate failed, falling back: $e');
-      return await _getPdfPageCountTopLevel(countArgs);
-    }
-  }
-
-  static Future<_ParseDocumentResult> _runIsolateParser(
-    String docId,
-    String fileName,
-    String? filePath,
-    Uint8List? fileBytes,
-  ) async {
-    final args = _ParseDocumentArgs(
-      docId: docId,
-      fileName: fileName,
-      filePath: filePath,
-      fileBytes: fileBytes,
-    );
-    if (kIsWeb) {
-      return _parseDocumentTopLevel(args);
-    }
-    try {
-      return await Isolate.run(() => _parseDocumentTopLevel(args));
-    } catch (e, st) {
-      debugPrint('[Athena Error] Isolate parser failed, falling back: $e\n$st');
-      return _parseDocumentTopLevel(args);
-    }
-  }
-
   static bool _backendReachable = true;
   static DateTime? _backendCircuitBreakerResetTime;
 
@@ -680,6 +233,10 @@ class ApiClient {
           }
           if (base.isNotEmpty) {
             options.baseUrl = base;
+          }
+          final pairingToken = AppConfig.pairingToken;
+          if (pairingToken.isNotEmpty) {
+            options.headers['X-Athena-Pairing-Token'] = pairingToken;
           }
           return handler.next(options);
         },
@@ -889,146 +446,35 @@ class ApiClient {
       }
     }
 
-    // 2. On-device standalone extraction and lossless chunking
+    // 2. On-device standalone extraction and lossless chunking via unified DocumentIngestionPipeline
     final docId = 'doc_${DateTime.now().millisecondsSinceEpoch}';
     final cleanTitle = fileName.replaceAll(RegExp(r'\.[a-zA-Z0-9]+$'), '');
-    final now = DateTime.now().toUtc().toIso8601String();
-    final lowerName = fileName.toLowerCase();
-    final isPdf = lowerName.endsWith('.pdf');
 
-    // If PDF and we have filePath on non-web, we do NOT load the full 150MB file into RAM!
-    if (isPdf && !kIsWeb && filePath != null && filePath.isNotEmpty) {
-      return _uploadPdfStreamedOnDevice(
-        docId: docId,
-        fileName: fileName,
-        cleanTitle: cleanTitle,
-        filePath: filePath,
-        fileBytes: null,
-        onProgress: onProgress,
-      );
-    }
-
-    // Otherwise, obtain bytes (for web or EPUB/TXT or in-memory streams)
-    Uint8List? rawBytes;
-    if (fileBytes != null && fileBytes.isNotEmpty) {
-      rawBytes =
-          fileBytes is Uint8List ? fileBytes : Uint8List.fromList(fileBytes);
-    } else if (filePath != null && filePath.isNotEmpty) {
-      try {
-        final xf = XFile(filePath);
-        rawBytes = await xf.readAsBytes();
-      } catch (e, st) {
-        debugPrint('[Athena Error] Failed reading filePath $filePath: $e\n$st');
-      }
-    } else if (fileStream != null) {
+    // Resolve bytes from fileStream if neither filePath nor fileBytes was provided
+    List<int>? bytes = fileBytes;
+    if ((bytes == null || bytes.isEmpty) && (filePath == null || filePath.isEmpty) && fileStream != null) {
       try {
         final builder = BytesBuilder(copy: false);
         await for (final chunk in fileStream) {
           builder.add(chunk);
         }
-        rawBytes = builder.takeBytes();
+        bytes = builder.takeBytes();
       } catch (e, st) {
         debugPrint('[Athena Error] Failed reading fileStream: $e\n$st');
       }
     }
 
-    if (rawBytes == null || rawBytes.isEmpty) {
-      throw const AppError(
-        code: 'PDF_UNREADABLE',
-        message: 'Could not read bytes from the selected file.',
-      );
-    }
-
-    if (isPdf) {
-      return _uploadPdfStreamedOnDevice(
-        docId: docId,
-        fileName: fileName,
-        cleanTitle: cleanTitle,
-        filePath: filePath,
-        fileBytes: rawBytes,
-        onProgress: onProgress,
-      );
-    }
-
-    onProgress?.call(0.40, '2/4 Extracting & healing text...');
-
-    final parseResult = await _runIsolateParser(
-      docId,
-      fileName,
-      filePath,
-      rawBytes,
+    return _uploadStreamedOnDevice(
+      docId: docId,
+      fileName: fileName,
+      cleanTitle: cleanTitle,
+      filePath: filePath,
+      fileBytes: bytes,
+      onProgress: onProgress,
     );
-
-    final canonicalText = parseResult.canonicalText;
-    final pageCount = parseResult.pageCount;
-    final chunkMaps = parseResult.chunkMaps;
-
-    onProgress?.call(
-        0.70, '3/4 Building single-screen chunks & Context Cards...');
-
-    final cardMaps = <Map<String, Object?>>[];
-    try {
-      final contextService = LocalContextService();
-      final cards = await contextService.buildCards(docId, chunkMaps);
-      for (final cd in cards) {
-        cardMaps.add({
-          'id': cd['id'] ?? 'card_${cd['concept_name']}',
-          'document_id': docId,
-          'source_chunk_id': cd['source_chunk_id'] ?? chunkMaps.first['id']!,
-          'concept_name': cd['concept_name'] ?? '',
-          'card_type': cd['card_type'] ?? 'context',
-          'title': cd['title'] ?? '',
-          'body': cd['body'] ?? '',
-          'why_here': cd['why_here'] ?? '',
-          'citations_json': cd['citations_json'] ?? '[]',
-          'exact_quote': cd['exact_quote'],
-          'support_status': 'fully_supported',
-          'canonical_sha256': cd['canonical_sha256'] ?? '',
-          'generation_mode': cd['generation_mode'] ?? 'speculative_draft',
-          'verified': 1,
-          'saved': 0,
-          'dismissed': 0,
-          'created_at': now,
-        });
-      }
-    } catch (e) {
-      debugPrint('Athena caught error: $e');
-    }
-
-    onProgress?.call(0.90, '4/4 Saving to SQLite library...');
-
-    try {
-      await LocalDatabase.instance.insertDocument({
-        'id': docId,
-        'filename': fileName,
-        'title': cleanTitle,
-        'status': 'ready',
-        'stage': 'done',
-        'stage_label': 'Ready to read',
-        'percent': 100,
-        'page_count': pageCount,
-        'processed_page': pageCount,
-        'file_path': filePath ?? 'local://$fileName',
-        'canonical_text': canonicalText,
-        'integrity_verified': 1,
-        'context_status': 'ready',
-        'created_at': now,
-        'updated_at': now,
-      });
-
-      await LocalDatabase.instance.insertChunks(chunkMaps);
-      if (cardMaps.isNotEmpty) {
-        await LocalDatabase.instance.insertCards(cardMaps);
-      }
-    } catch (e, st) {
-      debugPrint('[Athena Error] LocalDatabase insert notice: $e\n$st');
-    }
-
-    onProgress?.call(1.0, 'Ready to read');
-    return docId;
   }
 
-  Future<String> _uploadPdfStreamedOnDevice({
+  Future<String> _uploadStreamedOnDevice({
     required String docId,
     required String fileName,
     required String cleanTitle,
@@ -1039,12 +485,7 @@ class ApiClient {
     final now = DateTime.now().toUtc().toIso8601String();
     onProgress?.call(0.05, '1/4 Initializing document library...');
 
-    final totalPages = await _getPdfPageCount(
-      filePath: filePath,
-      fileBytes: fileBytes,
-    );
-
-    // Step A: Insert Document at 5% progress before extraction starts
+    // Step A: Insert initial document record in DB
     try {
       await LocalDatabase.instance.insertDocument({
         'id': docId,
@@ -1054,7 +495,7 @@ class ApiClient {
         'stage': 'extracting',
         'stage_label': 'Initializing document extraction...',
         'percent': 5,
-        'page_count': totalPages,
+        'page_count': 0,
         'processed_page': 0,
         'file_path': filePath ?? 'local://$fileName',
         'integrity_verified': 0,
@@ -1066,147 +507,47 @@ class ApiClient {
       debugPrint('[Athena Error] Initial insertDocument notice: $e');
     }
 
-    const int windowSize = 25;
-    int chunkSequence = 1;
-    int offsetDelta = 0;
-    final List<Map<String, Object?>> allChunks = [];
-    final StringBuffer fullCanonical = StringBuffer();
+    // Step B: Unified Ingestion Pipeline (F23 & F33)
+    final result = await DocumentIngestionPipeline.ingest(
+      docId: docId,
+      fileName: fileName,
+      filePath: filePath,
+      fileBytes: fileBytes,
+      onProgress: onProgress,
+      onBatch: (batchChunks, processedPages, totalPages, isFinalBatch) async {
+        await LocalDatabase.instance.insertChunksBatch(
+          batchChunks,
+          isFinalBatch: isFinalBatch,
+        );
 
-    for (int startPage = 0; startPage < totalPages; startPage += windowSize) {
-      final endPage = (startPage + windowSize - 1).clamp(0, totalPages - 1);
-      final isFinalBatch = (endPage == totalPages - 1);
+        final progressFraction =
+            0.05 + 0.65 * (processedPages / (totalPages == 0 ? 1 : totalPages));
+        final pctInt = (progressFraction * 100).toInt();
+        final stageMsg =
+            'Extracting pages $processedPages of $totalPages ($pctInt%)...';
+        final bool canFastStart = (totalPages > 120 && processedPages >= 60);
 
-      final progressFraction = 0.05 + 0.65 * ((endPage + 1) / totalPages);
-      final pctInt = (progressFraction * 100).toInt();
-      final stageMsg =
-          'Extracting pages ${startPage + 1}–${endPage + 1} of $totalPages ($pctInt%)...';
-      onProgress?.call(progressFraction, stageMsg);
-
-      final batchArgs = _PdfWindowBatchArgs(
-        filePath: filePath,
-        fileBytes: fileBytes,
-        startPageIndex: startPage,
-        endPageIndex: endPage,
-        totalPages: totalPages,
-      );
-
-      _PdfWindowBatchResult batchResult;
-      if (kIsWeb) {
-        batchResult = await _extractPdfWindowBatchTopLevel(batchArgs);
-      } else {
         try {
-          batchResult = await Isolate.run(
-              () async => await _extractPdfWindowBatchTopLevel(batchArgs));
+          await LocalDatabase.instance.updateDocumentProgress(
+            docId,
+            status: canFastStart ? 'ready' : 'processing',
+            stage: 'extracting',
+            stageLabel: stageMsg,
+            percent: pctInt,
+            processedPage: processedPages,
+            pageCount: totalPages,
+          );
         } catch (e) {
-          debugPrint('[Athena] Isolate batch failed, falling back: $e');
-          batchResult = await _extractPdfWindowBatchTopLevel(batchArgs);
+          debugPrint('[Athena Error] updateDocumentProgress notice: $e');
         }
-      }
+      },
+    );
 
-      final batchBuffer = StringBuffer();
-      final batchSpans = <Map<String, dynamic>>[];
+    final allChunks = result.chunks;
+    final totalPages = result.pageCount;
+    final canonicalStr = result.canonicalText;
 
-      final sortedPageNums = batchResult.pageTexts.keys.toList()..sort();
-      for (final pageNum in sortedPageNums) {
-        final pageText = batchResult.pageTexts[pageNum]!;
-        if (pageText.isEmpty) continue;
-
-        if (batchBuffer.isNotEmpty) {
-          batchBuffer.write('\n\n');
-        }
-        final pageStart = batchBuffer.length;
-        batchBuffer.write(pageText);
-        final pageEnd = batchBuffer.length;
-
-        batchSpans.add({
-          'start': pageStart,
-          'end': pageEnd,
-          'page_start': pageNum,
-          'page_end': pageNum,
-          'type': 'paragraph',
-        });
-      }
-
-      final batchText = batchBuffer.toString().trim();
-      if (batchText.isNotEmpty) {
-        if (fullCanonical.isNotEmpty) {
-          fullCanonical.write('\n\n');
-          offsetDelta = fullCanonical.length;
-        }
-        fullCanonical.write(batchText);
-
-        final batchChunks = LosslessChunker().build(
-          documentId: docId,
-          canonicalText: batchText,
-          spans: batchSpans,
-          initialSequence: chunkSequence,
-          offsetDelta: offsetDelta,
-        );
-
-        if (batchChunks.isNotEmpty) {
-          allChunks.addAll(batchChunks);
-          chunkSequence += batchChunks.length;
-
-          try {
-            await LocalDatabase.instance.insertChunksBatch(
-              batchChunks,
-              isFinalBatch: isFinalBatch,
-            );
-          } catch (e) {
-            debugPrint('[Athena Error] insertChunksBatch notice: $e');
-          }
-        }
-      }
-
-      // Fast-start reading check for large books (> 120 pages):
-      final bool canFastStart = (totalPages > 120 && (endPage + 1) >= 60);
-
-      try {
-        await LocalDatabase.instance.updateDocumentProgress(
-          docId,
-          status: canFastStart ? 'ready' : 'processing',
-          stage: 'extracting',
-          stageLabel: stageMsg,
-          percent: pctInt,
-          processedPage: endPage + 1,
-          pageCount: totalPages,
-        );
-      } catch (e) {
-        debugPrint('[Athena Error] updateDocumentProgress notice: $e');
-      }
-    }
-
-    if (allChunks.isEmpty) {
-      // Fallback if PDF parser produced no text (e.g. malformed or text disguised as PDF in tests)
-      Uint8List? fallbackBytes = fileBytes is Uint8List
-          ? fileBytes
-          : (fileBytes != null ? Uint8List.fromList(fileBytes) : null);
-      if (fallbackBytes == null && filePath != null) {
-        try {
-          fallbackBytes = await XFile(filePath).readAsBytes();
-        } catch (_) {}
-      }
-      if (fallbackBytes != null && fallbackBytes.isNotEmpty) {
-        final fallbackResult = await _runIsolateParser(
-          docId,
-          fileName,
-          filePath,
-          fallbackBytes,
-        );
-        if (fallbackResult.chunkMaps.isNotEmpty) {
-          allChunks.addAll(fallbackResult.chunkMaps);
-          fullCanonical.write(fallbackResult.canonicalText);
-          try {
-            await LocalDatabase.instance.insertChunksBatch(
-              fallbackResult.chunkMaps,
-              isFinalBatch: true,
-            );
-          } catch (_) {}
-        }
-      }
-    }
-
-    // Step B: Context Cards Generation
+    // Step C: Context Cards Generation
     onProgress?.call(0.75, '3/4 Generating high-signal Context Cards...');
     final cardMaps = <Map<String, Object?>>[];
     try {
@@ -1225,10 +566,10 @@ class ApiClient {
           'why_here': cd['why_here'] ?? '',
           'citations_json': cd['citations_json'] ?? '[]',
           'exact_quote': cd['exact_quote'],
-          'support_status': 'fully_supported',
+          'support_status': cd['support_status'] ?? 'unverified',
           'canonical_sha256': cd['canonical_sha256'] ?? '',
-          'generation_mode': cd['generation_mode'] ?? 'speculative_draft',
-          'verified': 1,
+          'generation_mode': cd['generation_mode'] ?? 'research_grounded',
+          'verified': cd['verified'] == 1 ? 1 : 0,
           'saved': 0,
           'dismissed': 0,
           'created_at': now,
@@ -1241,9 +582,8 @@ class ApiClient {
       debugPrint('[Athena Error] Context card generation notice: $e');
     }
 
-    // Step C: Finalize Document
+    // Step D: True End-to-End SHA-256 Verification & Finalize (F22)
     onProgress?.call(0.95, '4/4 Finalizing library index...');
-    final canonicalStr = fullCanonical.toString().trim();
     final words =
         canonicalStr.split(RegExp(r'\s+')).where((w) => w.isNotEmpty).length;
     final readingTime = (words / 200).ceil().clamp(1, 9999);
@@ -1263,6 +603,8 @@ class ApiClient {
         totalWords: words,
         totalCharacters: canonicalStr.length,
         readingTimeMinutes: readingTime,
+        canonicalSha256: result.canonicalSha256,
+        integrityVerified: result.integrityVerified ? 1 : 0,
       );
     } catch (e) {
       debugPrint('[Athena Error] Final updateDocumentProgress notice: $e');
@@ -1652,87 +994,17 @@ class ApiClient {
       }
     }
 
-    // Standalone on-device mobile mode
+    // Standalone on-device mobile mode (< 1ms single-row indexed update, zero getChunks calls)
     if (!kIsWeb) {
       try {
-        final db = LocalDatabase.instance;
-        final existingCards = await db.getCards(id);
-        final chunks = await db.getChunks(id);
-
-        final chunkSeqById = {
-          for (final c in chunks)
-            c['id']?.toString() ?? '': (c['sequence'] as num?)?.toInt() ?? 0
-        };
-        final cardSeqs = <int>{};
-        for (final c in existingCards) {
-          final srcId = c['source_chunk_id']?.toString();
-          if (srcId != null && chunkSeqById.containsKey(srcId)) {
-            cardSeqs.add(chunkSeqById[srcId]!);
-          }
-        }
-
-        // Look in upcoming window [chunkIndex .. chunkIndex + 4]
-        Map<String, dynamic>? candidateChunk;
-        for (var seq = chunkIndex; seq <= chunkIndex + 4; seq++) {
-          if (!cardSeqs.contains(seq) && (seq % 3 == 0 || seq == chunkIndex)) {
-            final match =
-                chunks.where((c) => (c['sequence'] as num?)?.toInt() == seq);
-            if (match.isNotEmpty) {
-              candidateChunk = match.first;
-              break;
-            }
-          }
-        }
-
-        if (candidateChunk != null) {
-          final cSeq =
-              (candidateChunk['sequence'] as num?)?.toInt() ?? chunkIndex;
-          final newCard = await LocalContextService().generateCardForChunk(
-            id,
-            candidateChunk,
-            cSeq,
-          );
-          if (newCard != null) {
-            await db.insertCards([newCard]);
-          }
-        }
-
-        // Return all active cards mapped with sequence
-        final latestCards = await db.getCards(id);
-        final formattedCards = latestCards.map((c) {
-          final srcId = c['source_chunk_id']?.toString() ?? '';
-          final seq = chunkSeqById[srcId] ?? 0;
-          List citations = [];
-          if (c['citations_json'] != null) {
-            try {
-              citations = jsonDecode(c['citations_json'] as String) as List;
-            } catch (e) {
-              debugPrint('Athena caught error: $e');
-            }
-          }
-          return {
-            'type': 'context_card',
-            'id': c['id'],
-            'insert_after': srcId,
-            'sequence': seq,
-            'title': c['title'] ?? '',
-            'body': c['body'] ?? '',
-            'why_here': c['why_here'] ?? '',
-            'exact_quote': c['exact_quote'],
-            'support_status': c['support_status'] ?? 'fully_supported',
-            'generation_mode': c['generation_mode'] ?? 'grounded',
-            'saved': c['saved'] == 1,
-            'citations': citations,
-          };
-        }).toList();
-
-        return {
-          'status': 'ok',
-          'chunk_index': chunkIndex,
-          'cards': formattedCards,
-        };
+        await LocalDatabase.instance.updateReadingPosition(
+          id,
+          chunkIndex: chunkIndex,
+          chunkId: chunkId,
+          readingMode: readingMode,
+        );
       } catch (e) {
-        debugPrint('Athena caught error: $e');
+        debugPrint('Athena syncReadingProgress error: $e');
       }
     }
 
@@ -2229,204 +1501,270 @@ class ApiClient {
       }
     }
 
-    // 3. On-device fallback via configured Gemini or AI key directly over HTTPS
+    // 3. On-device fallback via configured AI key directly over HTTPS
     try {
       final prefs = await SharedPreferences.getInstance();
-      final key = await SecureStorageService.instance
+      final primaryKey = await SecureStorageService.instance
               .getAIKey('athena_ai_primary_api_key') ??
           '';
-      final provider =
+      final primaryProvider =
           prefs.getString('athena_ai_primary_provider') ?? 'gemini';
-      var model = prefs.getString('athena_ai_primary_model') ?? '';
+      var primaryModel = prefs.getString('athena_ai_primary_model') ?? '';
+      final primaryBaseUrl = prefs.getString('athena_ai_primary_base_url');
 
-      if (key.isNotEmpty && model.isEmpty) {
-        final availableModels = await fetchModels(
-          provider: provider,
-          apiKey: key,
-          baseUrl: prefs.getString('athena_ai_primary_base_url'),
-        );
-        if (availableModels.isNotEmpty) model = availableModels.first.id;
-      }
-
-      if (key.isNotEmpty) {
-        final prompt =
-            'You are Athena, a thoughtful literary reading companion.\n'
-            '${selectedText != null ? "Selected Context: $selectedText\n\n" : (textForPrompt.isNotEmpty ? "Passage: $textForPrompt\n\n" : "")}'
-            'User Question: $question\n\n'
-            'Please provide a clear, concise (under 120 words), insightful explanation directly answering the question.';
-
-        if (provider == 'gemini') {
-          if (model.isEmpty) {
-            throw StateError(
-                'No live Gemini model is available for this API key.');
-          }
-          final effectiveModel = model;
-          final url =
-              'https://generativelanguage.googleapis.com/v1beta/models/$effectiveModel:generateContent?key=$key';
-          final resp = await Dio().post(
-            url,
-            data: {
-              'contents': [
-                {
-                  'parts': [
-                    {'text': prompt}
-                  ]
-                }
-              ]
-            },
-            options: Options(receiveTimeout: const Duration(seconds: 15)),
-          );
-          if (resp.statusCode == 200 && resp.data is Map) {
-            final cand = (resp.data['candidates'] as List?)?.firstOrNull;
-            final part = (cand?['content']?['parts'] as List?)?.firstOrNull;
-            final text = part?['text']?.toString() ?? '';
-            if (text.isNotEmpty) {
-              return {
-                'status': 'ok',
-                'answer': text.trim(),
-                'citations': [],
-                'source': 'direct_gemini',
-              };
-            }
-          }
-        } else if (provider == 'anthropic') {
-          if (model.isEmpty) {
-            throw StateError(
-                'No live Anthropic model is available for this API key.');
-          }
-          final effectiveModel = model;
-          final resp = await Dio().post(
-            'https://api.anthropic.com/v1/messages',
-            data: {
-              'model': effectiveModel,
-              'max_tokens': 300,
-              'messages': [
-                {'role': 'user', 'content': prompt}
-              ],
-            },
-            options: Options(
-              headers: {
-                'x-api-key': key,
-                'anthropic-version': '2023-06-01',
-                'content-type': 'application/json',
-              },
-              receiveTimeout: const Duration(seconds: 15),
-            ),
-          );
-          if (resp.statusCode == 200 && resp.data is Map) {
-            final content = (resp.data['content'] as List?)?.firstOrNull;
-            final answer =
-                content is Map ? content['text']?.toString() ?? '' : '';
-            if (answer.trim().isNotEmpty) {
-              return {
-                'status': 'ok',
-                'answer': answer.trim(),
-                'citations': [],
-                'source': 'direct_anthropic'
-              };
-            }
-          }
-        } else if (provider == 'groq' ||
-            provider == 'deepseek' ||
-            provider == 'openrouter' ||
-            provider == 'openai' ||
-            provider == 'custom') {
-          String compUrl;
-          if (provider == 'groq') {
-            compUrl = 'https://api.groq.com/openai/v1/chat/completions';
-          } else if (provider == 'openai') {
-            compUrl = 'https://api.openai.com/v1/chat/completions';
-          } else if (provider == 'openrouter') {
-            compUrl = 'https://openrouter.ai/api/v1/chat/completions';
-          } else if (provider == 'deepseek') {
-            compUrl = 'https://api.deepseek.com/v1/chat/completions';
-          } else {
-            final b = (prefs.getString('athena_ai_primary_base_url') ??
-                    'https://api.openai.com/v1')
-                .replaceAll(RegExp(r'/+$'), '');
-            compUrl =
-                b.endsWith('/chat/completions') ? b : '$b/chat/completions';
-          }
-
-          if (model.isEmpty) {
-            throw StateError('Select a live model before sending a request.');
-          }
-
-          final resp = await Dio().post(
-            compUrl,
-            data: {
-              'model': model.isNotEmpty ? model : 'llama-3.3-70b-versatile',
-              'messages': [
-                {
-                  'role': 'system',
-                  'content':
-                      'You are Athena, a thoughtful literary reading companion.'
-                },
-                {'role': 'user', 'content': prompt},
-              ],
-              'max_tokens': 200,
-            },
-            options: Options(
-              headers: {
-                'Authorization': 'Bearer $key',
-                'Content-Type': 'application/json',
-              },
-              receiveTimeout: const Duration(seconds: 15),
-            ),
-          );
-          if (resp.statusCode == 200 && resp.data is Map) {
-            final choice = (resp.data['choices'] as List?)?.firstOrNull;
-            final text = choice?['message']?['content']?.toString() ?? '';
-            if (text.isNotEmpty) {
-              return {
-                'status': 'ok',
-                'answer': text.trim(),
-                'citations': [],
-                'source': 'direct_$provider',
-              };
-            }
-          }
-        }
-      }
-    } catch (e) {
-      debugPrint('Athena caught error: $e');
-    }
-
-    // 4. Grounded passage fallback
-    final rawText = (selectedText != null && selectedText.isNotEmpty)
-        ? selectedText
-        : textForPrompt;
-    if (rawText.isNotEmpty) {
-      final sentences = rawText
-          .split(RegExp(r'(?<=[.!?])\s+'))
-          .where((s) => s.trim().isNotEmpty)
-          .toList();
-      if (sentences.isNotEmpty) {
-        String relevantSentence = sentences.first;
-        for (final s in sentences) {
-          if (question
-              .toLowerCase()
-              .split(' ')
-              .any((w) => w.length > 3 && s.toLowerCase().contains(w))) {
-            relevantSentence = s;
-            break;
-          }
-        }
+      if (primaryKey.trim().isEmpty) {
         return {
-          'status': 'ok',
-          'answer': 'From this passage: "$relevantSentence"',
-          'citations': [],
-          'source': 'offline_grounded',
+          'status': 'no_key',
+          'message':
+              'Passage inquiry needs an API key. Configure your preferred AI engine in Settings.',
         };
       }
-    }
 
+      if (primaryModel.isEmpty) {
+        final availableModels = await fetchModels(
+          provider: primaryProvider,
+          apiKey: primaryKey,
+          baseUrl: primaryBaseUrl,
+        );
+        if (availableModels.isNotEmpty) primaryModel = availableModels.first.id;
+      }
+
+      final prompt =
+          'You are Athena, a thoughtful literary reading companion.\n'
+          '${selectedText != null ? "Selected Context: $selectedText\n\n" : (textForPrompt.isNotEmpty ? "Passage: $textForPrompt\n\n" : "")}'
+          'User Question: $question\n\n'
+          'Please provide a clear, concise (under 120 words), insightful explanation directly answering the question.';
+
+      var result = await _callLlmChat(
+        provider: primaryProvider,
+        key: primaryKey.trim(),
+        model: primaryModel,
+        baseUrl: primaryBaseUrl,
+        prompt: prompt,
+      );
+
+      // If primary failed with 429 or 5xx/network error, automatically retry with configured secondary provider
+      if (result['status'] == 'rate_limited' ||
+          result['status'] == 'network_error') {
+        final secondaryKey = await SecureStorageService.instance
+                .getAIKey('athena_ai_secondary_api_key') ??
+            '';
+        if (secondaryKey.trim().isNotEmpty) {
+          final secondaryProvider =
+              prefs.getString('athena_ai_secondary_provider') ?? 'groq';
+          var secondaryModel =
+              prefs.getString('athena_ai_secondary_model') ?? '';
+          final secondaryBaseUrl =
+              prefs.getString('athena_ai_secondary_base_url');
+
+          if (secondaryModel.isEmpty) {
+            final secModels = await fetchModels(
+              provider: secondaryProvider,
+              apiKey: secondaryKey,
+              baseUrl: secondaryBaseUrl,
+            );
+            if (secModels.isNotEmpty) secondaryModel = secModels.first.id;
+          }
+
+          if (secondaryModel.isNotEmpty) {
+            final secResult = await _callLlmChat(
+              provider: secondaryProvider,
+              key: secondaryKey.trim(),
+              model: secondaryModel,
+              baseUrl: secondaryBaseUrl,
+              prompt: prompt,
+            );
+            if (secResult['status'] == 'ok') {
+              return secResult;
+            }
+          }
+        }
+      }
+
+      return result;
+    } catch (e) {
+      return {
+        'status': 'network_error',
+        'message': 'Failed to process inquiry: $e',
+      };
+    }
+  }
+
+  Future<Map<String, dynamic>> _callLlmChat({
+    required String provider,
+    required String key,
+    required String model,
+    String? baseUrl,
+    required String prompt,
+  }) async {
+    final client = Dio();
+    try {
+      if (provider == 'gemini') {
+        if (model.isEmpty) {
+          return {
+            'status': 'no_key',
+            'message': 'No live Gemini model selected in Settings.'
+          };
+        }
+        final url =
+            'https://generativelanguage.googleapis.com/v1beta/models/$model:generateContent';
+        final resp = await client.post(
+          url,
+          data: {
+            'contents': [
+              {
+                'parts': [
+                  {'text': prompt}
+                ]
+              }
+            ]
+          },
+          options: Options(
+            headers: {
+              'x-goog-api-key': key,
+              'Content-Type': 'application/json',
+            },
+            receiveTimeout: const Duration(seconds: 15),
+          ),
+        );
+        if (resp.statusCode == 200 && resp.data is Map) {
+          final cand = (resp.data['candidates'] as List?)?.firstOrNull;
+          final part = (cand?['content']?['parts'] as List?)?.firstOrNull;
+          final text = part?['text']?.toString() ?? '';
+          if (text.isNotEmpty) {
+            return {
+              'status': 'ok',
+              'answer': text.trim(),
+              'citations': [],
+              'source': 'direct_gemini',
+            };
+          }
+        }
+      } else if (provider == 'anthropic') {
+        if (model.isEmpty) {
+          return {
+            'status': 'no_key',
+            'message': 'No live Anthropic model selected in Settings.'
+          };
+        }
+        final resp = await client.post(
+          'https://api.anthropic.com/v1/messages',
+          data: {
+            'model': model,
+            'max_tokens': 300,
+            'messages': [
+              {'role': 'user', 'content': prompt}
+            ],
+          },
+          options: Options(
+            headers: {
+              'x-api-key': key,
+              'anthropic-version': '2023-06-01',
+              'content-type': 'application/json',
+            },
+            receiveTimeout: const Duration(seconds: 15),
+          ),
+        );
+        if (resp.statusCode == 200 && resp.data is Map) {
+          final content = (resp.data['content'] as List?)?.firstOrNull;
+          final answer =
+              content is Map ? content['text']?.toString() ?? '' : '';
+          if (answer.trim().isNotEmpty) {
+            return {
+              'status': 'ok',
+              'answer': answer.trim(),
+              'citations': [],
+              'source': 'direct_anthropic',
+            };
+          }
+        }
+      } else {
+        // OpenAI-compatible providers: groq, deepseek, openrouter, openai, custom
+        String compUrl;
+        if (provider == 'groq') {
+          compUrl = 'https://api.groq.com/openai/v1/chat/completions';
+        } else if (provider == 'openai') {
+          compUrl = 'https://api.openai.com/v1/chat/completions';
+        } else if (provider == 'openrouter') {
+          compUrl = 'https://openrouter.ai/api/v1/chat/completions';
+        } else if (provider == 'deepseek') {
+          compUrl = 'https://api.deepseek.com/v1/chat/completions';
+        } else {
+          final b = sanitizeProviderUrl(baseUrl ?? 'https://api.openai.com/v1');
+          compUrl =
+              b.endsWith('/chat/completions') ? b : '$b/chat/completions';
+        }
+
+        if (model.isEmpty) {
+          return {
+            'status': 'no_key',
+            'message': 'Select a live model in Settings before asking.'
+          };
+        }
+
+        final resp = await client.post(
+          compUrl,
+          data: {
+            'model': model,
+            'messages': [
+              {
+                'role': 'system',
+                'content':
+                    'You are Athena, a thoughtful literary reading companion.'
+              },
+              {'role': 'user', 'content': prompt},
+            ],
+            'max_tokens': 200,
+          },
+          options: Options(
+            headers: {
+              'Authorization': 'Bearer $key',
+              'Content-Type': 'application/json',
+            },
+            receiveTimeout: const Duration(seconds: 15),
+          ),
+        );
+        if (resp.statusCode == 200 && resp.data is Map) {
+          final choice = (resp.data['choices'] as List?)?.firstOrNull;
+          final text = choice?['message']?['content']?.toString() ?? '';
+          if (text.isNotEmpty) {
+            return {
+              'status': 'ok',
+              'answer': text.trim(),
+              'citations': [],
+              'source': 'direct_$provider',
+            };
+          }
+        }
+      }
+    } on DioException catch (de) {
+      final code = de.response?.statusCode;
+      if (code == 401 || code == 403) {
+        return {
+          'status': 'auth_error',
+          'message': 'API key was rejected ($code). Please check Settings.'
+        };
+      } else if (code == 429) {
+        return {
+          'status': 'rate_limited',
+          'message': 'Rate limit exceeded (429).'
+        };
+      } else if (code != null && code >= 500) {
+        return {
+          'status': 'network_error',
+          'message': 'AI provider server error ($code).'
+        };
+      }
+      return {
+        'status': 'network_error',
+        'message': de.message ?? 'Network request failed.'
+      };
+    } catch (e) {
+      return {'status': 'network_error', 'message': e.toString()};
+    }
     return {
-      'status': 'ok',
-      'answer':
-          "Athena analyzed this passage in the context of the book's central theme. Connect to the Athena server or add a Gemini API key in Settings to unlock deep analytical synthesis.",
-      'citations': [],
-      'source': 'offline_fallback',
+      'status': 'network_error',
+      'message': 'Failed to obtain an answer from the AI provider.'
     };
   }
 
@@ -2688,14 +2026,14 @@ class ApiClient {
           'Accept': 'application/json'
         };
       } else {
-        final root = switch (providerKey) {
+        final rawRoot = switch (providerKey) {
           'groq' => 'https://api.groq.com/openai/v1',
           'openai' => 'https://api.openai.com/v1',
           'openrouter' => 'https://openrouter.ai/api/v1',
           'deepseek' => 'https://api.deepseek.com/v1',
-          _ => (baseUrl ?? 'https://api.openai.com/v1')
-              .replaceAll(RegExp(r'/+$'), ''),
+          _ => sanitizeProviderUrl(baseUrl ?? 'https://api.openai.com/v1'),
         };
+        final root = sanitizeProviderUrl(rawRoot);
         modelsUrl = root.endsWith('/models') ? root : '$root/models';
         headers = {
           'Accept': 'application/json',
@@ -2830,6 +2168,129 @@ class ApiClient {
       model: model,
       baseUrl: baseUrl,
     );
+  }
+
+  // --- Security & LAN Companion Pairing (F29, F30) ---
+
+  /// Checks whether cleartext HTTP is allowed for a given host URL.
+  /// Cleartext HTTP is strictly forbidden for external cloud domains and only permitted
+  /// for loopback (127.0.0.1, localhost) or private RFC1918 LAN networks
+  /// (192.168.x.x, 10.x.x.x, 172.16-31.x.x, *.local).
+  static bool isPermittedHttpHost(String url) {
+    final uri = Uri.tryParse(url.trim());
+    if (uri == null) return false;
+    if (uri.scheme == 'https') return true;
+    if (uri.scheme != 'http') return false;
+    final host = uri.host.toLowerCase();
+    if (host == '127.0.0.1' || host == 'localhost' || host == '10.0.2.2') return true;
+    if (host.endsWith('.local')) return true;
+    if (RegExp(r'^10\.\d{1,3}\.\d{1,3}\.\d{1,3}$').hasMatch(host)) return true;
+    if (RegExp(r'^192\.168\.\d{1,3}\.\d{1,3}$').hasMatch(host)) return true;
+    final m172 = RegExp(r'^172\.(\d{1,3})\.\d{1,3}\.\d{1,3}$').firstMatch(host);
+    if (m172 != null) {
+      final octet = int.tryParse(m172.group(1)!) ?? 0;
+      if (octet >= 16 && octet <= 31) return true;
+    }
+    return false;
+  }
+
+  /// Sanitizes AI provider base URLs and enforces HTTPS for all cloud endpoints.
+  static String sanitizeProviderUrl(String url) {
+    final clean = url.trim().replaceAll(RegExp(r'/+$'), '');
+    if (clean.isEmpty) return clean;
+    final uri = Uri.tryParse(clean);
+    if (uri == null) return clean;
+    final host = uri.host.toLowerCase();
+    const externalCloudHosts = {
+      'googleapis.com',
+      'openai.com',
+      'anthropic.com',
+      'openrouter.ai',
+      'groq.com',
+      'deepseek.com',
+    };
+    final isCloud = externalCloudHosts.any((ch) => host == ch || host.endsWith('.$ch'));
+    if (isCloud && uri.scheme != 'https') {
+      return uri.replace(scheme: 'https').toString();
+    }
+    if (uri.scheme == 'http' && !isPermittedHttpHost(clean)) {
+      return uri.replace(scheme: 'https').toString();
+    }
+    return clean;
+  }
+
+  /// Verifies connectivity to the desktop companion server on Wi-Fi or LAN.
+  Future<Map<String, dynamic>> testServerConnection({
+    String? serverUrl,
+    String? pairingToken,
+  }) async {
+    final targetUrl = (serverUrl ?? AppConfig.apiBaseUrl).trim().replaceAll(RegExp(r'/+$'), '');
+    if (targetUrl.isEmpty) {
+      return {
+        'ok': false,
+        'message': 'Server URL is empty. Athena is operating in standalone mobile mode.',
+      };
+    }
+    final uri = Uri.tryParse(targetUrl);
+    if (uri == null || (!uri.isScheme('http') && !uri.isScheme('https'))) {
+      return {
+        'ok': false,
+        'message': 'Invalid URL scheme. Must begin with http:// or https://',
+      };
+    }
+    if (uri.isScheme('http') && !isPermittedHttpHost(targetUrl)) {
+      return {
+        'ok': false,
+        'message': 'Cleartext HTTP is only allowed for private LAN IPs (192.168.x.x, 10.x.x.x, *.local) or loopback.',
+      };
+    }
+
+    final token = (pairingToken ?? AppConfig.pairingToken).trim();
+    final testDio = Dio(BaseOptions(
+      connectTimeout: const Duration(seconds: 4),
+      receiveTimeout: const Duration(seconds: 4),
+    ));
+
+    try {
+      final response = await testDio.get(
+        '$targetUrl/api/health',
+        options: Options(
+          headers: {
+            'Accept': 'application/json',
+            if (token.isNotEmpty) 'X-Athena-Pairing-Token': token,
+          },
+        ),
+      );
+      if (response.statusCode == 200) {
+        return {
+          'ok': true,
+          'message': 'Connected to Companion Server ($targetUrl).',
+          'data': response.data,
+        };
+      }
+      return {
+        'ok': false,
+        'message': 'Server returned HTTP ${response.statusCode}: ${response.statusMessage}',
+      };
+    } on DioException catch (e) {
+      String msg;
+      if (e.type == DioExceptionType.connectionTimeout || e.type == DioExceptionType.connectionError) {
+        msg = 'Connection refused or timed out at $targetUrl. Verify desktop server is running and phone is on the same Wi-Fi.';
+      } else if (e.response?.statusCode == 401 || e.response?.statusCode == 403) {
+        msg = 'Pairing token rejected (HTTP ${e.response?.statusCode}). Enter the Pairing Token shown in your desktop terminal.';
+      } else {
+        msg = e.message ?? 'Unknown connection error';
+      }
+      return {
+        'ok': false,
+        'message': msg,
+      };
+    } catch (e) {
+      return {
+        'ok': false,
+        'message': 'Connection test failed: $e',
+      };
+    }
   }
 
   // --- Error Handling ---

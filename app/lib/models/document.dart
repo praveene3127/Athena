@@ -121,6 +121,7 @@ class ReaderItem {
   final String? boundaryMethod;
   final List<Map<String, dynamic>>? citations;
   final bool isSpeculativeDraft;
+  final bool? verified;
 
   const ReaderItem({
     required this.type,
@@ -142,11 +143,19 @@ class ReaderItem {
     this.boundaryMethod,
     this.citations,
     this.isSpeculativeDraft = false,
+    this.verified,
   });
 
   bool get isReadingChunk => type == 'reading_chunk';
   bool get isContextCard => type == 'context_card';
   String get rawText => text ?? '';
+  bool get isVerified => verified == true || supportStatus == 'verified';
+  String get sourceUrl {
+    if (citations != null && citations!.isNotEmpty) {
+      return (citations!.first['url'] ?? '').toString();
+    }
+    return '';
+  }
 
   ReaderItem copyWith({
     String? type,
@@ -168,6 +177,7 @@ class ReaderItem {
     String? boundaryMethod,
     List<Map<String, dynamic>>? citations,
     bool? isSpeculativeDraft,
+    bool? verified,
   }) {
     return ReaderItem(
       type: type ?? this.type,
@@ -189,6 +199,7 @@ class ReaderItem {
       boundaryMethod: boundaryMethod ?? this.boundaryMethod,
       citations: citations ?? this.citations,
       isSpeculativeDraft: isSpeculativeDraft ?? this.isSpeculativeDraft,
+      verified: verified ?? this.verified,
     );
   }
 
@@ -216,6 +227,9 @@ class ReaderItem {
       isSpeculativeDraft: json['is_speculative_draft'] == true ||
           json['isSpeculativeDraft'] == true ||
           json['generation_mode'] == 'speculative_draft',
+      verified: json['verified'] == 1 ||
+          json['verified'] == true ||
+          json['support_status'] == 'verified',
       citations: (json['citations'] as List?)
           ?.whereType<Map>()
           .map((e) => e.map((k, v) => MapEntry(k.toString(), v)))
@@ -239,6 +253,7 @@ class ReaderData {
   final String? readingMode;
   final List<ReaderItem> items;
   final List<ReaderItem> cards;
+  final Map<String, Map<String, dynamic>> chunkEditsMap;
 
   const ReaderData({
     required this.docId,
@@ -254,6 +269,7 @@ class ReaderData {
     this.readingMode,
     required this.items,
     this.cards = const [],
+    this.chunkEditsMap = const {},
   });
 
   factory ReaderData.fromJson(Map<String, dynamic> json) {
@@ -265,6 +281,14 @@ class ReaderData {
         : <String, dynamic>{};
     final rawItems = json['items'] as List? ?? [];
     final rawCards = json['cards'] as List? ?? [];
+    final rawEdits = json['chunk_edits'] as Map? ?? {};
+    final chunkEditsMap = <String, Map<String, dynamic>>{};
+    for (final entry in rawEdits.entries) {
+      if (entry.value is Map) {
+        chunkEditsMap[entry.key.toString()] =
+            Map<String, dynamic>.from(entry.value as Map);
+      }
+    }
 
     return ReaderData(
       docId: doc['id']?.toString() ?? '',
@@ -288,6 +312,7 @@ class ReaderData {
           .map((e) =>
               ReaderItem.fromJson(e.map((k, v) => MapEntry(k.toString(), v))))
           .toList(),
+      chunkEditsMap: chunkEditsMap,
     );
   }
 }
