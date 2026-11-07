@@ -26,7 +26,7 @@ DISALLOWED_WIKI_PATTERNS = re.compile(
 
 
 def title_matches(term: str, title: str) -> bool:
-    """Checks if term matches title per CLAUDE.md §7.2:
+    """Checks if term matches title:
     normalized term tokens ⊆ title tokens, OR difflib ratio >= 0.75.
     """
     if DISALLOWED_WIKI_PATTERNS.search(title):

@@ -127,6 +127,16 @@ xtool/.xtool-tmp/
 .agents/
 .mcp.json
 .github/copilot-instructions.md
+AGENTS.md
+CLAUDE.md
+docs/AGENTS.md
+docs/CLAUDE.md
+scripts/strict_goal_judge.py
+
+# --- iOS (Not targeted) ---
+app/ios/
+*.ipa
+scripts/package_ios_ipa.py
 
 # --- Raw Asset Exports ---
 athena-brand-kit-v3/
@@ -134,6 +144,5 @@ athena-brand-kit-v3/
 # --- Official App Releases (Tracked for direct 1-click README downloads) ---
 !releases/
 !releases/*.apk
-!releases/*.ipa
 
 

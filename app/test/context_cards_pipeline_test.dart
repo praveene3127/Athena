@@ -257,21 +257,15 @@ void main() {
       debugPrint('ContextCardWidget successfully rendered on screen!');
 
       // Verify Eyebrow badge and exact quote
-      expect(find.text('EMPIRICAL STUDY'), findsOneWidget);
-      expect(find.textContaining('MARGINALIA // SEQ #01'), findsOneWidget);
+      expect(find.text('REAL-WORLD STUDY'), findsOneWidget);
       expect(find.textContaining('Virtue remains the sole unconditional good.'), findsOneWidget);
 
-      // Verify interactive reveal button
-      expect(find.text('[ REVEAL FINDINGS ]'), findsOneWidget);
+      // Verify ZERO reveal buttons (100% visible immediately)
+      expect(find.textContaining('REVEAL'), findsNothing);
 
-      // Tap [ REVEAL FINDINGS ]
-      debugPrint('Tapping [ REVEAL FINDINGS ] button...');
-      await tester.tap(find.text('[ REVEAL FINDINGS ]'));
-      await tester.pumpAndSettle();
-
-      // Assert revealed payoff text is now displayed
+      // Assert payoff text is immediately displayed on screen without tapping
       expect(find.textContaining('24.8% decrease in resting cortisol markers'), findsOneWidget);
-      debugPrint('Empirical study findings successfully revealed!');
+      debugPrint('Empirical study findings immediately visible without reveal button!');
 
       debugPrint('>>> ZERO RENDERFLEX OVERFLOWS AT 390x844 CONFIRMED 100%! <<<\n');
     });

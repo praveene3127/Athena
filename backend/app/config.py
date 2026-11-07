@@ -13,7 +13,7 @@ else:
 
 
 class Settings(BaseSettings):
-    """Central production settings validated via Pydantic (§4 in CLAUDE.md)."""
+    """Central production settings validated via Pydantic."""
 
     model_config = SettingsConfigDict(
         env_file=str(_env_path) if _env_path.exists() else None,
@@ -47,7 +47,7 @@ class Settings(BaseSettings):
 
 settings = Settings()
 
-# --- Athena Constants (§2 in CLAUDE.md) ---
+# --- Athena Ingestion & Chunking Constants ---
 TARGET_CHUNK_WORDS: int = 50
 MIN_CHUNK_WORDS: int = 35
 MAX_CHUNK_WORDS: int = 65

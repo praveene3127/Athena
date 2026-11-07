@@ -1,4 +1,4 @@
-name: Mobile Release — 1-Click Android APK & unsigned iOS IPA
+name: Android Release — Native APK
 
 on:
   workflow_dispatch:
@@ -42,35 +42,9 @@ jobs:
           path: app/Athena-Android.apk
           if-no-files-found: error
 
-  build-ios:
-    name: build-ios
-    runs-on: macos-latest
-    steps:
-      - uses: actions/checkout@v4
-
-      - name: Set up Flutter
-        uses: subosito/flutter-action@v2
-        with:
-          channel: stable
-          cache: true
-
-      - name: Build unsigned iOS app and package IPA
-        working-directory: app
-        run: |
-          flutter pub get
-          flutter build ipa --release --no-codesign
-          cp build/ios/ipa/*.ipa Athena-iOS.ipa
-
-      - name: Upload Athena-iOS.ipa
-        uses: actions/upload-artifact@v4
-        with:
-          name: Athena-iOS.ipa
-          path: app/Athena-iOS.ipa
-          if-no-files-found: error
-
   publish-latest-release:
     name: publish-latest-release
-    needs: [build-android, build-ios]
+    needs: [build-android]
     runs-on: ubuntu-latest
     permissions:
       contents: write
@@ -83,12 +57,6 @@ jobs:
           name: Athena-Android.apk
           path: release-assets
 
-      - name: Download iOS IPA
-        uses: actions/download-artifact@v4
-        with:
-          name: Athena-iOS.ipa
-          path: release-assets
-
       - name: Publish 1-Click Release Assets
         uses: softprops/action-gh-release@v2
         with:
@@ -97,11 +65,4 @@ jobs:
           body: |
             ## Athena Mobile Production Release
             - **Android APK**: Direct download for native install & Obtainium auto-update.
-            - **iOS IPA (Unsigned)**: Direct download for Sideloadly / AltStore / SideStore on Windows/Mac without Xcode.
-          draft: false
-          prerelease: false
-          files: |
-            release-assets/Athena-Android.apk
-            release-assets/Athena-iOS.ipa
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          files: release-assets/Athena-Android.apk

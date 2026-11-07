@@ -52,7 +52,7 @@ def normalize_document_blocks(
     total_pages: int,
 ) -> Tuple[str, List[Dict[str, Any]]]:
     """
-    Applies normalize_v1 across all document blocks (§6.3 in CLAUDE.md):
+    Applies text normalization across all document blocks:
     - Normalizes each block text
     - Identifies and removes repeated header/footer and page-number margin blocks
     - Applies cross-page merges

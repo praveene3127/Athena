@@ -38,9 +38,7 @@ def extract_concepts(
     chunks: List[ReadingChunk],
     document_id: str,
 ) -> List[Concept]:
-    """Extracts high-precision candidate concepts from canonical text
-    per CLAUDE.md §7.1.
-    """
+    """Extracts high-precision candidate concepts from canonical text."""
     if not canonical_text or not chunks:
         return []
 

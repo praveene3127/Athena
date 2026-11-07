@@ -20,9 +20,6 @@ const _kPromptChips = [
 ];
 
 /// Modal bottom sheet allowing the reader to ask grounded questions about a passage.
-
-/// Complies with CLAUDE.md §8 & §11.
-
 class AskSheet extends StatefulWidget {
   final String documentId;
 

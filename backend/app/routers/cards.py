@@ -120,7 +120,7 @@ def restore_card(id: str, session: Session = Depends(get_session)) -> Dict[str, 
 
 @router.get("/api/saved")
 def get_saved_cards(session: Session = Depends(get_session)) -> List[Dict[str, Any]]:
-    """Returns saved cards with document and chunk context (CLAUDE.md §10)."""
+    """Returns saved cards with document and chunk context."""
     cards = session.exec(
         select(ContextCard).where(ContextCard.saved == True)
     ).all()

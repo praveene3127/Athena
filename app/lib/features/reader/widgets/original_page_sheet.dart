@@ -3,7 +3,7 @@ import 'package:athena/core/theme/theme.dart';
 import 'package:athena/core/api/api_client.dart';
 
 /// Modal bottom sheet allowing inspection of the exact original PDF page.
-/// Uses InteractiveViewer for pan & zoom (CLAUDE.md §11 & §14).
+/// Uses InteractiveViewer for pan & zoom.
 class OriginalPageSheet extends StatelessWidget {
   final String documentId;
   final int pageNumber;

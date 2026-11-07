@@ -62,7 +62,7 @@ def ask_about_passage(
     session: Session = Depends(get_session),
 ) -> Dict[str, Any]:
     """
-    Answers reader question using 3-chunk sliding context (§8 in CLAUDE.md).
+    Answers reader question using 3-chunk sliding context.
     Always returns HTTP 200 with status: ok | unverified | unavailable | not_configured | rate_limited.
     """
     # 1. Rate limit check

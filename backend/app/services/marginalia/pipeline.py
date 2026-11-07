@@ -352,7 +352,7 @@ class ReadAheadPipeline:
 
             # Slot in the deterministic 4-archetype rotation
             active_slot = len(existing_cards) % 4
-            archetype_names = ["EMPIRICAL STUDY", "CRITICAL DEBATE", "HISTORICAL CONTEXT", "CORE PARADOX"]
+            archetype_names = ["REAL-WORLD STUDY", "COUNTER-INTUITIVE FACT", "HISTORICAL BACKSTORY", "THE HIDDEN MECHANISM"]
             active_archetype = archetype_names[active_slot]
 
             grounded_in_doc = self.doc_grounded_concepts.setdefault(doc_id, set())
@@ -410,7 +410,7 @@ class ReadAheadPipeline:
                 cached = session.get(ConceptCache, cache_key_slug) or session.get(ConceptCache, slug)
                 if cached:
                     clean_cached_title = re.sub(
-                        r"^(?:What is\s+|EMPIRICAL STUDY:\s*|CRITICAL DEBATE:\s*|HISTORICAL CONTEXT:\s*|CORE PARADOX:\s*)+",
+                        r"^(?:What is\s+|REAL-WORLD STUDY:\s*|COUNTER-INTUITIVE FACT:\s*|HISTORICAL BACKSTORY:\s*|THE HIDDEN MECHANISM:\s*|EMPIRICAL STUDY:\s*|CRITICAL DEBATE:\s*|HISTORICAL CONTEXT:\s*|CORE PARADOX:\s*)+",
                         "",
                         cached.title or concept.name,
                         flags=re.I,
@@ -419,17 +419,9 @@ class ReadAheadPipeline:
 
                     if clean_cached_title.lower() not in used_titles and not is_semantic_duplicate(cached.body, existing_bodies, threshold=0.78):
                         logger.info("Concept cache HIT for '%s' in chunk %s (cross-book reuse)", concept.name, chunk_index)
-                        cached_body = cached.body
-                        if active_slot == 0 and "||REVEAL||" not in cached_body:
-                            sentences = re.split(r"(?<=[.!?])\s+", cached_body)
-                            if len(sentences) > 1:
-                                cached_body = f"{sentences[0]}\n||REVEAL||\n{' '.join(sentences[1:])}"
-                        elif active_slot == 1:
-                            has_debate = "counterpoint:" in cached_body.lower() and "evidence:" in cached_body.lower()
-                            if not has_debate:
-                                sentences = re.split(r"(?<=[.!?])\s+", cached_body)
-                                if len(sentences) >= 2:
-                                    cached_body = f"Counterpoint: {sentences[0]}\nEvidence: {' '.join(sentences[1:])}"
+                        cached_body = cached.body.replace("||REVEAL||", " ")
+                        cached_body = re.sub(r"^(?:Question|Q):\s*.*?\n+(?:Answer|A|Evidence|Finding|Result):\s*", "", cached_body, flags=re.I)
+                        cached_body = re.sub(r"\s+", " ", cached_body).strip()
 
                         card = ContextCard(
                             document_id=doc_id,
@@ -637,15 +629,19 @@ class ReadAheadPipeline:
                             break
                     raw_body = " ".join(trimmed) or sentences[0]
 
-                    # Format into active archetype slot layout
+                    # Format into active editorial category (100% declarative fact, zero Q&A, zero ||REVEAL||)
                     if active_slot == 0:
-                        final_body = f"How did empirical observations and research test {concept.name} in practice?\n||REVEAL||\n{raw_body}"
+                        final_body = f"Empirical investigations into {concept.name} reveal documented experimental findings: {raw_body}"
                     elif active_slot == 1:
-                        final_body = f"Counterpoint: Critical scholars question assumptions regarding {concept.name}.\nEvidence: {raw_body}"
+                        final_body = f"In contrast to conventional assumptions, documented findings regarding {concept.name} demonstrate that {raw_body}"
                     elif active_slot == 2:
-                        final_body = f"Historical context and primary sources document that {raw_body}"
+                        final_body = f"Archival records and primary historical sources document that {raw_body}"
                     else:
-                        final_body = f"The core paradox of {concept.name} reveals an unexpected inversion: {raw_body}"
+                        final_body = f"The underlying mechanism behind {concept.name} operates through documented behavioral and systemic dynamics: {raw_body}"
+
+                    final_body = final_body.replace("||REVEAL||", " ")
+                    final_body = re.sub(r"^(?:Question|Q):\s*.*?\n+(?:Answer|A|Evidence|Finding|Result):\s*", "", final_body, flags=re.I)
+                    final_body = re.sub(r"\s+", " ", final_body).strip()
 
                     card_title = f"{active_archetype}: {concept.name}"
                     if card_title.lower() in used_titles:

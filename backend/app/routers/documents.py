@@ -265,7 +265,7 @@ def upload_document_from_url(
 
 @router.post("/sample")
 def create_sample_document(session: Session = Depends(get_session)) -> Dict[str, Any]:
-    """Generates or retrieves starter sample book for instant reading (§CLAUDE.md & README)."""
+    """Generates or retrieves starter sample book for instant reading."""
     existing = session.exec(
         select(Document).where(Document.filename == "sample.pdf", Document.status == "ready")
     ).first()
@@ -313,7 +313,7 @@ def create_sample_document(session: Session = Depends(get_session)) -> Dict[str,
 
 @router.get("")
 def list_documents(session: Session = Depends(get_session)) -> List[Dict[str, Any]]:
-    """Returns list of all documents, newest first (§10 in CLAUDE.md)."""
+    """Returns list of all documents, newest first."""
     statement = select(Document).where(Document.status != 'deleted').order_by(Document.created_at.desc())
     docs = session.exec(statement).all()
     results = []
@@ -362,7 +362,7 @@ def get_document(id: str, session: Session = Depends(get_session)) -> Dict[str, 
 
 @router.get("/{id}/status")
 def get_document_status(id: str, session: Session = Depends(get_session)) -> Dict[str, Any]:
-    """Returns status polling payload (§10 in CLAUDE.md)."""
+    """Returns status polling payload."""
     doc = session.get(Document, id)
     if not doc:
         raise AppException("NOT_FOUND", status_code=404)
@@ -389,7 +389,7 @@ def get_document_status(id: str, session: Session = Depends(get_session)) -> Dic
 
 @router.post("/{id}/process")
 def retry_document_process(id: str, session: Session = Depends(get_session)) -> Dict[str, str]:
-    """Retries processing for a failed document (§10 in CLAUDE.md)."""
+    """Retries processing for a failed document."""
     doc = session.get(Document, id)
     if not doc:
         raise AppException("NOT_FOUND", status_code=404)
@@ -402,7 +402,7 @@ def retry_document_process(id: str, session: Session = Depends(get_session)) -> 
 
 @router.post("/{id}/force-ingest")
 def force_ingest_document(id: str, session: Session = Depends(get_session)) -> Dict[str, str]:
-    """Force-bypasses the Stage-0 Document Bouncer to read any document (§Stage-0 in CLAUDE.md)."""
+    """Force-bypasses the Document Bouncer to read any document."""
     doc = session.get(Document, id)
     if not doc:
         raise AppException("NOT_FOUND", status_code=404)
@@ -534,7 +534,7 @@ def generate_card_for_chunk_endpoint(
         document_id=id,
         source_chunk_id=chunk.id,
         card_type="explain",
-        title=f"FACT-CHECK: {topic}",
+        title=f"REAL-WORLD STUDY: {topic}",
         body=f"Grounded analysis verified against canonical source text. Key quote: \"{quote}\"",
         why_here="Grounded factual anchor from authentic source material.",
         exact_quote=quote,
@@ -618,7 +618,7 @@ def get_reader(
     session: Session = Depends(get_session),
 ) -> Dict[str, Any]:
     """
-    Returns the full reader payload (§10 in CLAUDE.md):
+    Returns the full reader payload:
     document metadata with integrity proof + ordered items
     (reading chunks interleaved with context cards, with top-level cards array).
     """
@@ -696,7 +696,7 @@ def get_reader(
         except Exception as e:
             logger.warning("Error triggering initial pipeline viewport: %s", e)
 
-    # Build items list: reading chunks interleaved with context cards (§10 in CLAUDE.md)
+    # Build items list: reading chunks interleaved with context cards
     items: List[Dict[str, Any]] = []
     for chunk in chunks:
         pages = json.loads(chunk.source_pages_json) if chunk.source_pages_json else []
@@ -784,7 +784,7 @@ def get_page_image(
     session: Session = Depends(get_session),
 ) -> Response:
     """
-    Returns a PNG image of page N (1-indexed) at 110 DPI (§10 in CLAUDE.md).
+    Returns a PNG image of page N (1-indexed) at 110 DPI.
     Uses ``page.get_pixmap(dpi=110)`` via PyMuPDF.
     """
     doc = session.get(Document, id)

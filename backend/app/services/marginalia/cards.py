@@ -37,6 +37,7 @@ from app.services.edge_ai import (
 )
 from app.services.marginalia.concepts import build_search_query_for_concept
 from app.services.marginalia.llm import LLMService
+from app.services.marginalia.trusted_sources import fetch_trusted_academic_evidence
 from app.services.marginalia.wikipedia import WikipediaClient
 from sqlmodel import Session, select
 
@@ -52,7 +53,7 @@ def _fetch_multi_source_evidence(
     wiki_client: Optional[WikipediaClient] = None,
 ) -> List[Dict[str, str]]:
     """Parallel Multi-Source Evidence Aggregator (§6 in Athena Marginalia Mandate).
-    Queries OpenAlex, Semantic Scholar, DuckDuckGo, and HackerNews Algolia.
+    Queries Crossref, Europe PMC, OpenAlex, Semantic Scholar, DuckDuckGo, and HackerNews Algolia.
     Demotes Wikipedia to supplementary fallback only when fewer than 2 sources return.
     Results are cached in memory for sub-millisecond repeated queries.
     """
@@ -61,6 +62,20 @@ def _fetch_multi_source_evidence(
         return _EVIDENCE_CACHE[cache_key]
 
     results: List[Dict[str, str]] = []
+
+    # 1. Primary Verified Academic Registries (Crossref, Europe PMC, OpenAlex)
+    try:
+        academic_evidence = fetch_trusted_academic_evidence(concept_label, query, timeout=2.5)
+        for ae in academic_evidence:
+            results.append({
+                "title": ae.get("title", "Academic Publication"),
+                "publisher": ae.get("publisher", "Peer-Reviewed Source"),
+                "url": ae.get("url", "https://doi.org"),
+                "extract": (ae.get("abstract") or ae.get("title", ""))[:400],
+                "source_type": "academic_paper",
+            })
+    except Exception as exc:
+        logger.debug("Academic evidence lookup notice: %s", exc)
 
     def _get_openalex() -> List[Dict[str, str]]:
         clean_q = re.sub(r"[^\w\s-]", " ", query).strip()
@@ -494,7 +509,7 @@ def generate_context_cards(
     candidates_evaluated = 0
     total_candidates = min(len(concepts), MAX_WIKI_LOOKUPS_PER_DOC)
 
-    archetype_names = ["EMPIRICAL STUDY", "CRITICAL DEBATE", "HISTORICAL CONTEXT", "CORE PARADOX"]
+    archetype_names = ["REAL-WORLD STUDY", "COUNTER-INTUITIVE FACT", "HISTORICAL BACKSTORY", "THE HIDDEN MECHANISM"]
 
     for concept in concepts:
         if len(cards) >= MAX_CARDS_PER_DOC:
@@ -672,7 +687,7 @@ def generate_context_cards(
 
         # Ensure title prefix matches archetype and has no "What is " prefix
         clean_heading = re.sub(
-            r"^(?:What is\s+|EMPIRICAL STUDY:\s*|CRITICAL DEBATE:\s*|HISTORICAL CONTEXT:\s*|CORE PARADOX:\s*)+",
+            r"^(?:What is\s+|REAL-WORLD STUDY:\s*|COUNTER-INTUITIVE FACT:\s*|HISTORICAL BACKSTORY:\s*|THE HIDDEN MECHANISM:\s*|EMPIRICAL STUDY:\s*|CRITICAL DEBATE:\s*|HISTORICAL CONTEXT:\s*|CORE PARADOX:\s*)+",
             "",
             card_title,
             flags=re.I,
@@ -685,27 +700,18 @@ def generate_context_cards(
             concept.status = "skipped_duplicate_title"
             continue
 
-        # Clean generic opening phrases that dilute novelty
+        # Clean generic opening phrases and remove any reveal delimiters or Q&A patterns
+        body = body.replace("||REVEAL||", " ")
+        body = re.sub(r"^(?:Question|Q):\s*.*?\n+(?:Answer|A|Evidence|Finding|Result):\s*", "", body, flags=re.I)
         body = re.sub(
             r"^(?:In this passage[,\s]+|This passage discusses[,\s]+|This excerpt explains[,\s]+|According to this passage[,\s]+)",
             "",
             body,
             flags=re.I,
         ).strip()
+        body = re.sub(r"\s+", " ", body).strip()
         if body and body[0].islower():
             body = body[0].upper() + body[1:]
-
-        # Archetype formatting: format into required active archetype
-        if active_slot == 0 and "||REVEAL||" not in body:
-            sentences = re.split(r"(?<=[.!?])\s+", body)
-            if len(sentences) > 1:
-                body = f"{sentences[0]}\n||REVEAL||\n{' '.join(sentences[1:])}"
-        elif active_slot == 1:
-            has_debate = "counterpoint:" in body.lower() and "evidence:" in body.lower()
-            if not has_debate:
-                sentences = re.split(r"(?<=[.!?])\s+", body)
-                if len(sentences) >= 2:
-                    body = f"Counterpoint: {sentences[0]}\nEvidence: {' '.join(sentences[1:])}"
 
         # ONNX Semantic Deduplication: Check if body is too similar to any existing card in this book
         all_existing_bodies = existing_bodies + [c.body for c in cards]
@@ -721,20 +727,15 @@ def generate_context_cards(
             if extract and gen_mode != "extractive":
                 fallback_body = extract_verbatim_body(extract)
                 if fallback_body:
+                    fallback_body = fallback_body.replace("||REVEAL||", " ")
+                    fallback_body = re.sub(r"^(?:Question|Q):\s*.*?\n+(?:Answer|A|Evidence|Finding|Result):\s*", "", fallback_body, flags=re.I)
                     fallback_body = re.sub(
                         r"^(?:In this passage[,\s]+|This passage discusses[,\s]+|This excerpt explains[,\s]+)",
                         "",
                         fallback_body,
                         flags=re.I,
                     ).strip()
-                    if active_slot == 0 and "||REVEAL||" not in fallback_body:
-                        fb_sents = re.split(r"(?<=[.!?])\s+", fallback_body)
-                        if len(fb_sents) > 1:
-                            fallback_body = f"{fb_sents[0]}\n||REVEAL||\n{' '.join(fb_sents[1:])}"
-                    elif active_slot == 1:
-                        fb_sents = re.split(r"(?<=[.!?])\s+", fallback_body)
-                        if len(fb_sents) >= 2:
-                            fallback_body = f"Counterpoint: {fb_sents[0]}\nEvidence: {' '.join(fb_sents[1:])}"
+                    fallback_body = re.sub(r"\s+", " ", fallback_body).strip()
 
                     fb_novelty = evaluate_card_novelty(chunk.raw_text, card_title, fallback_body)
                     if fb_novelty["passed"]:

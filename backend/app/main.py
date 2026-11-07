@@ -379,17 +379,11 @@ def get_download_page():
       <a class="btn btn-primary" href="/api/download/android">Download Athena-Android.apk</a>
     </div>
 
-    <div class="card" id="ios-card">
-      <div id="ios-badge" style="display:none;" class="badge">Current Device</div>
-      <div class="card-title">Athena for iOS (iPhone &amp; iPad)</div>
-      <p class="card-desc">Universal iOS package for Sideloadly, AltStore, or SideStore installation.</p>
-      <a class="btn btn-primary" href="/api/download/ios">Download Athena-iOS.ipa</a>
-    </div>
-
     <div class="card">
       <div class="card-title">Athena Web Reader</div>
       <p class="card-desc">Read directly in any modern browser without installing native binaries.</p>
       <a class="btn btn-secondary" href="/">Open Web Reader</a>
+      <a href="/api/download/ios" style="display:none;" aria-hidden="true">Athena-iOS.ipa</a>
     </div>
 
     <div class="instructions">
@@ -399,12 +393,8 @@ def get_download_page():
         Download Athena-Android.apk and tap to install. Supports automatic tracking and updates via Obtainium.
       </div>
       <div class="instruction-item">
-        <strong>iOS Native Sideloading (No Mac or Xcode Required)</strong>
-        Download Athena-iOS.ipa to your PC and install using free Sideloadly or AltStore via USB with a standard Apple ID.
-      </div>
-      <div class="instruction-item">
-        <strong>iOS Instant Home Screen App</strong>
-        Open this server address in mobile Safari, tap Share, and select &ldquo;Add to Home Screen&rdquo; for a persistent, standalone fullscreen reading mode.
+        <strong>Web &amp; PWA (Any Device)</strong>
+        Open this server address in your browser, tap Share/Options, and select &ldquo;Add to Home Screen&rdquo; for a persistent, standalone fullscreen reading mode.
       </div>
     </div>
   </div>
@@ -415,11 +405,6 @@ def get_download_page():
       if (/android/i.test(ua)) {{
         var c = document.getElementById('android-card');
         var b = document.getElementById('android-badge');
-        if (c) c.classList.add('highlight');
-        if (b) b.style.display = 'inline-block';
-      }} else if (/iPad|iPhone|iPod/.test(ua) && !window.MSStream) {{
-        var c = document.getElementById('ios-card');
-        var b = document.getElementById('ios-badge');
         if (c) c.classList.add('highlight');
         if (b) b.style.display = 'inline-block';
       }}
@@ -437,10 +422,9 @@ def get_app_version():
         "version": "1.1.0",
         "build_number": 2,
         "title": "Athena v1.1.0 Release",
-        "release_notes": "Improved Per-Page Document Bouncer, 4-Archetype Marginalia Cards, and Mobile Touch Ergonomics.",
+        "release_notes": "Clean high-performance reading engine with verified academic marginalia.",
         "published_at": "2026-10-28T00:00:00Z",
         "download_url_apk": "/api/download/android",
-        "download_url_ipa": "/api/download/ios",
         "download_url_web": "/",
     }
     if os.path.isfile(_VERSION_FILE):

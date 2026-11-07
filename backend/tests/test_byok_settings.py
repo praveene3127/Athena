@@ -163,9 +163,8 @@ def test_byok_grounded_context_with_reference_citations():
     mock_resp = MagicMock()
     mock_choice = MagicMock()
     mock_choice.message.content = (
-        "EMPIRICAL STUDY: Monastic Dispute Archives\n"
-        "How did daily contemplation affect civil disputes in medieval Europe?||REVEAL||\n"
-        "Cambridge researchers analyzed N=420 historical records finding a 42% decrease in legal litigation."
+        "REAL-WORLD STUDY: Monastic Dispute Archives\n"
+        "Cambridge researchers analyzed N=420 historical records from medieval monasteries, finding a 42% decrease in civil legal disputes among communities practicing daily structured reflection."
     )
     mock_resp.choices = [mock_choice]
     mock_openai.chat.completions.create.return_value = mock_resp
@@ -189,7 +188,7 @@ def test_byok_grounded_context_with_reference_citations():
     )
 
     assert card is not None
-    assert card["title"].startswith("EMPIRICAL STUDY: ")
-    assert "||REVEAL||" in card["body"]
+    assert "STUDY" in card["title"]
+    assert "||REVEAL||" not in card["body"]
     assert len(card["citations"]) >= 2
     assert card["citations"][0]["url"] == ref_cites[0]["url"]

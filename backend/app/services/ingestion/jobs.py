@@ -17,7 +17,7 @@ from app.services.edge_ai import classify_document_purpose
 
 logger = logging.getLogger(__name__)
 
-# Single background worker thread (§6.5b in CLAUDE.md)
+# Single background worker thread for document ingestion
 _executor = ThreadPoolExecutor(max_workers=1)
 
 
