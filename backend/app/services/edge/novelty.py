@@ -4,6 +4,8 @@ Edge AI Novelty & Epistemic Curiosity Engine (FastEmbed ONNX + Vector Gating).
 
 import logging
 import re
+import math
+from collections import Counter
 from typing import List
 
 logger = logging.getLogger(__name__)
@@ -17,6 +19,13 @@ PROTO_HISTORICAL_CASE = "Historical biography ancient battle emperor roman empir
 _embedder_instance = None
 _embedder_failed = False
 _proto_vectors = None
+
+
+def embedding_readiness() -> str:
+    """Returns current model state without trying to load or download it."""
+    if _embedder_instance is not None:
+        return "ready"
+    return "unavailable" if _embedder_failed else "not_loaded"
 
 
 def _get_embedder():
@@ -97,7 +106,7 @@ def _cosine_similarity(v1, v2) -> float:
 
 
 RE_EDITORIAL_PENALTY_EDGE = re.compile(
-    r"\b(?:this edition|translator'?s note|spelling and punctuation|footnote|in the next chapter|table of contents|editor'?s note|published by|all rights reserved|typeset in|printed in)\b",
+    r"\b(?:all rights reserved|isbn|library of congress|printed in)\b",
     re.IGNORECASE,
 )
 
@@ -241,7 +250,7 @@ def evaluate_card_novelty(
     new_entity_count = len(new_entities)
 
     # 3. ONNX Anti-Echo Cosine Similarity
-    echo_similarity = 0.50
+    echo_similarity = _lexical_cosine_similarity(chunk_clean, body_clean)
     embedder = _get_embedder()
     if embedder is not None and chunk_clean and body_clean:
         try:
@@ -284,17 +293,32 @@ def compute_semantic_similarity(text1: str, text2: str) -> float:
         return 0.0
     embedder = _get_embedder()
     if embedder is None:
-        t1_words = set(re.findall(r"\w+", text1.lower()))
-        t2_words = set(re.findall(r"\w+", text2.lower()))
-        if not t1_words or not t2_words:
-            return 0.0
-        return len(t1_words & t2_words) / len(t1_words | t2_words)
+        return _lexical_cosine_similarity(text1, text2)
     try:
         vecs = list(embedder.embed([text1[:1200], text2[:1200]]))
         return float(_cosine_similarity(vecs[0], vecs[1]))
     except Exception as e:
         logger.debug("FastEmbed error during compute_semantic_similarity: %s", e)
-        return 0.5
+        return _lexical_cosine_similarity(text1, text2)
+
+
+def _lexical_cosine_similarity(text1: str, text2: str) -> float:
+    """Cosine over token and character 3-gram counts for offline echo detection."""
+    def features(text: str) -> Counter:
+        normalized = re.sub(r"[^a-z0-9]+", " ", text.lower()).strip()
+        tokens = re.findall(r"[a-z0-9]+", normalized)
+        counts = Counter(f"w:{token}" for token in tokens)
+        compact = " ".join(tokens)
+        counts.update(f"c:{compact[i:i + 3]}" for i in range(max(0, len(compact) - 2)))
+        return counts
+
+    left, right = features(text1), features(text2)
+    if not left or not right:
+        return 0.0
+    dot = sum(value * right.get(key, 0) for key, value in left.items())
+    norm_left = math.sqrt(sum(value * value for value in left.values()))
+    norm_right = math.sqrt(sum(value * value for value in right.values()))
+    return round(dot / (norm_left * norm_right), 3) if norm_left and norm_right else 0.0
 
 
 def is_semantic_duplicate(
@@ -309,7 +333,7 @@ def is_semantic_duplicate(
         return False
     embedder = _get_embedder()
     if embedder is None:
-        return False
+        return any(_lexical_cosine_similarity(candidate_body, body) > threshold for body in existing_bodies if body)
     try:
         cand_vec = list(embedder.embed([candidate_body[:1200]]))[0]
         for eb in existing_bodies:
@@ -324,7 +348,7 @@ def is_semantic_duplicate(
                     threshold,
                 )
                 return True
-        return False
+        return any(_lexical_cosine_similarity(candidate_body, body) > threshold for body in existing_bodies if body)
     except Exception as e:
         logger.debug("FastEmbed error during is_semantic_duplicate: %s", e)
         return False

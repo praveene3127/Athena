@@ -10,6 +10,8 @@ import 'package:athena/features/reader/widgets/context_card_widget.dart';
 /// Implements ScrollablePositionedList with ClampingScrollPhysics for
 /// smooth, continuous chapter reading without card-snapping constraints.
 class ReaderFlowView extends StatelessWidget {
+  final String documentId;
+  final ValueChanged<String> onJumpToPassage;
   final ItemScrollController itemScrollController;
   final ItemPositionsListener itemPositionsListener;
   final List<ReaderItem> feedItems;
@@ -29,10 +31,13 @@ class ReaderFlowView extends StatelessWidget {
   final void Function(ReaderItem card) onAskAthenaForCard;
   final Map<String, String>? chunkEdits;
   final Map<String, String>? chunkNotes;
-  final void Function(String chunkId, String? editedText, String? userNote)? onEditSaved;
+  final void Function(String chunkId, String? editedText, String? userNote)?
+      onEditSaved;
 
   const ReaderFlowView({
     super.key,
+    required this.documentId,
+    required this.onJumpToPassage,
     required this.itemScrollController,
     required this.itemPositionsListener,
     required this.feedItems,
@@ -67,7 +72,8 @@ class ReaderFlowView extends StatelessWidget {
       itemScrollController: itemScrollController,
       itemPositionsListener: itemPositionsListener,
       initialScrollIndex: initialIndex.clamp(0, feedItems.length - 1),
-      physics: const ClampingScrollPhysics(), // Smooth continuous scroll in flow mode
+      physics:
+          const ClampingScrollPhysics(), // Smooth continuous scroll in flow mode
       itemCount: feedItems.length + 1,
       itemBuilder: (context, index) {
         if (index == feedItems.length) {
@@ -83,7 +89,8 @@ class ReaderFlowView extends StatelessWidget {
               child: Column(
                 mainAxisSize: MainAxisSize.min,
                 children: [
-                  Icon(Icons.verified_rounded, color: theme.accentColor, size: 28),
+                  Icon(Icons.verified_rounded,
+                      color: theme.accentColor, size: 28),
                   const SizedBox(height: 8),
                   Text(
                     'End of Document',
@@ -131,6 +138,8 @@ class ReaderFlowView extends StatelessWidget {
           return Center(
             child: ContextCardWidget(
               card: item,
+              documentId: documentId,
+              onJumpToPassage: onJumpToPassage,
               themeId: themeId,
               isFeedMode: false,
               onToggleSave: () => onToggleSaveCard(item),

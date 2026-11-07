@@ -355,7 +355,7 @@ def test_vibe_check_endpoint_and_fallback():
             session.add(chunk)
             session.commit()
 
-        response = client.post(f"/api/documents/{doc_id}/vibe-check", json={"chunk_index": 3})
+        response = client.post(f"/api/documents/{doc_id}/vibe-check", json={"chunk_sequence": 3})
         assert response.status_code == 200
         data = response.json()
         assert data["chunk_index"] == 3

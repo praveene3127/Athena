@@ -5,6 +5,7 @@ import 'package:shared_preferences/shared_preferences.dart';
 import 'package:athena/core/api/api_client.dart';
 import 'package:athena/core/theme/theme.dart';
 import 'package:athena/models/ai_provider.dart';
+import 'package:athena/services/secure_storage_service.dart';
 
 class _ProviderOption {
   final String id;
@@ -98,6 +99,7 @@ class _BYOKSettingsSheetState extends State<BYOKSettingsSheet> {
   String? _selectedModel;
   final _keyController = TextEditingController();
   final _baseUrlController = TextEditingController();
+  final _serverUrlController = TextEditingController();
 
   List<AIModelOption> _models = [];
   bool? _testOk;
@@ -105,6 +107,7 @@ class _BYOKSettingsSheetState extends State<BYOKSettingsSheet> {
 
   bool _providerMenuOpen = false;
   bool _modelMenuOpen = false;
+  bool _serverExpanded = false;
 
   @override
   void initState() {
@@ -117,6 +120,7 @@ class _BYOKSettingsSheetState extends State<BYOKSettingsSheet> {
   void dispose() {
     _keyController.dispose();
     _baseUrlController.dispose();
+    _serverUrlController.dispose();
     super.dispose();
   }
 
@@ -126,17 +130,24 @@ class _BYOKSettingsSheetState extends State<BYOKSettingsSheet> {
       final prefs = await SharedPreferences.getInstance();
 
       final savedProvider = prefs.getString('athena_ai_primary_provider') ??
-          (config.primaryProvider.isNotEmpty ? config.primaryProvider : 'gemini');
-      final savedKey = prefs.getString('athena_ai_primary_api_key') ?? '';
+          (config.primaryProvider.isNotEmpty
+              ? config.primaryProvider
+              : 'gemini');
+      final savedKey = await SecureStorageService.instance
+              .getAIKey('athena_ai_primary_api_key') ??
+          '';
       final savedModel = prefs.getString('athena_ai_primary_model') ??
           (config.primaryModel.isNotEmpty ? config.primaryModel : null);
       final savedBaseUrl = prefs.getString('athena_ai_primary_base_url') ??
           (config.primaryBaseUrl ?? '');
+      final serverUrl = await SecureStorageService.instance.getBackendUrl();
 
       setState(() {
         _provider = savedProvider;
         _keyController.text = savedKey;
         _baseUrlController.text = savedBaseUrl;
+        _serverUrlController.text = serverUrl;
+        _serverExpanded = widget.initialExpandServer;
         _selectedModel = savedModel;
         _models = savedModel != null && savedModel.isNotEmpty
             ? [AIModelOption(id: savedModel, name: savedModel)]
@@ -207,14 +218,14 @@ class _BYOKSettingsSheetState extends State<BYOKSettingsSheet> {
 
         if (liveModels.isNotEmpty) {
           _models = liveModels;
-          final existingMatch =
-              liveModels.any((m) => m.id == _selectedModel);
+          final existingMatch = liveModels.any((m) => m.id == _selectedModel);
           if (!existingMatch) {
             _selectedModel = liveModels.first.id;
           }
           _testMessage = ok
               ? 'Connected! Loaded ${liveModels.length} live models from API.'
-              : (rawMsg ?? 'Live models loaded, but validation check returned an error.');
+              : (rawMsg ??
+                  'Live models loaded, but validation check returned an error.');
         } else {
           _models = [];
           _selectedModel = null;
@@ -248,6 +259,8 @@ class _BYOKSettingsSheetState extends State<BYOKSettingsSheet> {
         primaryModel: _selectedModel,
         primaryBaseUrl: baseUrl.isNotEmpty ? baseUrl : null,
       );
+      await SecureStorageService.instance
+          .setBackendUrl(_serverUrlController.text.trim());
 
       if (!mounted) return;
       setState(() => _saving = false);
@@ -510,8 +523,8 @@ class _BYOKSettingsSheetState extends State<BYOKSettingsSheet> {
                                     const BoxConstraints(maxHeight: 220),
                                 child: ListView.separated(
                                   shrinkWrap: true,
-                                  padding: const EdgeInsets.symmetric(
-                                      vertical: 4),
+                                  padding:
+                                      const EdgeInsets.symmetric(vertical: 4),
                                   itemCount: _kProviderOptions.length,
                                   separatorBuilder: (_, __) => Divider(
                                     height: 1,
@@ -523,7 +536,9 @@ class _BYOKSettingsSheetState extends State<BYOKSettingsSheet> {
                                   itemBuilder: (ctx, idx) {
                                     final p = _kProviderOptions[idx];
                                     final selected = p.id == _provider;
-                                    return ListTile(
+                                    return Material(
+                                      color: Colors.transparent,
+                                      child: ListTile(
                                       dense: true,
                                       contentPadding:
                                           const EdgeInsets.symmetric(
@@ -574,6 +589,7 @@ class _BYOKSettingsSheetState extends State<BYOKSettingsSheet> {
                                           _selectedModel = null;
                                         });
                                       },
+                                      ),
                                     );
                                   },
                                 ),
@@ -641,9 +657,8 @@ class _BYOKSettingsSheetState extends State<BYOKSettingsSheet> {
                         },
                         decoration: _buildInputDecoration(
                           isDark,
-                          hintText: _provider == 'gemini'
-                              ? 'AIzaSy...'
-                              : 'sk-...',
+                          hintText:
+                              _provider == 'gemini' ? 'AIzaSy...' : 'sk-...',
                           suffixIcon: Row(
                             mainAxisSize: MainAxisSize.min,
                             children: [
@@ -670,8 +685,8 @@ class _BYOKSettingsSheetState extends State<BYOKSettingsSheet> {
                                 color: isDark
                                     ? const Color(0xFF888888)
                                     : AppTheme.textMuted,
-                                onPressed: () => setState(
-                                    () => _obscureKey = !_obscureKey),
+                                onPressed: () =>
+                                    setState(() => _obscureKey = !_obscureKey),
                               ),
                             ],
                           ),
@@ -771,7 +786,13 @@ class _BYOKSettingsSheetState extends State<BYOKSettingsSheet> {
                                     children: [
                                       Expanded(
                                         child: Text(
-                                          _models.where((m) => m.id == _selectedModel).firstOrNull?.name ?? _selectedModel ?? 'Select a model',
+                                          _models
+                                                  .where((m) =>
+                                                      m.id == _selectedModel)
+                                                  .firstOrNull
+                                                  ?.name ??
+                                              _selectedModel ??
+                                              'Select a model',
                                           style: TextStyle(
                                             fontFamily: AppTheme.fontMono,
                                             fontSize: 14,
@@ -805,8 +826,8 @@ class _BYOKSettingsSheetState extends State<BYOKSettingsSheet> {
                                       const BoxConstraints(maxHeight: 220),
                                   child: ListView.separated(
                                     shrinkWrap: true,
-                                    padding: const EdgeInsets.symmetric(
-                                        vertical: 4),
+                                    padding:
+                                        const EdgeInsets.symmetric(vertical: 4),
                                     itemCount: _models.length,
                                     separatorBuilder: (_, __) => Divider(
                                       height: 1,
@@ -818,7 +839,9 @@ class _BYOKSettingsSheetState extends State<BYOKSettingsSheet> {
                                     itemBuilder: (ctx, idx) {
                                       final m = _models[idx];
                                       final selected = m.id == _selectedModel;
-                                      return ListTile(
+                                      return Material(
+                                        color: Colors.transparent,
+                                        child: ListTile(
                                         dense: true,
                                         contentPadding:
                                             const EdgeInsets.symmetric(
@@ -851,20 +874,21 @@ class _BYOKSettingsSheetState extends State<BYOKSettingsSheet> {
                                           ),
                                         ),
                                         trailing: selected
-                                          ? Icon(
-                                              Icons.check_rounded,
-                                              size: 16,
-                                              color: isDark
-                                                  ? const Color(0xFF2DD4BF)
-                                                  : const Color(0xFF2D6A4F),
-                                            )
-                                          : null,
+                                            ? Icon(
+                                                Icons.check_rounded,
+                                                size: 16,
+                                                color: isDark
+                                                    ? const Color(0xFF2DD4BF)
+                                                    : const Color(0xFF2D6A4F),
+                                              )
+                                            : null,
                                         onTap: () {
                                           setState(() {
                                             _selectedModel = m.id;
                                             _modelMenuOpen = false;
                                           });
                                         },
+                                        ),
                                       );
                                     },
                                   ),
@@ -883,7 +907,8 @@ class _BYOKSettingsSheetState extends State<BYOKSettingsSheet> {
                               horizontal: 12, vertical: 10),
                           decoration: BoxDecoration(
                             color: _testOk == true
-                                ? const Color(0xFF2D6A4F).withValues(alpha: 0.15)
+                                ? const Color(0xFF2D6A4F)
+                                    .withValues(alpha: 0.15)
                                 : Colors.redAccent.withValues(alpha: 0.15),
                             borderRadius: BorderRadius.circular(10),
                             border: Border.all(
@@ -925,12 +950,69 @@ class _BYOKSettingsSheetState extends State<BYOKSettingsSheet> {
                         const SizedBox(height: 14),
                       ],
 
+                      Material(
+                        color: Colors.transparent,
+                        child: Theme(
+                          data: Theme.of(context).copyWith(
+                            dividerColor: Colors.transparent,
+                            splashColor: Colors.transparent,
+                          ),
+                          child: ExpansionTile(
+                          initiallyExpanded: _serverExpanded,
+                          onExpansionChanged: (value) =>
+                              setState(() => _serverExpanded = value),
+                          tilePadding: EdgeInsets.zero,
+                          childrenPadding: const EdgeInsets.only(bottom: 12),
+                          title: Text(
+                            'Advanced: Optional Desktop Server URL',
+                            style: TextStyle(
+                              fontFamily: AppTheme.fontUI,
+                              fontSize: 12,
+                              fontWeight: FontWeight.w600,
+                              color: isDark
+                                  ? const Color(0xFFB0B0B0)
+                                  : AppTheme.textMuted,
+                            ),
+                          ),
+                          children: [
+                            TextField(
+                              controller: _serverUrlController,
+                              keyboardType: TextInputType.url,
+                              autocorrect: false,
+                              decoration: _buildInputDecoration(
+                                isDark,
+                                hintText: 'http://192.168.1.20:8000',
+                              ),
+                              style: TextStyle(
+                                fontFamily: AppTheme.fontUI,
+                                fontSize: 14,
+                                color: isDark
+                                    ? Colors.white
+                                    : AppTheme.textPrimary,
+                              ),
+                            ),
+                            const SizedBox(height: 6),
+                            Text(
+                              'Leave blank to use Athena locally on this device.',
+                              style: TextStyle(
+                                  fontSize: 11,
+                                  color: isDark
+                                      ? Colors.white54
+                                      : AppTheme.textMuted),
+                            ),
+                          ],
+                          ),
+                        ),
+                      ),
+
                       // Actions: Check Connection + Save & Apply
                       Row(
                         children: [
                           Expanded(
                             child: OutlinedButton(
-                              onPressed: _testing ? null : _testConnectionAndFetchLiveModels,
+                              onPressed: _testing
+                                  ? null
+                                  : _testConnectionAndFetchLiveModels,
                               style: OutlinedButton.styleFrom(
                                 padding:
                                     const EdgeInsets.symmetric(vertical: 14),

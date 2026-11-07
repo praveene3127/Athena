@@ -8,7 +8,7 @@ Enforces non-negotiable architectural invariants and anti-reward-hacking constra
   GATE 3: Self-Healing Hygiene & Technical Vocabulary Preservation
   GATE 4: Lossless SHA-256 Invariant on Corpus Chunking
   GATE 5: Marginalia 4-Archetype Rotation & Anti-Echo Novelty Audit
-  GATE 6: Backend Pytest Suite (100% green on 49 tests)
+  GATE 6: Backend Pytest Suite (100% green on 66 tests)
   GATE 7: Flutter Static Analysis & Unit Tests (0 analyze issues, 100% pass)
   GATE 8: Real Mobile Viewport (390x844 iPhone) & LAN IP Single-Origin E2E Test
 
@@ -20,6 +20,8 @@ import re
 import sys
 import hashlib
 import subprocess
+import shutil
+from pathlib import Path
 from typing import List, Tuple, Dict, Any
 
 # Root Directory Setup
@@ -28,13 +30,18 @@ BACKEND_DIR = os.path.join(ROOT_DIR, "backend")
 APP_DIR = os.path.join(ROOT_DIR, "app")
 SCRIPTS_DIR = os.path.join(ROOT_DIR, "scripts")
 
-VENV_PYTHON = os.path.join(ROOT_DIR, ".venv", "Scripts", "python.exe")
-if not os.path.isfile(VENV_PYTHON):
-    VENV_PYTHON = sys.executable
+VENV_PYTHON = Path(ROOT_DIR) / ".venv" / ("Scripts/python.exe" if os.name == "nt" else "bin/python")
+if not VENV_PYTHON.is_file():
+    VENV_PYTHON = Path(sys.executable)
+VENV_PYTHON = str(VENV_PYTHON)
 
-FLUTTER_BAT = r"C:\src\flutter\bin\flutter.bat"
-if not os.path.isfile(FLUTTER_BAT):
-    FLUTTER_BAT = "flutter"
+FLUTTER = shutil.which("flutter")
+if not FLUTTER and os.name == "nt":
+    windows_flutter = Path(r"C:\src\flutter\bin\flutter.bat")
+    if windows_flutter.is_file():
+        FLUTTER = str(windows_flutter)
+if not FLUTTER:
+    FLUTTER = "flutter"
 
 sys.path.insert(0, BACKEND_DIR)
 
@@ -533,7 +540,7 @@ def gate_5_marginalia_novelty_audit():
 # GATE 6: BACKEND PYTEST SUITE
 # ==============================================================================
 def gate_6_pytest_suite():
-    log_gate(6, "Backend Pytest Suite (49/49 Tests)")
+    log_gate(6, "Backend Pytest Suite (66 Tests)")
 
     env = os.environ.copy()
     env["PYTHONPATH"] = BACKEND_DIR
@@ -547,10 +554,10 @@ def gate_6_pytest_suite():
         print(res.stderr)
         fail_gate(6, "Backend Pytest Suite", f"pytest failed with exit code {res.returncode}")
 
-    # Verify all tests passed (at least 49)
+    # Verify the complete current backend suite passed.
     m = re.search(r"(\d+) passed", res.stdout)
-    if not m or int(m.group(1)) < 49:
-        fail_gate(6, "Backend Pytest Suite", f"Expected at least 49 passed tests in pytest output, got {m.group(1) if m else 'none'}.")
+    if not m or int(m.group(1)) < 66:
+        fail_gate(6, "Backend Pytest Suite", f"Expected at least 66 passed tests in pytest output, got {m.group(1) if m else 'none'}.")
     print(f"  + {m.group(1)} backend tests passed successfully.")
 
     pass_gate(6, "Backend Pytest Suite")
@@ -563,7 +570,7 @@ def gate_7_flutter_quality():
     log_gate(7, "Flutter Static Analysis & Unit Tests")
 
     # 1. flutter analyze
-    cmd_analyze = [FLUTTER_BAT, "analyze"]
+    cmd_analyze = [FLUTTER, "analyze"]
     print(f"  Running: {' '.join(cmd_analyze)} in {APP_DIR}...")
     res_analyze = subprocess.run(cmd_analyze, cwd=APP_DIR, capture_output=True, text=True)
     print(res_analyze.stdout)
@@ -592,7 +599,7 @@ def gate_7_flutter_quality():
                     fail_gate(7, "Flutter Quality", f"Architectural violation: Empty catch block found in {fpath}")
     print("  + AST Architecture Audit: Zero empty catch blocks verified across app/lib.")
 
-    cmd_test = [FLUTTER_BAT, "test"]
+    cmd_test = [FLUTTER, "test"]
     print(f"  Running: {' '.join(cmd_test)} in {APP_DIR}...")
     res_test = subprocess.run(cmd_test, cwd=APP_DIR, capture_output=True, text=True)
     print(res_test.stdout)
@@ -601,7 +608,7 @@ def gate_7_flutter_quality():
         fail_gate(7, "Flutter Quality", "flutter test suite failed.")
     print("  + flutter test: All unit/widget tests passed.")
 
-    # 3. Native Android Manifest Verification (Release INTERNET, Cleartext HTTP, URL Launcher Queries)
+    # 3. Native Android Manifest and network security verification.
     android_manifest = os.path.join(APP_DIR, "android", "app", "src", "main", "AndroidManifest.xml")
     if not os.path.isfile(android_manifest):
         fail_gate(7, "Flutter Quality", f"Missing AndroidManifest.xml at {android_manifest}")
@@ -610,7 +617,7 @@ def gate_7_flutter_quality():
     
     required_manifest_tokens = [
         "android.permission.INTERNET",
-        'android:usesCleartextTraffic="true"',
+        'android:usesCleartextTraffic="false"',
         "<queries>",
         'android:scheme="https"',
         'android:scheme="http"',
@@ -618,7 +625,23 @@ def gate_7_flutter_quality():
     for token in required_manifest_tokens:
         if token not in manifest_content:
             fail_gate(7, "Flutter Quality", f"AndroidManifest.xml missing required mobile configuration: '{token}'")
-    print("  + Android native manifest verified (INTERNET, Cleartext HTTP, URL queries).")
+    network_config = os.path.join(
+        APP_DIR, "android", "app", "src", "main", "res", "xml", "network_security_config.xml"
+    )
+    if not os.path.isfile(network_config):
+        fail_gate(7, "Flutter Quality", f"Missing Android network security config at {network_config}")
+    with open(network_config, "r", encoding="utf-8", errors="ignore") as f:
+        network_config_content = f.read()
+    for token in [
+        '<base-config cleartextTrafficPermitted="false">',
+        '<domain includeSubdomains="true">localhost</domain>',
+        '<domain includeSubdomains="false">127.0.0.1</domain>',
+        '<domain includeSubdomains="false">10.0.2.2</domain>',
+        '<domain includeSubdomains="true">local</domain>',
+    ]:
+        if token not in network_config_content:
+            fail_gate(7, "Flutter Quality", f"Android network config missing secure local-only rule: '{token}'")
+    print("  + Android manifest denies cleartext globally; local development hosts are the only HTTP exception.")
 
     # 4. Native iOS Info.plist Verification (ATS, URL Schemes, 120Hz ProMotion)
     ios_plist = os.path.join(APP_DIR, "ios", "Runner", "Info.plist")
@@ -655,7 +678,7 @@ def gate_7_flutter_quality():
         'apple-mobile-web-app-capable',
         'viewport-fit=cover',
         'apple-touch-icon',
-        'manifest.json',
+        'site.webmanifest',
     ]
     for tag in pwa_tags:
         if tag not in html_content:
@@ -681,7 +704,7 @@ def gate_8_mobile_networking_e2e():
     if res.status_code != 200:
         fail_gate(8, "Mobile E2E", f"/api/health returned HTTP {res.status_code}")
     data = res.json()
-    if data.get("status") != "ok" or data.get("database") != "reachable":
+    if data.get("status") != "ok" or data.get("database") != "configured":
         fail_gate(8, "Mobile E2E", f"/api/health returned invalid payload: {data}")
     print(f"  + /api/health: OK (DB: {data.get('database')}, Model: {data.get('model_status')})")
 

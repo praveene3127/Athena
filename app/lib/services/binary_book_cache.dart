@@ -1,5 +1,6 @@
 import 'dart:convert';
 import 'dart:typed_data';
+import 'package:athena/services/simhash_service.dart';
 
 /// Flat Contiguous Binary Tape (`.athena.bin`) for zero-JSON, zero-GC instant book opening.
 ///
@@ -72,7 +73,10 @@ class BinaryBookTape {
       final page = (chunk['page_number'] as num?)?.toInt() ??
           (chunk['page'] as num?)?.toInt() ??
           1;
-      final simhash = (chunk['simhash'] as num?)?.toInt() ?? 0;
+      final suppliedHash = chunk['simhash'];
+      final simhash = suppliedHash is SimHashFingerprint
+          ? suppliedHash.low32
+          : (suppliedHash as num?)?.toInt() ?? 0;
       final simhashLow = simhash & 0xFFFFFFFF;
 
       // Index Entry (16 bytes)
@@ -98,13 +102,15 @@ class BinaryBookTape {
   /// Deserializes a binary book tape in O(1) time without decoding string blobs upfront.
   static BinaryBookTape fromBytes(Uint8List bytes) {
     if (bytes.length < headerSize) {
-      throw FormatException('BinaryBookTape payload too small: ${bytes.length} bytes');
+      throw FormatException(
+          'BinaryBookTape payload too small: ${bytes.length} bytes');
     }
 
     final byteData = ByteData.sublistView(bytes);
     final m = byteData.getUint32(0, Endian.big);
     if (m != magic) {
-      throw FormatException('Invalid BinaryBookTape magic: 0x${m.toRadixString(16)}');
+      throw FormatException(
+          'Invalid BinaryBookTape magic: 0x${m.toRadixString(16)}');
     }
 
     final version = byteData.getUint32(4, Endian.big);
@@ -122,7 +128,8 @@ class BinaryBookTape {
     }
 
     final indexData = ByteData.sublistView(bytes, headerSize, payloadStart);
-    final payloadBlob = Uint8List.sublistView(bytes, payloadStart, payloadStart + utf8Length);
+    final payloadBlob =
+        Uint8List.sublistView(bytes, payloadStart, payloadStart + utf8Length);
 
     return BinaryBookTape._(
       chunkCount: count,
@@ -166,7 +173,7 @@ class BinaryBookTape {
     final charCount = text.length;
     final lineBreaks = '\n'.allMatches(text).length;
     final hasCodeBlock = text.contains('```') || text.contains('    ');
-    
+
     // Estimated lines at standard 390px viewport width (~40-44 characters per line in 17.5px font)
     final estimatedLines = (charCount / 42.0).ceil() + lineBreaks;
 
@@ -189,4 +196,3 @@ class BinaryBookTape {
     };
   }
 }
-

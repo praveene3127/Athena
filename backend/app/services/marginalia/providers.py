@@ -12,12 +12,21 @@ _shared_async_client: Optional[httpx.AsyncClient] = None
 def get_shared_async_client() -> httpx.AsyncClient:
     global _shared_async_client
     if _shared_async_client is None or _shared_async_client.is_closed:
-        _shared_async_client = httpx.AsyncClient(
-            timeout=DEFAULT_TIMEOUT,
-            follow_redirects=True,
-            limits=httpx.Limits(max_keepalive_connections=10, max_connections=20),
-            http2=True,
-        )
+        try:
+            _shared_async_client = httpx.AsyncClient(
+                timeout=DEFAULT_TIMEOUT,
+                follow_redirects=False,
+                limits=httpx.Limits(max_keepalive_connections=10, max_connections=20),
+                http2=True,
+            )
+        except (ImportError, Exception) as exc:
+            logger.warning("Failed to initialize httpx.AsyncClient with http2=True, falling back to http2=False: %s", exc)
+            _shared_async_client = httpx.AsyncClient(
+                timeout=DEFAULT_TIMEOUT,
+                follow_redirects=False,
+                limits=httpx.Limits(max_keepalive_connections=10, max_connections=20),
+                http2=False,
+            )
     return _shared_async_client
 
 PROVIDER_CONFIGS = {
@@ -172,7 +181,7 @@ def _parse_models_response(provider: str, data: Any) -> List[Dict[str, Any]]:
         raw_list = data.get("models", []) if isinstance(data, dict) else []
         for item in raw_list:
             model_name = item.get("name", "")
-            # e.g. "models/gemini-2.5-flash" -> "gemini-2.5-flash"
+            # Provider catalog entries may prefix names with "models/".
             slug = model_name.replace("models/", "") if model_name.startswith("models/") else model_name
             # Exclude non-generateContent models or embedding models
             supported_methods = item.get("supportedGenerationMethods", [])
@@ -278,7 +287,9 @@ async def test_provider_model(
             "anthropic-version": "2023-06-01",
             "content-type": "application/json",
         }
-        target_model = model or cfg.get("default_model", "claude-3-5-sonnet-20241022")
+        target_model = model or cfg.get("default_model")
+        if not target_model:
+            return {"ok": False, "latency_ms": 0, "message": "Choose a model from live discovery before testing", "models": []}
         payload = {
             "model": target_model,
             "max_tokens": 3,
@@ -339,7 +350,9 @@ async def test_provider_model(
 
         # Fallback to chat/completions ping if models endpoint not enabled
         chat_url = f"{root_url}/chat/completions" if not root_url.endswith("/chat/completions") else root_url
-        target_model = model or cfg.get("default_model", "gpt-4o-mini")
+        target_model = model or cfg.get("default_model")
+        if not target_model:
+            return {"ok": False, "latency_ms": 0, "message": "Choose a model from live discovery before testing", "models": []}
         payload = {
             "model": target_model,
             "messages": [{"role": "user", "content": "ping"}],
@@ -350,23 +363,23 @@ async def test_provider_model(
             headers["Authorization"] = f"Bearer {clean_key}"
 
         try:
-            async with httpx.AsyncClient(timeout=DEFAULT_TIMEOUT) as client:
-                resp = await client.post(chat_url, headers=headers, json=payload)
-                latency_ms = int((time.perf_counter() - t0) * 1000)
-                if resp.status_code == 200:
-                    live_models = await fetch_provider_models(provider_key, clean_key, base_url)
-                    return {
-                        "ok": True,
-                        "latency_ms": latency_ms,
-                        "message": "Connection verified",
-                        "models": live_models,
-                    }
-                else:
-                    return {
-                        "ok": False,
-                        "latency_ms": latency_ms,
-                        "message": f"Provider error {resp.status_code}: {resp.text[:120]}",
-                        "models": [],
-                    }
+            client = get_shared_async_client()
+            resp = await client.post(chat_url, headers=headers, json=payload)
+            latency_ms = int((time.perf_counter() - t0) * 1000)
+            if resp.status_code == 200:
+                live_models = await fetch_provider_models(provider_key, clean_key, base_url)
+                return {
+                    "ok": True,
+                    "latency_ms": latency_ms,
+                    "message": "Connection verified",
+                    "models": live_models,
+                }
+            else:
+                return {
+                    "ok": False,
+                    "latency_ms": latency_ms,
+                    "message": f"Provider error {resp.status_code}: {resp.text[:120]}",
+                    "models": [],
+                }
         except Exception as e:
             return {"ok": False, "latency_ms": 0, "message": f"Connection failed: {str(e)}", "models": []}

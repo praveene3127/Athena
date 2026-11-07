@@ -4,13 +4,13 @@ import logging
 import os
 import re
 import time
+from pathlib import Path
 from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, JSONResponse, HTMLResponse
 from fastapi.staticfiles import StaticFiles
 from starlette.exceptions import HTTPException as StarletteHTTPException
 
-from app.config import is_llm_configured
 from app.db import init_db
 from app.errors import AppException, app_exception_handler, generic_exception_handler
 from app.routers import ask, cards, documents, settings, updates
@@ -43,8 +43,14 @@ app = FastAPI(
 
 # Browser clients run locally, over Wi-Fi LAN, or via public online tunnels.
 _ALLOWED_ORIGIN = re.compile(
-    r"^https?://(?:localhost|127\.0\.0\.1|192\.168\.\d+\.\d+|10\.\d+\.\d+\.\d+|172\.(?:1[6-9]|2\d|3[01])\.\d+\.\d+|.*\.loca\.lt|.*\.pinggy\.link|.*\.pinggy\.io|.*\.trycloudflare\.com|.*\.localhost\.run|.*\.serveo\.net|.*\.ngrok-free\.app|.*\.ngrok\.io)(?::\d+)?$"
+    r"^https?://(?:localhost|127\.0\.0\.1|192\.168\.\d+\.\d+|10\.\d+\.\d+\.\d+|172\.(?:1[6-9]|2\d|3[01])\.\d+\.\d+)(?::\d+)?$"
 )
+
+_EXPLICIT_ALLOWED_ORIGINS = {
+    origin.strip().rstrip("/")
+    for origin in os.environ.get("ATHENA_ALLOWED_ORIGINS", "").split(",")
+    if origin.strip()
+}
 
 
 @app.middleware("http")
@@ -53,7 +59,7 @@ async def reject_untrusted_browser_mutations(request, call_next):
     host = request.headers.get("host")
     if origin and request.method not in {"GET", "HEAD", "OPTIONS"}:
         is_same_origin = host and (origin.endswith(f"://{host}") or origin == f"http://{host}" or origin == f"https://{host}")
-        if not is_same_origin and not _ALLOWED_ORIGIN.fullmatch(origin):
+        if not is_same_origin and not _ALLOWED_ORIGIN.fullmatch(origin) and origin.rstrip("/") not in _EXPLICIT_ALLOWED_ORIGINS:
             return JSONResponse(
                 status_code=403,
                 content={
@@ -88,6 +94,7 @@ async def log_requests(request: Request, call_next):
 
 app.add_middleware(
     CORSMiddleware,
+    allow_origins=sorted(_EXPLICIT_ALLOWED_ORIGINS),
     allow_origin_regex=_ALLOWED_ORIGIN.pattern,
     allow_credentials=True,
     allow_methods=["GET", "POST", "PUT", "DELETE", "OPTIONS", "HEAD"],
@@ -142,31 +149,18 @@ def get_root():
 @app.get("/health")
 @app.get("/api/health")
 def get_health():
-    """Health check endpoint proving the backend is alive, DB reachable, and models configured."""
-    db_status = "unreachable"
-    try:
-        from app.db import engine
-        from sqlmodel import Session, text
-        with Session(engine) as session:
-            session.exec(text("SELECT 1"))
-            db_status = "reachable"
-    except Exception as e:
-        logger.warning("DB health check failed: %s", e)
-        db_status = f"unreachable: {type(e).__name__}"
-
-    model_status = "ready"
-    try:
-        from app.services.edge.novelty import _get_embedder
-        emb = _get_embedder()
-        model_status = "ready" if emb is not None else "unavailable"
-    except Exception:
-        model_status = "unavailable"
+    """Fast liveness check; never opens SQLite or initializes/downloads a model."""
+    from app.services.edge.novelty import embedding_readiness
+    db_status = "configured"
+    model_status = embedding_readiness()
 
     return {
         "status": "ok",
         "database": db_status,
         "model_status": model_status,
-        "llm_configured": is_llm_configured(),
+        "llm_configured": any(os.environ.get(name, "").strip() for name in (
+            "LLM_API_KEY", "GEMINI_API_KEY_PRIMARY", "GEMINI_API_KEY_SECONDARY"
+        )),
     }
 
 
@@ -475,10 +469,14 @@ async def serve_static_or_spa(full_path: str, request: Request):
         return JSONResponse(status_code=404, content={"error": "Not found"})
 
     if full_path.startswith("releases/"):
-        rel_sub = full_path.replace("releases/", "", 1).lstrip(r"\/")
-        rel_file = os.path.join(_RELEASES_DIR, rel_sub)
-        if os.path.isfile(rel_file):
-            return FileResponse(rel_file)
+        raw_name = full_path.replace("releases/", "", 1)
+        if ".." in raw_name or "/" in raw_name or "\\" in raw_name:
+            return JSONResponse(status_code=400, content={"error": "Invalid release artifact path"})
+        base_dir = Path(_RELEASES_DIR).resolve()
+        target_path = (base_dir / Path(raw_name).name).resolve()
+        if not target_path.is_relative_to(base_dir) or not target_path.is_file():
+            return JSONResponse(status_code=404, content={"error": "Release artifact not found"})
+        return FileResponse(target_path)
 
     global _web_static
     if _web_static is None and os.path.isdir(_WEB_BUILD_DIR):
@@ -492,6 +490,8 @@ async def serve_static_or_spa(full_path: str, request: Request):
             response.headers["Expires"] = "0"
             return response
         except StarletteHTTPException:
+            if Path(full_path).suffix.lower() in {".js", ".mjs", ".css", ".wasm", ".png", ".jpg", ".jpeg", ".svg", ".ico", ".ttf", ".woff", ".woff2", ".json"}:
+                return JSONResponse(status_code=404, content={"error": "Not found"})
             index_html = os.path.join(_WEB_BUILD_DIR, "index.html")
             if os.path.isfile(index_html):
                 response = FileResponse(index_html)

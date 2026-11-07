@@ -26,39 +26,43 @@ class _ChaosMockApiClient extends ApiClient {
       'page_count': mockReaderData.pageCount,
       'integrity_verified': true,
       'chunk_count': mockReaderData.chunkCount,
-      'items': mockReaderData.items.map((it) => {
-        'id': it.id,
-        'type': it.type,
-        'sequence': it.sequence,
-        'text': it.text,
-        'page_reference': it.pageReference,
-        'section_title': it.sectionTitle,
-        'insert_after': it.insertAfter,
-        'source_chunk_id': it.sourceChunkId,
-        'card_type': it.cardType,
-        'title': it.title,
-        'body': it.body,
-        'exact_quote': it.exactQuote,
-        'citations': it.citations,
-      }).toList(),
-      'cards': mockReaderData.cards.map((it) => {
-        'id': it.id,
-        'type': it.type,
-        'sequence': it.sequence,
-        'insert_after': it.insertAfter,
-        'source_chunk_id': it.sourceChunkId,
-        'card_type': it.cardType,
-        'title': it.title,
-        'body': it.body,
-        'exact_quote': it.exactQuote,
-        'citations': it.citations,
-      }).toList(),
+      'items': mockReaderData.items
+          .map((it) => {
+                'id': it.id,
+                'type': it.type,
+                'sequence': it.sequence,
+                'text': it.text,
+                'page_reference': it.pageReference,
+                'section_title': it.sectionTitle,
+                'insert_after': it.insertAfter,
+                'source_chunk_id': it.sourceChunkId,
+                'card_type': it.cardType,
+                'title': it.title,
+                'body': it.body,
+                'exact_quote': it.exactQuote,
+                'citations': it.citations,
+              })
+          .toList(),
+      'cards': mockReaderData.cards
+          .map((it) => {
+                'id': it.id,
+                'type': it.type,
+                'sequence': it.sequence,
+                'insert_after': it.insertAfter,
+                'source_chunk_id': it.sourceChunkId,
+                'card_type': it.cardType,
+                'title': it.title,
+                'body': it.body,
+                'exact_quote': it.exactQuote,
+                'citations': it.citations,
+              })
+          .toList(),
     };
   }
 
   @override
   Future<Map<String, dynamic>> syncReadingProgress(String id, int chunkIndex,
-      {String readingMode = 'feed'}) async {
+      {String? chunkId, int? feedIndex, String readingMode = 'feed'}) async {
     return {'status': 'ok', 'chunk_index': chunkIndex};
   }
 }
@@ -71,7 +75,8 @@ void main() {
   });
 
   group('Systems-Level Speed & Resilience Suite', () {
-    test('1. KinematicScrollGovernor debounces fast flings and settles cleanly', () async {
+    test('1. KinematicScrollGovernor debounces fast flings and settles cleanly',
+        () async {
       int localDwellCount = 0;
       int aiDwellCount = 0;
       int lastSettledIndex = -1;
@@ -111,22 +116,27 @@ void main() {
 
       governor.dispose();
       debugPrint('\n=== [TERMINAL PROOF: KINEMATIC GOVERNOR] ===');
-      debugPrint('+ Rapid flings debounced cleanly: 5 turns -> exactly 1 settled callback.');
-      debugPrint('+ Zero background interference during fast 120fps scrolling verified 100%!');
+      debugPrint(
+          '+ Rapid flings debounced cleanly: 5 turns -> exactly 1 settled callback.');
+      debugPrint(
+          '+ Zero background interference during fast 120fps scrolling verified 100%!');
     });
 
     test('2. 64-Bit SimHash & 1-bit popcount search executes in < 0.2ms', () {
-      final doc1 = 'Marcus Aurelius was a Roman emperor and Stoic philosopher who wrote the Meditations';
-      final doc2 = 'Marcus Aurelius was an emperor of Rome practicing Stoic philosophy daily';
-      final doc3 = 'Quantum electrodynamics describes relativistic interaction of electrons and photons';
+      final doc1 =
+          'Marcus Aurelius was a Roman emperor and Stoic philosopher who wrote the Meditations';
+      final doc2 =
+          'Marcus Aurelius was an emperor of Rome practicing Stoic philosophy daily';
+      final doc3 =
+          'Quantum electrodynamics describes relativistic interaction of electrons and photons';
 
       final hash1 = SimHashService.computeSimHash64(doc1);
       final hash2 = SimHashService.computeSimHash64(doc2);
       final hash3 = SimHashService.computeSimHash64(doc3);
 
-      expect(hash1, isNonZero);
-      expect(hash2, isNonZero);
-      expect(hash3, isNonZero);
+      expect(hash1.high32 != 0 || hash1.low32 != 0, isTrue);
+      expect(hash2.high32 != 0 || hash2.low32 != 0, isTrue);
+      expect(hash3.high32 != 0 || hash3.low32 != 0, isTrue);
 
       final distSimilar = SimHashService.hammingDistance(hash1, hash2);
       final distDiff = SimHashService.hammingDistance(hash1, hash3);
@@ -170,13 +180,16 @@ void main() {
       expect(avgMicros, lessThan(200)); // < 0.2ms (200 microseconds per search)
 
       debugPrint('\n=== [TERMINAL PROOF: 64-BIT SIMHASH POPCNT] ===');
-      debugPrint('+ Hamming Distance Similar: $distSimilar vs Orthogonal: $distDiff');
+      debugPrint(
+          '+ Hamming Distance Similar: $distSimilar vs Orthogonal: $distDiff');
       debugPrint('+ Semantic Similarity: ${(sim * 100).toStringAsFixed(1)}%');
-      debugPrint('+ Popcount search speed: ${avgMicros.toStringAsFixed(2)}us per chunk lookup (< 200us / 0.2ms)');
+      debugPrint(
+          '+ Popcount search speed: ${avgMicros.toStringAsFixed(2)}us per chunk lookup (< 200us / 0.2ms)');
       debugPrint('+ Ultra-fast 1-bit binary search verified 100%!');
     });
 
-    testWidgets('3. Deterministic Chaos Monkey UI Stress Test (50 Randomized Actions @ 390x844)',
+    testWidgets(
+        '3. Deterministic Chaos Monkey UI Stress Test (50 Randomized Actions @ 390x844)',
         (tester) async {
       tester.view.physicalSize = const Size(390, 844);
       tester.view.devicePixelRatio = 1.0;
@@ -191,7 +204,8 @@ void main() {
           type: 'reading_chunk',
           id: 'chunk_${i + 1}',
           sequence: i + 1,
-          text: 'This is authentic unabridged prose chunk number ${i + 1} exploring Stoic cognitive discipline and emotional regulation.',
+          text:
+              'This is authentic unabridged prose chunk number ${i + 1} exploring Stoic cognitive discipline and emotional regulation.',
         ),
       );
 
@@ -222,8 +236,10 @@ void main() {
       expect(find.byType(ReaderScreen), findsOneWidget);
 
       final rng = Random(42);
-      debugPrint('\n=== [TERMINAL PROOF: DETERMINISTIC CHAOS MONKEY STRESS TEST] ===');
-      debugPrint('Executing 50 randomized high-velocity UI actions with PRNG seed=42 on 390x844 viewport:');
+      debugPrint(
+          '\n=== [TERMINAL PROOF: DETERMINISTIC CHAOS MONKEY STRESS TEST] ===');
+      debugPrint(
+          'Executing 50 randomized high-velocity UI actions with PRNG seed=42 on 390x844 viewport:');
 
       for (int step = 1; step <= 50; step++) {
         final actionType = rng.nextInt(4);
@@ -273,7 +289,8 @@ void main() {
 
         // Periodically verify zero exceptions during the chaos run
         expect(tester.takeException(), isNull,
-            reason: 'Chaos Monkey action $step caused an unexpected exception!');
+            reason:
+                'Chaos Monkey action $step caused an unexpected exception!');
       }
 
       // Settle all remaining animations and debouncers
@@ -284,7 +301,8 @@ void main() {
       expect(find.byType(ReaderScreen), findsOneWidget);
       debugPrint('+ 50/50 randomized stress actions completed successfully!');
       debugPrint('+ Zero exceptions (tester.takeException() == null).');
-      debugPrint('+ Zero RenderFlex layout overflows on 390x844 mobile viewport.');
+      debugPrint(
+          '+ Zero RenderFlex layout overflows on 390x844 mobile viewport.');
       debugPrint('>>> CHAOS MONKEY STRESS TEST PASSED 100%! <<<\n');
     });
   });

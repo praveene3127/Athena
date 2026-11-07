@@ -2,10 +2,11 @@ import 'package:flutter/foundation.dart';
 import 'dart:async';
 import 'package:dio/dio.dart';
 import 'package:flutter_secure_storage/flutter_secure_storage.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 import 'package:athena/core/config/config.dart';
 
-/// Secure persistence for backend connection settings using OS-level secure storage
-/// (Android Keystore / iOS Keychain / Encrypted Web storage).
+/// Secure persistence for mobile credentials using Android Keystore / iOS Keychain.
+/// Web builds keep API credentials in the platform's supported preferences store.
 /// No tokens are baked into the application bundle.
 class SecureStorageService {
   SecureStorageService._();
@@ -13,6 +14,10 @@ class SecureStorageService {
 
   static const _backendUrlKey = 'athena_backend_url';
   static const _contextTokenKey = 'athena_context_token';
+  static const _aiKeyNames = {
+    'athena_ai_primary_api_key',
+    'athena_ai_fallback_api_key',
+  };
 
   final FlutterSecureStorage _storage = const FlutterSecureStorage(
     aOptions: AndroidOptions(),
@@ -38,8 +43,8 @@ class SecureStorageService {
     try {
       await _storage.write(key: _backendUrlKey, value: sanitized);
     } catch (e) {
-        debugPrint('Athena caught error: $e');
-      }
+      debugPrint('Athena caught error: $e');
+    }
     await AppConfig.setBaseUrl(sanitized);
   }
 
@@ -64,6 +69,53 @@ class SecureStorageService {
     } else {
       await _storage.write(key: _contextTokenKey, value: sanitized);
     }
+  }
+
+  /// Reads an AI credential from OS secure storage. Existing plaintext values
+  /// are migrated once, then removed from SharedPreferences.
+  Future<String?> getAIKey(String key) async {
+    if (!_aiKeyNames.contains(key)) {
+      throw ArgumentError.value(key, 'key', 'Unknown AI credential name');
+    }
+    final prefs = await SharedPreferences.getInstance();
+    if (kIsWeb) return prefs.getString(key);
+    try {
+      final stored = await _storage.read(key: key);
+      if (stored != null && stored.isNotEmpty) {
+        await prefs.remove(key);
+        return stored;
+      }
+    } catch (e) {
+      debugPrint('Athena secure AI key read notice: $e');
+    }
+    final legacy = prefs.getString(key);
+    if (legacy != null && legacy.isNotEmpty) {
+      await _storage.write(key: key, value: legacy);
+      await prefs.remove(key);
+    }
+    return legacy;
+  }
+
+  Future<void> setAIKey(String key, String? value) async {
+    if (!_aiKeyNames.contains(key)) {
+      throw ArgumentError.value(key, 'key', 'Unknown AI credential name');
+    }
+    final prefs = await SharedPreferences.getInstance();
+    final clean = value?.trim() ?? '';
+    if (kIsWeb) {
+      if (clean.isEmpty) {
+        await prefs.remove(key);
+      } else {
+        await prefs.setString(key, clean);
+      }
+      return;
+    }
+    if (clean.isEmpty) {
+      await _storage.delete(key: key);
+    } else {
+      await _storage.write(key: key, value: clean);
+    }
+    await prefs.remove(key);
   }
 
   /// Clears stored connection credentials.

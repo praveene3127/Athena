@@ -8,6 +8,7 @@ import 'package:cross_file/cross_file.dart';
 import 'package:dio/dio.dart';
 import 'package:flutter/foundation.dart' show kIsWeb, debugPrint;
 import 'package:shared_preferences/shared_preferences.dart';
+import 'package:xml/xml.dart';
 
 import 'package:athena/core/config/config.dart';
 import 'package:athena/core/api/lan_discovery.dart';
@@ -17,61 +18,156 @@ import 'package:syncfusion_flutter_pdf/pdf.dart';
 import 'package:athena/services/local_context_service.dart';
 import 'package:athena/services/local_database.dart';
 import 'package:athena/services/lossless_chunker.dart';
+import 'package:athena/services/secure_storage_service.dart';
 
-String _extractEpubText(List<int> bytes) {
+String extractEpubText(List<int> bytes) {
   try {
     final archive = ZipDecoder().decodeBytes(bytes);
-    final buffer = StringBuffer();
-    final htmlFiles = archive.files.where((f) {
-      final n = f.name.toLowerCase();
-      return f.isFile &&
-          (n.endsWith('.xhtml') || n.endsWith('.html') || n.endsWith('.htm'));
-    }).toList();
+    final files = <String, ArchiveFile>{
+      for (final file in archive.files)
+        if (file.isFile) _normalizeEpubPath(file.name): file,
+    };
+    final containerBytes = files['META-INF/container.xml']?.content;
+    if (containerBytes is! List<int>) return '';
+    final container = XmlDocument.parse(utf8.decode(containerBytes));
+    final rootfile = container
+        .findAllElements('rootfile')
+        .firstOrNull
+        ?.getAttribute('full-path');
+    if (rootfile == null || rootfile.isEmpty) return '';
 
-    for (final file in htmlFiles) {
-      final raw = file.content;
-      if (raw is List<int>) {
-        final content = utf8.decode(raw, allowMalformed: true);
-        final text = content
-            .replaceAll(
-                RegExp(r'<style[^>]*>[\s\S]*?</style>', caseSensitive: false),
-                ' ')
-            .replaceAll(
-                RegExp(r'<script[^>]*>[\s\S]*?</script>',
-                    caseSensitive: false),
-                ' ')
-            .replaceAll(
-                RegExp(r'</?(?:p|div|h[1-6]|br|hr|li|tr|blockquote|section|article)[^>]*>',
-                    caseSensitive: false),
-                '\n\n')
-            .replaceAll(RegExp(r'<[^>]+>'), ' ')
-            .replaceAll('&nbsp;', ' ')
-            .replaceAll('&amp;', '&')
-            .replaceAll('&lt;', '<')
-            .replaceAll('&gt;', '>')
-            .replaceAll('&quot;', '"')
-            .replaceAll('&#39;', "'")
-            .replaceAll('&ldquo;', '“')
-            .replaceAll('&rdquo;', '”')
-            .replaceAll('&lsquo;', '‘')
-            .replaceAll('&rsquo;', '’')
-            .replaceAll('&mdash;', '—')
-            .replaceAll('&ndash;', '–')
-            .replaceAll('&hellip;', '…')
-            .replaceAll(RegExp(r'[ \t]+'), ' ')
-            .replaceAll(RegExp(r'\n{3,}'), '\n\n')
-            .trim();
-        final sanitized = sanitizeProseSpacing(text);
-        if (sanitized.isNotEmpty) {
-          buffer.writeln(sanitized);
-          buffer.writeln();
-        }
-      }
+    final opfPath = _normalizeEpubPath(rootfile);
+    final opfBytes = files[opfPath]?.content;
+    if (opfBytes is! List<int>) return '';
+    final package = XmlDocument.parse(utf8.decode(opfBytes));
+    final manifest = <String, ({String href, String properties})>{};
+    for (final item in package.findAllElements('item')) {
+      final id = item.getAttribute('id');
+      final href = item.getAttribute('href');
+      if (id == null || href == null) continue;
+      manifest[id] = (
+        href: href,
+        properties: item.getAttribute('properties') ?? '',
+      );
     }
-    return buffer.toString().trim();
+
+    final spine = package.findAllElements('spine').firstOrNull;
+    if (spine == null) return '';
+    final parts = <String>[];
+    for (final itemRef in spine.findElements('itemref')) {
+      if ((itemRef.getAttribute('linear') ?? '').toLowerCase() == 'no') {
+        continue;
+      }
+      final idref = itemRef.getAttribute('idref');
+      final item = idref == null ? null : manifest[idref];
+      final excludedByName = idref == null || item == null
+          ? false
+          : RegExp(r'^(toc|nav|ncx|cover|titlepage|copyright)',
+                      caseSensitive: false)
+                  .hasMatch(idref) ||
+              RegExp(r'^(toc|nav|ncx|cover|titlepage|copyright)',
+                      caseSensitive: false)
+                  .hasMatch(item.href.split('/').last);
+      if (item == null ||
+          item.properties
+              .split(RegExp(r'\s+'))
+              .any((p) => p == 'nav' || p == 'cover-image') ||
+          excludedByName) {
+        continue;
+      }
+      if (!RegExp(r'\.(xhtml|html|htm)(?:$|[?#])', caseSensitive: false)
+          .hasMatch(item.href)) {
+        continue;
+      }
+      final path = _resolveEpubHref(opfPath, item.href);
+      final contentBytes = files[path]?.content;
+      if (contentBytes is! List<int>) continue;
+      final content = utf8.decode(contentBytes, allowMalformed: true);
+      final text = _epubMarkupToText(content);
+      if (text.isNotEmpty) parts.add(sanitizeProseSpacing(text));
+    }
+    return parts.join('\n\n').trim();
   } catch (e) {
+    debugPrint('[Athena] EPUB spine parsing failed: $e');
     return '';
   }
+}
+
+String _normalizeEpubPath(String path) {
+  final segments = <String>[];
+  for (final segment in path.replaceAll('\\', '/').split('/')) {
+    if (segment.isEmpty || segment == '.') continue;
+    if (segment == '..') {
+      if (segments.isNotEmpty) segments.removeLast();
+    } else {
+      segments.add(Uri.decodeComponent(segment));
+    }
+  }
+  return segments.join('/');
+}
+
+String _resolveEpubHref(String opfPath, String href) {
+  final decoded = Uri.decodeComponent(href.split('#').first.split('?').first);
+  final opfDirectory = opfPath.contains('/')
+      ? opfPath.substring(0, opfPath.lastIndexOf('/'))
+      : '';
+  return _normalizeEpubPath(
+      opfDirectory.isEmpty ? decoded : '$opfDirectory/$decoded');
+}
+
+String _epubMarkupToText(String source) {
+  final separated = source
+      .replaceAll(
+          RegExp(r'<style[^>]*>[\s\S]*?</style>', caseSensitive: false), ' ')
+      .replaceAll(
+          RegExp(r'<script[^>]*>[\s\S]*?</script>', caseSensitive: false), ' ')
+      .replaceAll(
+        RegExp(
+            r'</?(?:p|div|h[1-6]|br|hr|li|tr|blockquote|section|article)[^>]*>',
+            caseSensitive: false),
+        '\n\n',
+      )
+      .replaceAll(RegExp(r'<[^>]+>'), ' ');
+  final decoded = separated.replaceAllMapped(
+    RegExp(r'&(#x[0-9a-f]+|#\d+|[a-z]+);', caseSensitive: false),
+    (match) {
+      final entity = match[1]!.toLowerCase();
+      const named = {
+        'amp': '&',
+        'lt': '<',
+        'gt': '>',
+        'quot': '"',
+        'apos': "'",
+        'nbsp': ' ',
+        'ldquo': '“',
+        'rdquo': '”',
+        'lsquo': '‘',
+        'rsquo': '’',
+        'mdash': '—',
+        'ndash': '–',
+        'hellip': '…',
+      };
+      if (named.containsKey(entity)) return named[entity]!;
+      try {
+        final codePoint = entity.startsWith('#x')
+            ? int.parse(entity.substring(2), radix: 16)
+            : entity.startsWith('#')
+                ? int.parse(entity.substring(1))
+                : null;
+        if (codePoint != null && codePoint >= 0 && codePoint <= 0x10ffff) {
+          return String.fromCharCode(codePoint);
+        }
+      } on FormatException {
+        return match[0]!;
+      }
+      return match[0]!;
+    },
+  );
+  return decoded
+      .replaceAll(RegExp(r'[ \t\r]+'), ' ')
+      .replaceAll(RegExp(r' *\n *'), '\n')
+      .replaceAll(RegExp(r'\n{3,}'), '\n\n')
+      .trim();
 }
 
 class _ParseDocumentArgs {
@@ -120,7 +216,8 @@ class _ParseDocumentResult {
   });
 }
 
-_ParseDocumentResult _parseAndChunkDocumentInBackground(_ParseDocumentParams params) {
+_ParseDocumentResult _parseAndChunkDocumentInBackground(
+    _ParseDocumentParams params) {
   final bytes = params.bytes;
   final fileName = params.fileName;
   final docId = params.docId;
@@ -177,8 +274,10 @@ _ParseDocumentResult _parseAndChunkDocumentInBackground(_ParseDocumentParams par
           final currGlyph = word.glyphs[g];
           if (g > 0) {
             final prevGlyph = word.glyphs[g - 1];
-            final horizontalGap = currGlyph.bounds.left - prevGlyph.bounds.right;
-            final gapThreshold = (currGlyph.bounds.width * 0.18).clamp(1.0, 3.5);
+            final horizontalGap =
+                currGlyph.bounds.left - prevGlyph.bounds.right;
+            final gapThreshold =
+                (currGlyph.bounds.width * 0.18).clamp(1.0, 3.5);
             if (horizontalGap > gapThreshold || horizontalGap >= 1.2) {
               final prevText = sb.toString();
               if (prevText.isNotEmpty &&
@@ -195,20 +294,24 @@ _ParseDocumentResult _parseAndChunkDocumentInBackground(_ParseDocumentParams par
 
       String extractPageText(int index) {
         try {
-          final lines = extractor.extractTextLines(startPageIndex: index, endPageIndex: index);
+          final lines = extractor.extractTextLines(
+              startPageIndex: index, endPageIndex: index);
           if (lines.isNotEmpty) {
             final lineStrings = <String>[];
             for (final line in lines) {
               if (line.wordCollection.isNotEmpty) {
                 final lineBuffer = StringBuffer();
                 for (int w = 0; w < line.wordCollection.length; w++) {
-                  final wordStr = reconstructWordWithGlyphSpacing(line.wordCollection[w]);
+                  final wordStr =
+                      reconstructWordWithGlyphSpacing(line.wordCollection[w]);
                   if (wordStr.isEmpty) continue;
                   if (lineBuffer.isNotEmpty) {
                     final prev = lineBuffer.toString();
                     final prevEndsOpening = openingPunct.hasMatch(prev);
                     final currStartsClosing = closingPunct.hasMatch(wordStr);
-                    if (!prevEndsOpening && !currStartsClosing && !prev.endsWith(' ')) {
+                    if (!prevEndsOpening &&
+                        !currStartsClosing &&
+                        !prev.endsWith(' ')) {
                       lineBuffer.write(' ');
                     }
                   }
@@ -227,8 +330,8 @@ _ParseDocumentResult _parseAndChunkDocumentInBackground(_ParseDocumentParams par
             }
           }
         } catch (e) {
-        debugPrint('Athena caught error: $e');
-      }
+          debugPrint('Athena caught error: $e');
+        }
 
         try {
           return extractor.extractText(
@@ -311,7 +414,7 @@ _ParseDocumentResult _parseAndChunkDocumentInBackground(_ParseDocumentParams par
       }
     }
   } else if (lowerName.endsWith('.epub')) {
-    canonicalText = _extractEpubText(bytes);
+    canonicalText = extractEpubText(bytes);
     if (canonicalText.isEmpty) {
       try {
         canonicalText =
@@ -439,8 +542,8 @@ class ApiClient {
                 base = origin;
               }
             } catch (e) {
-        debugPrint('Athena caught error: $e');
-      }
+              debugPrint('Athena caught error: $e');
+            }
           }
           if (base.isNotEmpty) {
             options.baseUrl = base;
@@ -480,11 +583,9 @@ class ApiClient {
       );
       return response.data as Map<String, dynamic>;
     } catch (e) {
-
       debugPrint('Athena generateCard caught: ');
 
       return null;
-
     }
   }
 
@@ -498,9 +599,8 @@ class ApiClient {
     }
 
     try {
-      final response = await dio
-          .get('/api/documents')
-          .timeout(const Duration(seconds: 3));
+      final response =
+          await dio.get('/api/documents').timeout(const Duration(seconds: 3));
       final list = (response.data as List).cast<Map<String, dynamic>>();
       _cacheDocumentsLocally(list);
       return list;
@@ -525,13 +625,14 @@ class ApiClient {
               final retryResp = await dio
                   .get('/api/documents')
                   .timeout(const Duration(seconds: 3));
-              final list = (retryResp.data as List).cast<Map<String, dynamic>>();
+              final list =
+                  (retryResp.data as List).cast<Map<String, dynamic>>();
               _cacheDocumentsLocally(list);
               return list;
             }
           } catch (e) {
-        debugPrint('Athena caught error: $e');
-      }
+            debugPrint('Athena caught error: $e');
+          }
         }
         // In standalone mode, return empty library without nagging
         return [];
@@ -630,7 +731,7 @@ class ApiClient {
           '/api/documents/upload',
           data: formData,
           options: Options(
-            sendTimeout: const Duration(seconds: 4),
+            sendTimeout: const Duration(minutes: 5),
             receiveTimeout: const Duration(seconds: 10),
           ),
           onSendProgress: onSendProgress,
@@ -660,7 +761,8 @@ class ApiClient {
     Uint8List? rawBytes;
 
     if (fileBytes != null && fileBytes.isNotEmpty) {
-      rawBytes = fileBytes is Uint8List ? fileBytes : Uint8List.fromList(fileBytes);
+      rawBytes =
+          fileBytes is Uint8List ? fileBytes : Uint8List.fromList(fileBytes);
     } else if (filePath != null && filePath.isNotEmpty) {
       try {
         final xf = XFile(filePath);
@@ -704,7 +806,8 @@ class ApiClient {
     final now = DateTime.now().toIso8601String();
     final cleanTitle = fileName.replaceAll(RegExp(r'\.[a-zA-Z0-9]+$'), '');
 
-    onProgress?.call(0.70, '3/4 Building single-screen chunks & Context Cards...');
+    onProgress?.call(
+        0.70, '3/4 Building single-screen chunks & Context Cards...');
 
     final cardMaps = <Map<String, Object?>>[];
     try {
@@ -714,8 +817,7 @@ class ApiClient {
         cardMaps.add({
           'id': cd['id'] ?? 'card_${cd['concept_name']}',
           'document_id': docId,
-          'source_chunk_id':
-              cd['source_chunk_id'] ?? chunkMaps.first['id']!,
+          'source_chunk_id': cd['source_chunk_id'] ?? chunkMaps.first['id']!,
           'concept_name': cd['concept_name'] ?? '',
           'card_type': cd['card_type'] ?? 'context',
           'title': cd['title'] ?? '',
@@ -769,7 +871,6 @@ class ApiClient {
     return docId;
   }
 
-
   Future<void> retryDocument(String id) async {
     if (AppConfig.apiBaseUrl.isEmpty) return;
     try {
@@ -808,52 +909,8 @@ class ApiClient {
   // --- Reader ---
 
   void _sanitizeReaderData(Map<String, dynamic> data) {
-    final chunks = data['chunks'] as List?;
-    if (chunks != null) {
-      for (final c in chunks) {
-        if (c is Map && c['raw_text'] is String) {
-          c['raw_text'] = sanitizeProseSpacing(c['raw_text'] as String);
-        }
-      }
-    }
-    final items = data['items'] as List?;
-    if (items != null) {
-      for (final it in items) {
-        if (it is Map) {
-          if (it['text'] is String) {
-            it['text'] = sanitizeProseSpacing(it['text'] as String);
-          }
-          if (it['raw_text'] is String) {
-            it['raw_text'] = sanitizeProseSpacing(it['raw_text'] as String);
-          }
-          if (it['body'] is String) {
-            it['body'] = sanitizeProseSpacing(it['body'] as String);
-          }
-          if (it['exact_quote'] is String) {
-            it['exact_quote'] = sanitizeProseSpacing(it['exact_quote'] as String);
-          }
-          if (it['title'] is String) {
-            it['title'] = sanitizeProseSpacing(it['title'] as String);
-          }
-        }
-      }
-    }
-    final cards = data['cards'] as List?;
-    if (cards != null) {
-      for (final cd in cards) {
-        if (cd is Map) {
-          if (cd['body'] is String) {
-            cd['body'] = sanitizeProseSpacing(cd['body'] as String);
-          }
-          if (cd['exact_quote'] is String) {
-            cd['exact_quote'] = sanitizeProseSpacing(cd['exact_quote'] as String);
-          }
-          if (cd['title'] is String) {
-            cd['title'] = sanitizeProseSpacing(cd['title'] as String);
-          }
-        }
-      }
-    }
+    // Reader payloads already contain canonical chunks. Never rewrite their
+    // text or card quotes after hashing; cleanup belongs before ingestion only.
   }
 
   Future<Map<String, dynamic>> getReader(String id) async {
@@ -898,21 +955,27 @@ class ApiClient {
   Future<Map<String, dynamic>?> generateCardForChunk(
     String docId,
     int chunkIndex, {
+    String? chunkId,
+    int? feedIndex,
     bool forceNew = false,
   }) async {
     try {
+      final payload = <String, dynamic>{
+        'chunk_index': chunkIndex,
+        'force_new': forceNew,
+      };
+      if (chunkId != null) payload['chunk_id'] = chunkId;
+      if (feedIndex != null) payload['feed_index'] = feedIndex;
+
       final response = await dio.post(
         '/api/documents/$docId/cards/generate',
-        data: {'chunk_index': chunkIndex, 'force_new': forceNew},
+        data: payload,
         options: Options(receiveTimeout: const Duration(seconds: 45)),
       );
       return response.data as Map<String, dynamic>;
     } catch (e) {
-
-      debugPrint('Athena generateCard caught: ');
-
+      debugPrint('Athena generateCard caught: $e');
       return null;
-
     }
   }
 
@@ -963,15 +1026,19 @@ class ApiClient {
 
     // 1. Instant on-device SQLite FTS5 search (< 1ms)
     if (!kIsWeb) {
-      final dbResults = await LocalDatabase.instance.searchChunks(docId, trimmed);
+      final dbResults =
+          await LocalDatabase.instance.searchChunks(docId, trimmed);
       if (dbResults.isNotEmpty) {
-        return dbResults.map((r) => {
-          'chunk_id': r['id']?.toString() ?? '',
-          'sequence': (r['sequence'] as num?)?.toInt() ?? 1,
-          'section_title': r['section_title']?.toString() ?? '',
-          'raw_text': r['raw_text']?.toString() ?? '',
-          'rrf_score': 1.0,
-        }).take(topK).toList();
+        return dbResults
+            .map((r) => {
+                  'chunk_id': r['id']?.toString() ?? '',
+                  'sequence': (r['sequence'] as num?)?.toInt() ?? 1,
+                  'section_title': r['section_title']?.toString() ?? '',
+                  'raw_text': r['raw_text']?.toString() ?? '',
+                  'rrf_score': 1.0,
+                })
+            .take(topK)
+            .toList();
       }
     }
 
@@ -1040,8 +1107,8 @@ class ApiClient {
         }
       }
     } catch (e) {
-        debugPrint('Athena caught error: $e');
-      }
+      debugPrint('Athena caught error: $e');
+    }
   }
 
   Future<List<Map<String, dynamic>>> _loadCachedDocuments() async {
@@ -1057,8 +1124,8 @@ class ApiClient {
         return decoded.map((e) => Map<String, dynamic>.from(e as Map)).toList();
       }
     } catch (e) {
-        debugPrint('Athena caught error: $e');
-      }
+      debugPrint('Athena caught error: $e');
+    }
     return [];
   }
 
@@ -1131,8 +1198,8 @@ class ApiClient {
         }
       }
     } catch (e) {
-        debugPrint('Athena caught error: $e');
-      }
+      debugPrint('Athena caught error: $e');
+    }
   }
 
   Future<Map<String, dynamic>?> _loadCachedReader(String docId) async {
@@ -1150,18 +1217,31 @@ class ApiClient {
         return Map<String, dynamic>.from(jsonDecode(raw) as Map);
       }
     } catch (e) {
-        debugPrint('Athena caught error: $e');
-      }
+      debugPrint('Athena caught error: $e');
+    }
     return null;
   }
 
-  Future<Map<String, dynamic>> syncReadingProgress(String id, int chunkIndex,
-      {String readingMode = 'feed'}) async {
+  Future<Map<String, dynamic>> syncReadingProgress(
+    String id,
+    int chunkIndex, {
+    String? chunkId,
+    int? feedIndex,
+    String readingMode = 'feed',
+  }) async {
     if (AppConfig.hasActiveBackend && AppConfig.apiBaseUrl.isNotEmpty) {
       try {
+        final payload = <String, dynamic>{
+          'chunk_index': chunkIndex,
+          'chunk_sequence': chunkIndex,
+          'reading_mode': readingMode,
+        };
+        if (chunkId != null) payload['chunk_id'] = chunkId;
+        if (feedIndex != null) payload['feed_index'] = feedIndex;
+
         final response = await dio.post(
           '/api/documents/$id/progress',
-          data: {'chunk_index': chunkIndex, 'reading_mode': readingMode},
+          data: payload,
         );
         if (response.data is Map<String, dynamic>) {
           return response.data as Map<String, dynamic>;
@@ -1180,8 +1260,7 @@ class ApiClient {
 
         final chunkSeqById = {
           for (final c in chunks)
-            c['id']?.toString() ?? '':
-                (c['sequence'] as num?)?.toInt() ?? 0
+            c['id']?.toString() ?? '': (c['sequence'] as num?)?.toInt() ?? 0
         };
         final cardSeqs = <int>{};
         for (final c in existingCards) {
@@ -1227,8 +1306,8 @@ class ApiClient {
             try {
               citations = jsonDecode(c['citations_json'] as String) as List;
             } catch (e) {
-        debugPrint('Athena caught error: $e');
-      }
+              debugPrint('Athena caught error: $e');
+            }
           }
           return {
             'type': 'context_card',
@@ -1284,11 +1363,10 @@ class ApiClient {
         List citations = [];
         if (newCard['citations_json'] != null) {
           try {
-            citations =
-                jsonDecode(newCard['citations_json'] as String) as List;
+            citations = jsonDecode(newCard['citations_json'] as String) as List;
           } catch (e) {
-        debugPrint('Athena caught error: $e');
-      }
+            debugPrint('Athena caught error: $e');
+          }
         }
         return {
           'type': 'context_card',
@@ -1306,8 +1384,8 @@ class ApiClient {
         };
       }
     } catch (e) {
-        debugPrint('Athena caught error: $e');
-      }
+      debugPrint('Athena caught error: $e');
+    }
     return null;
   }
 
@@ -1349,12 +1427,22 @@ class ApiClient {
   }
 
   Future<Map<String, dynamic>> fetchVibeCheck(
-      String docId, int chunkIndex) async {
+    String docId,
+    int chunkIndex, {
+    String? chunkId,
+    int? feedIndex,
+  }) async {
     if (_hasReachableBackend) {
       try {
+        final payload = <String, dynamic>{
+          'chunk_index': chunkIndex,
+        };
+        if (chunkId != null) payload['chunk_id'] = chunkId;
+        if (feedIndex != null) payload['feed_index'] = feedIndex;
+
         final response = await dio.post(
           '/api/documents/$docId/vibe-check',
-          data: {'chunk_index': chunkIndex},
+          data: payload,
           options: Options(
             sendTimeout: const Duration(seconds: 4),
             receiveTimeout: const Duration(seconds: 8),
@@ -1363,6 +1451,80 @@ class ApiClient {
         return response.data as Map<String, dynamic>;
       } catch (e) {
         debugPrint('Athena caught error: $e');
+      }
+    }
+
+    // Native Anthropic fallback for the brief on-scroll insight card.
+    if (!kIsWeb) {
+      try {
+        final prefs = await SharedPreferences.getInstance();
+        final provider = prefs.getString('athena_ai_primary_provider') ?? '';
+        final key = await SecureStorageService.instance
+                .getAIKey('athena_ai_primary_api_key') ??
+            '';
+        if (provider == 'anthropic' && key.isNotEmpty) {
+          final chunks = await LocalDatabase.instance.getChunks(docId);
+          final chunk = chunkId == null
+              ? (chunkIndex > 0 && chunkIndex <= chunks.length
+                  ? chunks[chunkIndex - 1]
+                  : null)
+              : await LocalDatabase.instance.getChunk(chunkId);
+          final passage = chunk?['raw_text']?.toString() ?? '';
+          if (passage.isNotEmpty) {
+            final configuredModel =
+                prefs.getString('athena_ai_primary_model') ?? '';
+            final discovered = configuredModel.isEmpty
+                ? await fetchModels(provider: provider, apiKey: key)
+                : const <AIModelOption>[];
+            final model = configuredModel.isNotEmpty
+                ? configuredModel
+                : (discovered.isNotEmpty ? discovered.first.id : '');
+            if (model.isEmpty) {
+              throw StateError(
+                  'No live Anthropic model is available for this API key.');
+            }
+            final response = await Dio().post(
+              'https://api.anthropic.com/v1/messages',
+              data: {
+                'model': model,
+                'max_tokens': 140,
+                'messages': [
+                  {
+                    'role': 'user',
+                    'content':
+                        'In 1–2 sentences, identify the key idea in this passage. Stay grounded in the passage.\n\n$passage'
+                  }
+                ],
+              },
+              options: Options(
+                headers: {
+                  'x-api-key': key,
+                  'anthropic-version': '2023-06-01',
+                  'content-type': 'application/json'
+                },
+                receiveTimeout: const Duration(seconds: 15),
+              ),
+            );
+            final parts = (response.data is Map
+                    ? response.data['content'] as List?
+                    : null) ??
+                [];
+            final summary = parts
+                .whereType<Map>()
+                .map((part) => part['text']?.toString() ?? '')
+                .join('\n')
+                .trim();
+            if (summary.isNotEmpty) {
+              return {
+                'vibe': 'Key Insight',
+                'summary': summary,
+                'source': 'direct_anthropic'
+              };
+            }
+          }
+        }
+      } catch (e) {
+        debugPrint('Athena Anthropic vibe-check fallback notice: $e');
       }
     }
 
@@ -1383,30 +1545,40 @@ class ApiClient {
     String? exactQuote,
     String? documentTitle,
   }) async {
-    final noteMap = {
-      'id': id,
-      'document_id': documentId,
-      'source_chunk_id': chunkId,
-      'concept_name': 'Saved Passage',
-      'card_type': 'user_highlight',
-      'title': title,
-      'body': quoteText,
-      'why_here': (documentTitle != null && documentTitle.isNotEmpty) ? 'From: $documentTitle' : 'Saved directly by reader',
-      'exact_quote': exactQuote ??
-          (quoteText.length > 280
-              ? '${quoteText.substring(0, 280)}…'
-              : quoteText),
-      'citations_json': '[]',
-      'saved': 1,
-      'dismissed': 0,
-      'created_at': DateTime.now().toIso8601String(),
-    };
-
     if (!kIsWeb) {
       try {
-        await LocalDatabase.instance.insertCards([noteMap]);
+        final document = await LocalDatabase.instance.getDocument(documentId);
+        final effectiveDocumentTitle =
+            (documentTitle?.trim().isNotEmpty ?? false)
+                ? documentTitle!.trim()
+                : document?['title']?.toString() ?? 'Document';
+        final chunk = await LocalDatabase.instance.getChunk(chunkId);
+        final pages = chunk?['source_pages_json']?.toString();
+        String pageReference = 'Saved passage';
+        if (pages != null) {
+          try {
+            final decoded = jsonDecode(pages) as List;
+            if (decoded.length == 1) pageReference = 'Page ${decoded.first}';
+            if (decoded.length > 1) {
+              pageReference = 'Pages ${decoded.first}–${decoded.last}';
+            }
+          } catch (e) {
+            debugPrint('Athena quote page reference notice: $e');
+          }
+        }
+        await LocalDatabase.instance.saveQuote({
+          'id': id,
+          'document_id': documentId,
+          'document_title': effectiveDocumentTitle,
+          'chunk_id': chunkId,
+          'page_reference': pageReference,
+          'text': exactQuote ?? quoteText,
+          'note': title,
+          'created_at': DateTime.now().toIso8601String(),
+        });
       } catch (e) {
-        debugPrint('Athena caught error: $e');
+        debugPrint('Athena local quote save failed: $e');
+        rethrow;
       }
     }
 
@@ -1419,7 +1591,7 @@ class ApiClient {
           'title': title,
           'body': quoteText,
           'exact_quote': exactQuote ?? quoteText,
-          if (documentTitle != null) 'document_title': documentTitle,
+          'document_title': documentTitle ?? 'Document',
         });
       } catch (e) {
         debugPrint('Athena caught error: $e');
@@ -1460,15 +1632,15 @@ class ApiClient {
         }
       }
     } catch (e) {
-        debugPrint('Athena caught error: $e');
-      }
+      debugPrint('Athena caught error: $e');
+    }
 
     // 2. Remove from LocalDatabase
     try {
       await LocalDatabase.instance.setCardSaved(id, false);
     } catch (e) {
-        debugPrint('Athena caught error: $e');
-      }
+      debugPrint('Athena caught error: $e');
+    }
 
     // 3. Remove from remote backend if connected
     if (AppConfig.apiBaseUrl.isEmpty) {
@@ -1488,14 +1660,14 @@ class ApiClient {
       await prefs.remove('athena_brain_deck_cards_v1');
       await prefs.remove('athena_brain_deck_v1');
     } catch (e) {
-        debugPrint('Athena caught error: $e');
-      }
+      debugPrint('Athena caught error: $e');
+    }
     try {
       final db = await LocalDatabase.instance.database;
       await db.update('context_cards', {'saved': 0});
     } catch (e) {
-        debugPrint('Athena caught error: $e');
-      }
+      debugPrint('Athena caught error: $e');
+    }
     if (AppConfig.apiBaseUrl.isNotEmpty) {
       try {
         final list = await getSavedCards();
@@ -1541,6 +1713,25 @@ class ApiClient {
       try {
         final local = await LocalDatabase.instance.getSavedCards();
         result.addAll(local);
+        final quotes = await LocalDatabase.instance.getSavedQuotes();
+        for (final quote in quotes) {
+          if (result.any((item) => item['id'] == quote['id'])) continue;
+          final chunk = await LocalDatabase.instance
+              .getChunk(quote['chunk_id']?.toString() ?? '');
+          int sequence = (chunk?['sequence'] as num?)?.toInt() ?? 1;
+          result.add({
+            'id': quote['id'],
+            'document_id': quote['document_id'],
+            'document_title': quote['document_title'],
+            'chunk_id': quote['chunk_id'],
+            'sequence': sequence,
+            'page_reference': quote['page_reference'],
+            'card_type': 'user_highlight',
+            'title': quote['note'] ?? 'Saved passage',
+            'body': quote['text'],
+            'citations': <dynamic>[],
+          });
+        }
       } catch (e) {
         debugPrint('Athena caught error: $e');
       }
@@ -1561,8 +1752,8 @@ class ApiClient {
         }
       }
     } catch (e) {
-        debugPrint('Athena caught error: $e');
-      }
+      debugPrint('Athena caught error: $e');
+    }
 
     if (AppConfig.hasActiveBackend) {
       try {
@@ -1610,7 +1801,8 @@ class ApiClient {
         );
         final data = response.data as Map<String, dynamic>;
         final answer = data['answer']?.toString();
-        if (data['status'] == 'ok' || (answer != null && answer.trim().isNotEmpty)) {
+        if (data['status'] == 'ok' ||
+            (answer != null && answer.trim().isNotEmpty)) {
           return {
             'status': 'ok',
             'answer': answer,
@@ -1639,11 +1831,21 @@ class ApiClient {
     // 3. On-device fallback via configured Gemini or AI key directly over HTTPS
     try {
       final prefs = await SharedPreferences.getInstance();
-      final key = prefs.getString('athena_ai_primary_api_key') ?? '';
+      final key = await SecureStorageService.instance
+              .getAIKey('athena_ai_primary_api_key') ??
+          '';
       final provider =
           prefs.getString('athena_ai_primary_provider') ?? 'gemini';
-      final model =
-          prefs.getString('athena_ai_primary_model') ?? '';
+      var model = prefs.getString('athena_ai_primary_model') ?? '';
+
+      if (key.isNotEmpty && model.isEmpty) {
+        final availableModels = await fetchModels(
+          provider: provider,
+          apiKey: key,
+          baseUrl: prefs.getString('athena_ai_primary_base_url'),
+        );
+        if (availableModels.isNotEmpty) model = availableModels.first.id;
+      }
 
       if (key.isNotEmpty) {
         final prompt =
@@ -1653,6 +1855,10 @@ class ApiClient {
             'Please provide a clear, concise (under 120 words), insightful explanation directly answering the question.';
 
         if (provider == 'gemini') {
+          if (model.isEmpty) {
+            throw StateError(
+                'No live Gemini model is available for this API key.');
+          }
           final effectiveModel = model;
           final url =
               'https://generativelanguage.googleapis.com/v1beta/models/$effectiveModel:generateContent?key=$key';
@@ -1671,8 +1877,7 @@ class ApiClient {
           );
           if (resp.statusCode == 200 && resp.data is Map) {
             final cand = (resp.data['candidates'] as List?)?.firstOrNull;
-            final part =
-                (cand?['content']?['parts'] as List?)?.firstOrNull;
+            final part = (cand?['content']?['parts'] as List?)?.firstOrNull;
             final text = part?['text']?.toString() ?? '';
             if (text.isNotEmpty) {
               return {
@@ -1683,7 +1888,45 @@ class ApiClient {
               };
             }
           }
+        } else if (provider == 'anthropic') {
+          if (model.isEmpty) {
+            throw StateError(
+                'No live Anthropic model is available for this API key.');
+          }
+          final effectiveModel = model;
+          final resp = await Dio().post(
+            'https://api.anthropic.com/v1/messages',
+            data: {
+              'model': effectiveModel,
+              'max_tokens': 300,
+              'messages': [
+                {'role': 'user', 'content': prompt}
+              ],
+            },
+            options: Options(
+              headers: {
+                'x-api-key': key,
+                'anthropic-version': '2023-06-01',
+                'content-type': 'application/json',
+              },
+              receiveTimeout: const Duration(seconds: 15),
+            ),
+          );
+          if (resp.statusCode == 200 && resp.data is Map) {
+            final content = (resp.data['content'] as List?)?.firstOrNull;
+            final answer =
+                content is Map ? content['text']?.toString() ?? '' : '';
+            if (answer.trim().isNotEmpty) {
+              return {
+                'status': 'ok',
+                'answer': answer.trim(),
+                'citations': [],
+                'source': 'direct_anthropic'
+              };
+            }
+          }
         } else if (provider == 'groq' ||
+            provider == 'deepseek' ||
             provider == 'openrouter' ||
             provider == 'openai' ||
             provider == 'custom') {
@@ -1694,23 +1937,24 @@ class ApiClient {
             compUrl = 'https://api.openai.com/v1/chat/completions';
           } else if (provider == 'openrouter') {
             compUrl = 'https://openrouter.ai/api/v1/chat/completions';
+          } else if (provider == 'deepseek') {
+            compUrl = 'https://api.deepseek.com/v1/chat/completions';
           } else {
             final b = (prefs.getString('athena_ai_primary_base_url') ??
                     'https://api.openai.com/v1')
                 .replaceAll(RegExp(r'/+$'), '');
-            compUrl = b.endsWith('/chat/completions')
-                ? b
-                : '$b/chat/completions';
+            compUrl =
+                b.endsWith('/chat/completions') ? b : '$b/chat/completions';
+          }
+
+          if (model.isEmpty) {
+            throw StateError('Select a live model before sending a request.');
           }
 
           final resp = await Dio().post(
             compUrl,
             data: {
-              'model': model.isNotEmpty
-                  ? model
-                  : (provider == 'groq'
-                      ? ''
-                      : ''),
+              'model': model.isNotEmpty ? model : 'llama-3.3-70b-versatile',
               'messages': [
                 {
                   'role': 'system',
@@ -1744,8 +1988,8 @@ class ApiClient {
         }
       }
     } catch (e) {
-        debugPrint('Athena caught error: $e');
-      }
+      debugPrint('Athena caught error: $e');
+    }
 
     // 4. Grounded passage fallback
     final rawText = (selectedText != null && selectedText.isNotEmpty)
@@ -1802,12 +2046,13 @@ class ApiClient {
 
     // Read from SharedPreferences
     final prefs = await SharedPreferences.getInstance();
-    final pKey = prefs.getString('athena_ai_primary_api_key');
+    final pKey = await SecureStorageService.instance
+        .getAIKey('athena_ai_primary_api_key');
     final pProv = prefs.getString('athena_ai_primary_provider') ?? 'gemini';
-    final pModel =
-        prefs.getString('athena_ai_primary_model') ?? '';
+    final pModel = prefs.getString('athena_ai_primary_model') ?? '';
     final pBase = prefs.getString('athena_ai_primary_base_url');
-    final fKey = prefs.getString('athena_ai_fallback_api_key');
+    final fKey = await SecureStorageService.instance
+        .getAIKey('athena_ai_fallback_api_key');
     final fProv = prefs.getString('athena_ai_fallback_provider');
     final fModel = prefs.getString('athena_ai_fallback_model');
     final fBase = prefs.getString('athena_ai_fallback_base_url');
@@ -1839,11 +2084,12 @@ class ApiClient {
     String? fallbackModel,
     String? fallbackBaseUrl,
   }) async {
-    // 1. ALWAYS persist to SharedPreferences FIRST
+    // Provider settings are non-secret; credentials are kept in OS secure storage.
     final prefs = await SharedPreferences.getInstance();
     await prefs.setString('athena_ai_primary_provider', primaryProvider);
     if (primaryApiKey != null && !primaryApiKey.contains('...')) {
-      await prefs.setString('athena_ai_primary_api_key', primaryApiKey);
+      await SecureStorageService.instance
+          .setAIKey('athena_ai_primary_api_key', primaryApiKey);
     }
     if (primaryModel != null && primaryModel.isNotEmpty) {
       await prefs.setString('athena_ai_primary_model', primaryModel);
@@ -1855,7 +2101,8 @@ class ApiClient {
       await prefs.setString('athena_ai_fallback_provider', fallbackProvider);
     }
     if (fallbackApiKey != null && !fallbackApiKey.contains('...')) {
-      await prefs.setString('athena_ai_fallback_api_key', fallbackApiKey);
+      await SecureStorageService.instance
+          .setAIKey('athena_ai_fallback_api_key', fallbackApiKey);
     }
     if (fallbackModel != null && fallbackModel.isNotEmpty) {
       await prefs.setString('athena_ai_fallback_model', fallbackModel);
@@ -1874,12 +2121,10 @@ class ApiClient {
             if (primaryApiKey != null) 'primary_api_key': primaryApiKey,
             if (primaryModel != null) 'primary_model': primaryModel,
             if (primaryBaseUrl != null) 'primary_base_url': primaryBaseUrl,
-            if (fallbackProvider != null)
-              'fallback_provider': fallbackProvider,
+            if (fallbackProvider != null) 'fallback_provider': fallbackProvider,
             if (fallbackApiKey != null) 'fallback_api_key': fallbackApiKey,
             if (fallbackModel != null) 'fallback_model': fallbackModel,
-            if (fallbackBaseUrl != null)
-              'fallback_base_url': fallbackBaseUrl,
+            if (fallbackBaseUrl != null) 'fallback_base_url': fallbackBaseUrl,
           },
           options: Options(
             sendTimeout: const Duration(seconds: 3),
@@ -1908,7 +2153,7 @@ class ApiClient {
     }
 
     // 1. Try companion backend
-    if (_hasReachableBackend) {
+    if (_hasReachableBackend && kIsWeb) {
       try {
         final response = await dio.post(
           '/api/settings/fetch-models',
@@ -2006,299 +2251,134 @@ class ApiClient {
     String? apiKey,
     String? model,
     String? baseUrl,
+    Dio? httpClient,
   }) async {
-    final cleanKey = (apiKey ?? '').trim();
-    final pKey = provider.toLowerCase();
-
-    if (cleanKey.isEmpty && pKey != 'custom') {
+    final key = (apiKey ?? '').trim();
+    final providerKey = provider.toLowerCase();
+    if (key.isEmpty && providerKey != 'custom') {
       return {
         'ok': false,
         'valid': false,
         'status': 'error',
         'latency_ms': 0,
         'message': 'API key is required to test connection',
-        'models': [],
+        'models': <Map<String, dynamic>>[]
       };
     }
 
-    final sw = Stopwatch()..start();
-    final client = Dio(
-      BaseOptions(
-        connectTimeout: const Duration(seconds: 6),
-        receiveTimeout: const Duration(seconds: 8),
-        sendTimeout: const Duration(seconds: 6),
-      ),
-    );
-
+    final timer = Stopwatch()..start();
+    final client = httpClient ??
+        Dio(BaseOptions(
+          connectTimeout: const Duration(seconds: 6),
+          receiveTimeout: const Duration(seconds: 8),
+        ));
     try {
-      if (pKey == 'gemini') {
-        final targetModel = (model != null && model.isNotEmpty) ? model : '';
-        final genUrl =
-            'https://generativelanguage.googleapis.com/v1beta/models/$targetModel:generateContent?key=$cleanKey';
-        final genResp = await client.post(
-          genUrl,
-          data: {
-            'contents': [
-              {
-                'parts': [
-                  {'text': 'Say OK'}
-                ]
-              }
-            ]
-          },
-          options: Options(headers: {'Content-Type': 'application/json'}),
-        );
-        sw.stop();
-        if (genResp.statusCode == 200) {
-          List<Map<String, dynamic>> models = [];
-          try {
-            final modelsUrl =
-                'https://generativelanguage.googleapis.com/v1beta/models?key=$cleanKey';
-            final mResp = await client.get(modelsUrl);
-            if (mResp.statusCode == 200 && mResp.data is Map) {
-              final rawModels =
-                  (mResp.data as Map)['models'] as List? ?? [];
-              final List<Map<String, dynamic>> fetched = [];
-              for (final item in rawModels) {
-                if (item is! Map) continue;
-                final mName = item['name']?.toString() ?? '';
-                final slug = mName.startsWith('models/')
-                    ? mName.substring(7)
-                    : mName;
-                final methods =
-                    (item['supportedGenerationMethods'] as List?)
-                            ?.cast<String>() ??
-                        [];
-                if (methods.isNotEmpty &&
-                    !methods.contains('generateContent')) {
-                  continue;
-                }
-                final low = slug.toLowerCase();
-                if (low.contains('embedding') ||
-                    low.contains('tts') ||
-                    low.contains('whisper') ||
-                    low.contains('aqa') ||
-                    low.contains('imagen')) {
-                  continue;
-                }
-                fetched.add({
-                  'id': slug,
-                  'name': item['displayName'] ?? slug,
-                });
-              }
-              if (fetched.isNotEmpty) models = fetched;
-            }
-          } catch (e) {
-        debugPrint('Athena caught error: $e');
-      }
-
-          return {
-            'ok': true,
-            'valid': true,
-            'status': 'success',
-            'latency_ms': sw.elapsedMilliseconds,
-            'message': 'Connected to Google Gemini!',
-            'models': models,
-          };
-        }
-      } else if (pKey == 'anthropic') {
-        final resp = await client.post(
-          'https://api.anthropic.com/v1/messages',
-          data: {
-            'model': (model != null && model.isNotEmpty)
-                ? model
-                : '',
-            'max_tokens': 5,
-            'messages': [
-              {'role': 'user', 'content': 'Say OK'}
-            ]
-          },
-          options: Options(
-            headers: {
-              'x-api-key': cleanKey,
-              'anthropic-version': '2023-06-01',
-              'Content-Type': 'application/json',
-            },
-          ),
-        );
-        sw.stop();
-        if (resp.statusCode == 200) {
-          final List<Map<String, dynamic>> models = [];
-          try {
-            final mResp = await client.get(
-              'https://api.anthropic.com/v1/models',
-              options: Options(
-                headers: {
-                  'x-api-key': cleanKey,
-                  'anthropic-version': '2023-06-01',
-                  'Accept': 'application/json',
-                },
-              ),
-            );
-            if (mResp.statusCode == 200 && mResp.data is Map) {
-              final rawModels = (mResp.data as Map)['data'] as List? ?? [];
-              for (final item in rawModels) {
-                if (item is! Map) continue;
-                final mid = item['id']?.toString() ?? '';
-                if (mid.isNotEmpty) {
-                  models.add({
-                    'id': mid,
-                    'name': item['display_name'] ?? mid,
-                  });
-                }
-              }
-            }
-          } catch (e) {
-        debugPrint('Athena caught error: $e');
-      }
-
-          return {
-            'ok': true,
-            'valid': true,
-            'status': 'success',
-            'latency_ms': sw.elapsedMilliseconds,
-            'message': 'Connected to Anthropic Claude!',
-            'models': models,
-          };
-        }
-      } else {
-        // OpenAI-compatible: OpenRouter, Groq, OpenAI, DeepSeek, Custom
-        String rootUrl;
-        String completionUrl;
-        if (pKey == 'groq') {
-          rootUrl = 'https://api.groq.com/openai/v1/models';
-          completionUrl = 'https://api.groq.com/openai/v1/chat/completions';
-        } else if (pKey == 'openai') {
-          rootUrl = 'https://api.openai.com/v1/models';
-          completionUrl = 'https://api.openai.com/v1/chat/completions';
-        } else if (pKey == 'openrouter') {
-          rootUrl = 'https://openrouter.ai/api/v1/models';
-          completionUrl = 'https://openrouter.ai/api/v1/chat/completions';
-        } else if (pKey == 'deepseek') {
-          rootUrl = 'https://api.deepseek.com/models';
-          completionUrl = 'https://api.deepseek.com/chat/completions';
-        } else {
-          final b = (baseUrl ?? 'https://api.openai.com/v1')
-              .replaceAll(RegExp(r'/+$'), '');
-          rootUrl = b.endsWith('/models') ? b : '$b/models';
-          completionUrl = b.endsWith('/chat/completions')
-              ? b
-              : '$b/chat/completions';
-        }
-
-        final headers = <String, dynamic>{
-          'Accept': 'application/json',
-          'Content-Type': 'application/json',
-          if (cleanKey.isNotEmpty) 'Authorization': 'Bearer $cleanKey',
+      late final String modelsUrl;
+      late final Map<String, dynamic> headers;
+      if (providerKey == 'gemini') {
+        modelsUrl =
+            'https://generativelanguage.googleapis.com/v1beta/models?key=$key';
+        headers = {'Accept': 'application/json'};
+      } else if (providerKey == 'anthropic') {
+        modelsUrl = 'https://api.anthropic.com/v1/models';
+        headers = {
+          'x-api-key': key,
+          'anthropic-version': '2023-06-01',
+          'Accept': 'application/json'
         };
-
-        // Try small completion test
-        final testResp = await client.post(
-          completionUrl,
-          data: {
-            'model': (model != null && model.isNotEmpty)
-                ? model
-                : (pKey == 'groq'
-                    ? ''
-                    : (pKey == 'deepseek'
-                        ? ''
-                        : '')),
-            'messages': [
-              {'role': 'user', 'content': 'OK'}
-            ],
-            'max_tokens': 5,
-          },
-          options: Options(headers: headers),
-        );
-
-        sw.stop();
-        if (testResp.statusCode == 200) {
-          // Discover models
-          List<Map<String, dynamic>> models = [];
-          try {
-            final mResp = await client.get(rootUrl,
-                options: Options(headers: headers));
-            if (mResp.statusCode == 200) {
-              List rawList = [];
-              if (mResp.data is Map) {
-                rawList = (mResp.data['data'] as List?) ??
-                    (mResp.data['models'] as List?) ??
-                    [];
-              } else if (mResp.data is List) {
-                rawList = mResp.data as List;
-              }
-              for (final item in rawList) {
-                if (item is! Map) continue;
-                final mid = item['id']?.toString() ??
-                    item['name']?.toString() ??
-                    '';
-                if (mid.isNotEmpty) {
-                  final low = mid.toLowerCase();
-                  if (low.contains('embed') ||
-                      low.contains('whisper') ||
-                      low.contains('tts') ||
-                      low.contains('dall-e')) {
-                    continue;
-                  }
-                  models.add({'id': mid, 'name': item['name'] ?? mid});
-                }
-              }
-            }
-          } catch (e) {
-        debugPrint('Athena caught error: $e');
+      } else {
+        final root = switch (providerKey) {
+          'groq' => 'https://api.groq.com/openai/v1',
+          'openai' => 'https://api.openai.com/v1',
+          'openrouter' => 'https://openrouter.ai/api/v1',
+          'deepseek' => 'https://api.deepseek.com/v1',
+          _ => (baseUrl ?? 'https://api.openai.com/v1')
+              .replaceAll(RegExp(r'/+$'), ''),
+        };
+        modelsUrl = root.endsWith('/models') ? root : '$root/models';
+        headers = {
+          'Accept': 'application/json',
+          if (key.isNotEmpty) 'Authorization': 'Bearer $key'
+        };
       }
 
-          return {
-            'ok': true,
-            'valid': true,
-            'status': 'success',
-            'latency_ms': sw.elapsedMilliseconds,
-            'message': 'Connection verified successfully!',
-            'models': models,
-          };
+      // A successful live model listing verifies the credential. Do not send a
+      // generation request here: providers can reject an empty or stale model.
+      final response =
+          await client.get(modelsUrl, options: Options(headers: headers));
+      final raw = response.data is Map
+          ? ((response.data['models'] as List?) ??
+              (response.data['data'] as List?) ??
+              [])
+          : (response.data is List ? response.data as List : <dynamic>[]);
+      final models = <Map<String, dynamic>>[];
+      for (final item in raw) {
+        if (item is! Map) continue;
+        if (providerKey == 'gemini') {
+          final methods =
+              (item['supportedGenerationMethods'] as List?) ?? const [];
+          if (methods.isNotEmpty && !methods.contains('generateContent')) {
+            continue;
+          }
         }
+        var id = item['id']?.toString() ?? item['name']?.toString() ?? '';
+        if (providerKey == 'gemini' && id.startsWith('models/')) {
+          id = id.substring(7);
+        }
+        if (id.isEmpty) continue;
+        final lower = id.toLowerCase();
+        if (lower.contains('embedding') ||
+            lower.contains('whisper') ||
+            lower.contains('tts') ||
+            lower.contains('dall-e') ||
+            lower.contains('imagen') ||
+            lower.contains('aqa')) {
+          continue;
+        }
+        models.add({
+          'id': id,
+          'name':
+              item['display_name'] ?? item['displayName'] ?? item['name'] ?? id
+        });
       }
-    } on DioException catch (dioErr) {
-      sw.stop();
-      String detail = '';
-      if (dioErr.response?.data is Map) {
-        final d = dioErr.response!.data as Map;
-        detail = d['error']?['message']?.toString() ??
-            d['message']?.toString() ??
-            dioErr.response?.statusMessage ??
-            '';
-      }
-      if (detail.isEmpty) {
-        detail = dioErr.message ?? 'Authentication or network failed';
-      }
+      timer.stop();
       return {
-        'ok': false,
-        'valid': false,
-        'status': 'error',
-        'latency_ms': sw.elapsedMilliseconds,
-        'message': detail,
-        'models': [],
+        'ok': true,
+        'valid': true,
+        'status': 'success',
+        'latency_ms': timer.elapsedMilliseconds,
+        'message': models.isEmpty
+            ? 'Provider responded, but listed no compatible models.'
+            : 'Connection verified; loaded ${models.length} models.',
+        'models': models,
       };
-    } catch (err) {
-      sw.stop();
+    } on DioException catch (error) {
+      timer.stop();
+      final payload = error.response?.data;
+      final detail = payload is Map
+          ? (payload['error'] is Map
+              ? payload['error']['message']?.toString()
+              : payload['message']?.toString())
+          : null;
       return {
         'ok': false,
         'valid': false,
         'status': 'error',
-        'latency_ms': sw.elapsedMilliseconds,
-        'message': err.toString(),
-        'models': [],
+        'latency_ms': timer.elapsedMilliseconds,
+        'message': detail ?? error.message ?? 'Provider connection failed.',
+        'models': <Map<String, dynamic>>[]
+      };
+    } catch (error) {
+      timer.stop();
+      return {
+        'ok': false,
+        'valid': false,
+        'status': 'error',
+        'latency_ms': timer.elapsedMilliseconds,
+        'message': error.toString(),
+        'models': <Map<String, dynamic>>[]
       };
     }
-
-    return {
-      'ok': false,
-      'valid': false,
-      'status': 'error',
-      'latency_ms': sw.elapsedMilliseconds,
-      'message': 'Could not verify provider credentials.',
-      'models': [],
-    };
   }
 
   Future<Map<String, dynamic>> testAIConnection({
@@ -2310,7 +2390,7 @@ class ApiClient {
     final cleanKey = (apiKey ?? '').trim();
 
     // 1. Try companion engine backend first if configured and reachable
-    if (_hasReachableBackend) {
+    if (_hasReachableBackend && kIsWeb) {
       try {
         final response = await dio.post(
           '/api/settings/test-connection',

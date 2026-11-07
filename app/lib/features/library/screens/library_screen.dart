@@ -40,7 +40,7 @@ import 'package:athena/core/widgets/athena_avatar.dart';
 import 'package:athena/core/widgets/athena_logo.dart';
 
 import 'package:athena/features/settings/widgets/byok_settings_sheet.dart';
-
+import 'package:athena/services/secure_storage_service.dart';
 
 final apiClientProvider = Provider<ApiClient>((ref) => createAppApiClient());
 
@@ -104,8 +104,8 @@ class _LibraryScreenState extends ConsumerState<LibraryScreen>
         }
       });
     } catch (e) {
-        debugPrint('Athena caught error: $e');
-      }
+      debugPrint('Athena caught error: $e');
+    }
   }
 
   Future<void> _checkServerConnectionAndAutoDiscover() async {
@@ -115,8 +115,8 @@ class _LibraryScreenState extends ConsumerState<LibraryScreen>
       final health = await client.checkHealth();
       if (health['status'] == 'ok') return;
     } catch (e) {
-        debugPrint('Athena caught error: $e');
-      }
+      debugPrint('Athena caught error: $e');
+    }
 
     try {
       final found = await LanDiscovery.discoverServer(timeoutMs: 600);
@@ -127,8 +127,8 @@ class _LibraryScreenState extends ConsumerState<LibraryScreen>
         _checkForUpdates();
       }
     } catch (e) {
-        debugPrint('Athena caught error: $e');
-      }
+      debugPrint('Athena caught error: $e');
+    }
   }
 
   Future<void> _checkAIConfiguration() async {
@@ -139,7 +139,8 @@ class _LibraryScreenState extends ConsumerState<LibraryScreen>
 
       final prefs = await SharedPreferences.getInstance();
 
-      final localKey = prefs.getString('athena_ai_primary_api_key');
+      final localKey = await SecureStorageService.instance
+          .getAIKey('athena_ai_primary_api_key');
 
       // Auto-sync stored key to backend if backend was reset or not configured
 
@@ -154,7 +155,8 @@ class _LibraryScreenState extends ConsumerState<LibraryScreen>
         final localFallbackProv =
             prefs.getString('athena_ai_fallback_provider');
 
-        final localFallbackKey = prefs.getString('athena_ai_fallback_api_key');
+        final localFallbackKey = await SecureStorageService.instance
+            .getAIKey('athena_ai_fallback_api_key');
 
         final localFallbackModel = prefs.getString('athena_ai_fallback_model');
 
@@ -175,8 +177,8 @@ class _LibraryScreenState extends ConsumerState<LibraryScreen>
 
           cfg = await client.getAIConfig();
         } catch (e) {
-        debugPrint('Athena caught error: $e');
-      }
+          debugPrint('Athena caught error: $e');
+        }
       }
 
       if (!mounted) return;
@@ -209,8 +211,8 @@ class _LibraryScreenState extends ConsumerState<LibraryScreen>
         }
       }
     } catch (e) {
-        debugPrint('Athena caught error: $e');
-      }
+      debugPrint('Athena caught error: $e');
+    }
   }
 
   @override
@@ -270,8 +272,8 @@ class _LibraryScreenState extends ConsumerState<LibraryScreen>
         });
       }
     } catch (e) {
-        debugPrint('Athena caught error: $e');
-      }
+      debugPrint('Athena caught error: $e');
+    }
   }
 
   void _showUpdateDialog() {
@@ -634,9 +636,11 @@ class _LibraryScreenState extends ConsumerState<LibraryScreen>
 
   Widget _buildEditorialIngestionProgressCard(bool isDark) {
     final percentInt = (_uploadProgress * 100).clamp(0, 100).toInt();
-    final borderColor = isDark ? const Color(0xFF333333) : const Color(0xFFD4C8B8);
+    final borderColor =
+        isDark ? const Color(0xFF333333) : const Color(0xFFD4C8B8);
     final cardBg = isDark ? const Color(0xFF1C1C1C) : const Color(0xFFFAF7F0);
-    final primaryColor = isDark ? const Color(0xFFE0E0E0) : const Color(0xFF2C2C2C);
+    final primaryColor =
+        isDark ? const Color(0xFFE0E0E0) : const Color(0xFF2C2C2C);
     const accentGreen = Color(0xFF2D6A4F);
 
     return Container(
@@ -679,7 +683,9 @@ class _LibraryScreenState extends ConsumerState<LibraryScreen>
                       fontSize: 11,
                       fontWeight: FontWeight.w700,
                       letterSpacing: 1.2,
-                      color: isDark ? const Color(0xFFAAAAAA) : const Color(0xFF666666),
+                      color: isDark
+                          ? const Color(0xFFAAAAAA)
+                          : const Color(0xFF666666),
                     ),
                   ),
                 ],
@@ -701,7 +707,8 @@ class _LibraryScreenState extends ConsumerState<LibraryScreen>
             child: LinearProgressIndicator(
               value: _uploadProgress.clamp(0.0, 1.0),
               minHeight: 6,
-              backgroundColor: isDark ? const Color(0xFF2A2A2A) : const Color(0xFFE8E2D5),
+              backgroundColor:
+                  isDark ? const Color(0xFF2A2A2A) : const Color(0xFFE8E2D5),
               valueColor: const AlwaysStoppedAnimation<Color>(accentGreen),
             ),
           ),
@@ -1022,11 +1029,14 @@ class _LibraryScreenState extends ConsumerState<LibraryScreen>
 
       final String? filePath = kIsWeb ? null : file.path;
       final List<int>? fileBytes = kIsWeb ? file.bytes : null;
-      final Stream<List<int>>? fileStream = (kIsWeb || (filePath != null && filePath.isNotEmpty))
-          ? null
-          : file.readStream;
+      final Stream<List<int>>? fileStream =
+          (kIsWeb || (filePath != null && filePath.isNotEmpty))
+              ? null
+              : file.readStream;
 
-      if (fileBytes == null && (filePath == null || filePath.isEmpty) && fileStream == null) {
+      if (fileBytes == null &&
+          (filePath == null || filePath.isEmpty) &&
+          fileStream == null) {
         if (mounted) {
           ScaffoldMessenger.of(context).showSnackBar(
             const SnackBar(
@@ -1074,7 +1084,7 @@ class _LibraryScreenState extends ConsumerState<LibraryScreen>
       }
 
       if (mounted) {
-        if (AppConfig.apiBaseUrl.isEmpty || !kIsWeb) {
+        if (AppConfig.isStandaloneMobile) {
           context.push('/reader/$docId');
         } else {
           context.push('/processing/$docId');
@@ -1109,8 +1119,6 @@ class _LibraryScreenState extends ConsumerState<LibraryScreen>
       }
     }
   }
-
-
 
   Future<void> _deleteDocument(Document doc) async {
     final isDark = Theme.of(context).brightness == Brightness.dark;
@@ -1279,7 +1287,8 @@ class _LibraryScreenState extends ConsumerState<LibraryScreen>
 
       final prefs = await SharedPreferences.getInstance();
 
-      final localKey = prefs.getString('athena_ai_primary_api_key');
+      final localKey = await SecureStorageService.instance
+          .getAIKey('athena_ai_primary_api_key');
 
       final config = await client.getAIConfig();
 
@@ -1299,8 +1308,8 @@ class _LibraryScreenState extends ConsumerState<LibraryScreen>
             .catchError((_) => <String, dynamic>{});
       }
     } catch (e) {
-        debugPrint('Athena caught error: $e');
-      }
+      debugPrint('Athena caught error: $e');
+    }
 
     if (mounted) {
       context.push('/reader/${doc.id}');
@@ -1613,7 +1622,9 @@ class _LibraryScreenState extends ConsumerState<LibraryScreen>
                                         fontFamily: AppTheme.fontDisplay,
                                         fontSize: 14,
                                         fontWeight: FontWeight.w700,
-                                        color: isDark ? Colors.white : AppTheme.ink,
+                                        color: isDark
+                                            ? Colors.white
+                                            : AppTheme.ink,
                                       ),
                                     ),
                                     const SizedBox(height: 2),
@@ -1741,7 +1752,6 @@ class _LibraryScreenState extends ConsumerState<LibraryScreen>
                               isLoading: _uploading,
                               onPressed: _uploading ? null : _pickAndUpload,
                             ),
-
                           ],
                         ),
                       ],
@@ -1988,12 +1998,15 @@ class _LibraryScreenState extends ConsumerState<LibraryScreen>
             Container(
               padding: const EdgeInsets.all(14),
               decoration: BoxDecoration(
-                color: (isDark ? const Color(0xFFF59E0B) : const Color(0xFFD97706)).withValues(alpha: 0.15),
+                color:
+                    (isDark ? const Color(0xFFF59E0B) : const Color(0xFFD97706))
+                        .withValues(alpha: 0.15),
                 shape: BoxShape.circle,
               ),
               child: Icon(
                 Icons.wifi_off_rounded,
-                color: isDark ? const Color(0xFFF59E0B) : const Color(0xFFD97706),
+                color:
+                    isDark ? const Color(0xFFF59E0B) : const Color(0xFFD97706),
                 size: 32,
               ),
             ),
@@ -2028,10 +2041,14 @@ class _LibraryScreenState extends ConsumerState<LibraryScreen>
                   icon: const Icon(Icons.settings_ethernet_rounded, size: 16),
                   label: const Text('Configure Server URL'),
                   style: ElevatedButton.styleFrom(
-                    backgroundColor: isDark ? const Color(0xFF2DD4BF) : const Color(0xFF2D6A4F),
+                    backgroundColor: isDark
+                        ? const Color(0xFF2DD4BF)
+                        : const Color(0xFF2D6A4F),
                     foregroundColor: isDark ? Colors.black : Colors.white,
-                    padding: const EdgeInsets.symmetric(horizontal: 18, vertical: 12),
-                    shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
+                    padding: const EdgeInsets.symmetric(
+                        horizontal: 18, vertical: 12),
+                    shape: RoundedRectangleBorder(
+                        borderRadius: BorderRadius.circular(20)),
                   ),
                   onPressed: () => BYOKSettingsSheet.show(
                     context,
@@ -2047,8 +2064,10 @@ class _LibraryScreenState extends ConsumerState<LibraryScreen>
                   icon: const Icon(Icons.refresh_rounded, size: 16),
                   label: const Text('Retry'),
                   style: OutlinedButton.styleFrom(
-                    padding: const EdgeInsets.symmetric(horizontal: 18, vertical: 12),
-                    shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
+                    padding: const EdgeInsets.symmetric(
+                        horizontal: 18, vertical: 12),
+                    shape: RoundedRectangleBorder(
+                        borderRadius: BorderRadius.circular(20)),
                   ),
                   onPressed: () => ref.invalidate(documentsProvider),
                 ),
@@ -2131,7 +2150,6 @@ class _LibraryScreenState extends ConsumerState<LibraryScreen>
                   isLoading: _uploading,
                   onPressed: _uploading ? null : _pickAndUpload,
                 ),
-
               ],
             ),
           ],
@@ -2172,7 +2190,9 @@ class _EditorialPillButtonState extends State<_EditorialPillButton> {
     final isDark = Theme.of(context).brightness == Brightness.dark;
 
     return MouseRegion(
-      cursor: widget.onPressed != null ? SystemMouseCursors.click : SystemMouseCursors.basic,
+      cursor: widget.onPressed != null
+          ? SystemMouseCursors.click
+          : SystemMouseCursors.basic,
       onEnter: (_) => setState(() => _isHovered = true),
       onExit: (_) => setState(() => _isHovered = false),
       child: GestureDetector(
@@ -2204,13 +2224,15 @@ class _EditorialPillButtonState extends State<_EditorialPillButton> {
                   : const Color(0xFF888884),
               borderRadius: BorderRadius.circular(6),
               border: Border.all(
-                color: isDark ? const Color(0xFFE2DDD5) : const Color(0xFF161615),
+                color:
+                    isDark ? const Color(0xFFE2DDD5) : const Color(0xFF161615),
                 width: 1.0,
               ),
               boxShadow: _isHovered && widget.onPressed != null
                   ? [
                       BoxShadow(
-                        color: Colors.black.withValues(alpha: isDark ? 0.25 : 0.12),
+                        color: Colors.black
+                            .withValues(alpha: isDark ? 0.25 : 0.12),
                         blurRadius: 10,
                         offset: const Offset(0, 3),
                       ),
@@ -2218,47 +2240,47 @@ class _EditorialPillButtonState extends State<_EditorialPillButton> {
                   : null,
             ),
             child: Row(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              if (widget.isLoading)
-                SizedBox(
-                  width: 14,
-                  height: 14,
-                  child: CircularProgressIndicator(
-                    strokeWidth: 2,
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                if (widget.isLoading)
+                  SizedBox(
+                    width: 14,
+                    height: 14,
+                    child: CircularProgressIndicator(
+                      strokeWidth: 2,
+                      color: isDark
+                          ? const Color(0xFF161615)
+                          : const Color(0xFFFBF9F5),
+                    ),
+                  )
+                else
+                  Icon(
+                    widget.icon,
+                    size: 16,
                     color: isDark
                         ? const Color(0xFF161615)
                         : const Color(0xFFFBF9F5),
                   ),
-                )
-              else
-                Icon(
-                  widget.icon,
-                  size: 16,
-                  color: isDark
-                      ? const Color(0xFF161615)
-                      : const Color(0xFFFBF9F5),
+                const SizedBox(width: 8),
+                Text(
+                  widget.label,
+                  style: TextStyle(
+                    fontFamily: AppTheme.fontUI,
+                    color: isDark
+                        ? const Color(0xFF161615)
+                        : const Color(0xFFFBF9F5),
+                    fontSize: 12,
+                    fontWeight: FontWeight.w700,
+                    letterSpacing: 0.8,
+                  ),
                 ),
-              const SizedBox(width: 8),
-              Text(
-                widget.label,
-                style: TextStyle(
-                  fontFamily: AppTheme.fontUI,
-                  color: isDark
-                      ? const Color(0xFF161615)
-                      : const Color(0xFFFBF9F5),
-                  fontSize: 12,
-                  fontWeight: FontWeight.w700,
-                  letterSpacing: 0.8,
-                ),
-              ),
-            ],
+              ],
+            ),
           ),
         ),
       ),
-    ),
-  );
-}
+    );
+  }
 }
 
 String _humanizeTitle(String raw) {
@@ -2325,7 +2347,6 @@ String _humanizeTitle(String raw) {
   return title;
 }
 
-
 class _DocumentTile extends StatefulWidget {
   final Document doc;
 
@@ -2370,8 +2391,8 @@ class _DocumentTileState extends State<_DocumentTile> {
         setState(() => _savedChunkIndex = saved);
       }
     } catch (e) {
-        debugPrint('Athena caught error: $e');
-      }
+      debugPrint('Athena caught error: $e');
+    }
   }
 
   @override
@@ -2413,13 +2434,16 @@ class _DocumentTileState extends State<_DocumentTile> {
                     ? (isDark
                         ? const Color(0xFFE2DDD5).withValues(alpha: 0.6)
                         : const Color(0xFF161615).withValues(alpha: 0.35))
-                    : (isDark ? const Color(0xFF282828) : const Color(0xFFE2DDD5)),
+                    : (isDark
+                        ? const Color(0xFF282828)
+                        : const Color(0xFFE2DDD5)),
                 width: _isHovered ? 1.5 : 1.0,
               ),
               boxShadow: _isHovered
                   ? [
                       BoxShadow(
-                        color: Colors.black.withValues(alpha: isDark ? 0.28 : 0.08),
+                        color: Colors.black
+                            .withValues(alpha: isDark ? 0.28 : 0.08),
                         blurRadius: 14,
                         offset: const Offset(0, 4),
                       ),
@@ -2427,262 +2451,262 @@ class _DocumentTileState extends State<_DocumentTile> {
                   : null,
             ),
             child: IntrinsicHeight(
-            child: Row(
-              crossAxisAlignment: CrossAxisAlignment.stretch,
-              children: [
-                // 3px left accent spine: Forest emerald when processing, charcoal/cream when ready
+              child: Row(
+                crossAxisAlignment: CrossAxisAlignment.stretch,
+                children: [
+                  // 3px left accent spine: Forest emerald when processing, charcoal/cream when ready
 
-                Container(
-                  width: 3.5,
-                  decoration: BoxDecoration(
-                    color: doc.isProcessing
-                        ? const Color(0xFF2D6A4F)
-                        : (isDark
-                            ? const Color(0xFFE2DDD5)
-                            : const Color(0xFF161615)),
-                    borderRadius: const BorderRadius.only(
-                      topLeft: Radius.circular(16),
-                      bottomLeft: Radius.circular(16),
+                  Container(
+                    width: 3.5,
+                    decoration: BoxDecoration(
+                      color: doc.isProcessing
+                          ? const Color(0xFF2D6A4F)
+                          : (isDark
+                              ? const Color(0xFFE2DDD5)
+                              : const Color(0xFF161615)),
+                      borderRadius: const BorderRadius.only(
+                        topLeft: Radius.circular(16),
+                        bottomLeft: Radius.circular(16),
+                      ),
                     ),
                   ),
-                ),
 
-                Expanded(
-                  child: Padding(
-                    padding: const EdgeInsets.symmetric(
-                        horizontal: 14, vertical: 14),
-                    child: Row(
-                      children: [
-                        if (!doc.isReady)
-                          const AthenaAvatar(
-                            expression: AthenaExpression.thinking,
-                            size: 38,
-                            isBreathing: true,
-                            showBezel: false,
-                          )
-                        else if (_savedChunkIndex != null &&
-                            _savedChunkIndex! > 0)
-                          const AthenaAvatar(
-                            expression: AthenaExpression.focused,
-                            size: 38,
-                            showBezel: false,
-                          )
-                        else
-                          const AthenaLogoTile(
-                            size: 40,
-                            style: AthenaTileStyle.blackPrimary,
-                            borderRadius: 4,
-                          ),
-                        const SizedBox(width: 14),
-                        Expanded(
-                          child: Column(
-                            crossAxisAlignment: CrossAxisAlignment.start,
-                            children: [
-                              Text(
-                                cleanTitle,
-                                style: TextStyle(
-                                  fontFamily: AppTheme.fontDisplay,
-                                  color: isDark
-                                      ? const Color(0xFFF3F3F3)
-                                      : AppTheme.textPrimary,
-                                  fontWeight: FontWeight.w400,
-                                  fontSize: 17.5,
-                                  letterSpacing: 0.1,
-                                ),
-                                maxLines: 1,
-                                overflow: TextOverflow.ellipsis,
-                              ),
-                              const SizedBox(height: 5),
-                              Row(
-                                children: [
-                                  _StatusChip(
-                                      status: doc.status,
-                                      pageCount: doc.pageCount),
-                                  if (doc.isReady &&
-                                      _savedChunkIndex != null &&
-                                      _savedChunkIndex! > 0) ...[
-                                    const SizedBox(width: 8),
-                                    Text(
-                                      'Resumed at #${_savedChunkIndex! + 1}',
-                                      style: TextStyle(
-                                        fontFamily: AppTheme.fontUI,
-                                        color: isDark
-                                            ? const Color(0xFF2DD4BF)
-                                            : const Color(0xFF2D6A4F),
-                                        fontSize: 11,
-                                        fontWeight: FontWeight.w600,
-                                      ),
-                                    ),
-                                  ] else if (!doc.isReady) ...[
-                                    const SizedBox(width: 8),
-                                    Text(
-                                      '${doc.pageCount} ${doc.pageCount == 1 ? 'page' : 'pages'}',
-                                      style: TextStyle(
-                                        fontFamily: AppTheme.fontUI,
-                                        color: isDark
-                                            ? const Color(0xFF9E9E9E)
-                                            : AppTheme.textMuted,
-                                        fontSize: 11,
-                                        fontWeight: FontWeight.w500,
-                                      ),
-                                    ),
-                                  ],
-                                ],
-                              ),
-                              if (doc.isProcessing) ...[
-                                const SizedBox(height: 8),
-                                ClipRRect(
-                                  borderRadius: BorderRadius.circular(6),
-                                  child: LinearProgressIndicator(
-                                    value:
-                                        (doc.percent ?? 0).clamp(0, 100) / 100,
-                                    minHeight: 3,
-                                    backgroundColor: isDark
-                                        ? const Color(0xFF333333)
-                                        : const Color(0xFFEBEBEB),
-                                    valueColor: AlwaysStoppedAnimation<Color>(
-                                      isDark ? Colors.white : AppTheme.ink,
-                                    ),
-                                  ),
-                                ),
-                                const SizedBox(height: 4),
-                                Text(
-                                  '${doc.stageLabel ?? 'Processing'} · ${doc.percent ?? 0}%',
-                                  style: TextStyle(
-                                    fontFamily: AppTheme.fontUI,
-                                    color: isDark
-                                        ? const Color(0xFF9E9E9E)
-                                        : AppTheme.textMuted,
-                                    fontSize: 11,
-                                    fontWeight: FontWeight.w500,
-                                  ),
-                                ),
-                              ] else if (doc.isFailed &&
-                                  doc.errorMessage != null) ...[
-                                const SizedBox(height: 4),
-                                Text(
-                                  doc.errorMessage!,
-                                  maxLines: 2,
-                                  overflow: TextOverflow.ellipsis,
-                                  style: const TextStyle(
-                                    fontFamily: AppTheme.fontUI,
-                                    color: Colors.redAccent,
-                                    fontSize: 11,
-                                  ),
-                                ),
-                              ],
-                            ],
-                          ),
-                        ),
-                        if (doc.isFailed)
-                          IconButton(
-                            icon: const Icon(
-                              Icons.refresh_rounded,
-                              color: Colors.redAccent,
-                              size: 20,
+                  Expanded(
+                    child: Padding(
+                      padding: const EdgeInsets.symmetric(
+                          horizontal: 14, vertical: 14),
+                      child: Row(
+                        children: [
+                          if (!doc.isReady)
+                            const AthenaAvatar(
+                              expression: AthenaExpression.thinking,
+                              size: 38,
+                              isBreathing: true,
+                              showBezel: false,
+                            )
+                          else if (_savedChunkIndex != null &&
+                              _savedChunkIndex! > 0)
+                            const AthenaAvatar(
+                              expression: AthenaExpression.focused,
+                              size: 38,
+                              showBezel: false,
+                            )
+                          else
+                            const AthenaLogoTile(
+                              size: 40,
+                              style: AthenaTileStyle.blackPrimary,
+                              borderRadius: 4,
                             ),
-                            tooltip: 'Retry',
-                            onPressed: widget.onRetry,
-                          ),
-                        if (doc.isReady) ...[
-                          const SizedBox(width: 8),
-
-                          // Crisp rectangular 6px editorial "Read" button
-
-                          Container(
-                            padding: const EdgeInsets.symmetric(
-                                horizontal: 12, vertical: 7),
-                            decoration: BoxDecoration(
-                              color: isDark
-                                  ? Colors.white
-                                  : const Color(0xFF161615),
-                              borderRadius: BorderRadius.circular(16),
-                            ),
-                            child: Row(
-                              mainAxisSize: MainAxisSize.min,
+                          const SizedBox(width: 14),
+                          Expanded(
+                            child: Column(
+                              crossAxisAlignment: CrossAxisAlignment.start,
                               children: [
                                 Text(
-                                  'READ',
+                                  cleanTitle,
                                   style: TextStyle(
-                                    fontFamily: AppTheme.fontUI,
+                                    fontFamily: AppTheme.fontDisplay,
+                                    color: isDark
+                                        ? const Color(0xFFF3F3F3)
+                                        : AppTheme.textPrimary,
+                                    fontWeight: FontWeight.w400,
+                                    fontSize: 17.5,
+                                    letterSpacing: 0.1,
+                                  ),
+                                  maxLines: 1,
+                                  overflow: TextOverflow.ellipsis,
+                                ),
+                                const SizedBox(height: 5),
+                                Row(
+                                  children: [
+                                    _StatusChip(
+                                        status: doc.status,
+                                        pageCount: doc.pageCount),
+                                    if (doc.isReady &&
+                                        _savedChunkIndex != null &&
+                                        _savedChunkIndex! > 0) ...[
+                                      const SizedBox(width: 8),
+                                      Text(
+                                        'Resumed at #${_savedChunkIndex! + 1}',
+                                        style: TextStyle(
+                                          fontFamily: AppTheme.fontUI,
+                                          color: isDark
+                                              ? const Color(0xFF2DD4BF)
+                                              : const Color(0xFF2D6A4F),
+                                          fontSize: 11,
+                                          fontWeight: FontWeight.w600,
+                                        ),
+                                      ),
+                                    ] else if (!doc.isReady) ...[
+                                      const SizedBox(width: 8),
+                                      Text(
+                                        '${doc.pageCount} ${doc.pageCount == 1 ? 'page' : 'pages'}',
+                                        style: TextStyle(
+                                          fontFamily: AppTheme.fontUI,
+                                          color: isDark
+                                              ? const Color(0xFF9E9E9E)
+                                              : AppTheme.textMuted,
+                                          fontSize: 11,
+                                          fontWeight: FontWeight.w500,
+                                        ),
+                                      ),
+                                    ],
+                                  ],
+                                ),
+                                if (doc.isProcessing) ...[
+                                  const SizedBox(height: 8),
+                                  ClipRRect(
+                                    borderRadius: BorderRadius.circular(6),
+                                    child: LinearProgressIndicator(
+                                      value: (doc.percent ?? 0).clamp(0, 100) /
+                                          100,
+                                      minHeight: 3,
+                                      backgroundColor: isDark
+                                          ? const Color(0xFF333333)
+                                          : const Color(0xFFEBEBEB),
+                                      valueColor: AlwaysStoppedAnimation<Color>(
+                                        isDark ? Colors.white : AppTheme.ink,
+                                      ),
+                                    ),
+                                  ),
+                                  const SizedBox(height: 4),
+                                  Text(
+                                    '${doc.stageLabel ?? 'Processing'} · ${doc.percent ?? 0}%',
+                                    style: TextStyle(
+                                      fontFamily: AppTheme.fontUI,
+                                      color: isDark
+                                          ? const Color(0xFF9E9E9E)
+                                          : AppTheme.textMuted,
+                                      fontSize: 11,
+                                      fontWeight: FontWeight.w500,
+                                    ),
+                                  ),
+                                ] else if (doc.isFailed &&
+                                    doc.errorMessage != null) ...[
+                                  const SizedBox(height: 4),
+                                  Text(
+                                    doc.errorMessage!,
+                                    maxLines: 2,
+                                    overflow: TextOverflow.ellipsis,
+                                    style: const TextStyle(
+                                      fontFamily: AppTheme.fontUI,
+                                      color: Colors.redAccent,
+                                      fontSize: 11,
+                                    ),
+                                  ),
+                                ],
+                              ],
+                            ),
+                          ),
+                          if (doc.isFailed)
+                            IconButton(
+                              icon: const Icon(
+                                Icons.refresh_rounded,
+                                color: Colors.redAccent,
+                                size: 20,
+                              ),
+                              tooltip: 'Retry',
+                              onPressed: widget.onRetry,
+                            ),
+                          if (doc.isReady) ...[
+                            const SizedBox(width: 8),
+
+                            // Crisp rectangular 6px editorial "Read" button
+
+                            Container(
+                              padding: const EdgeInsets.symmetric(
+                                  horizontal: 12, vertical: 7),
+                              decoration: BoxDecoration(
+                                color: isDark
+                                    ? Colors.white
+                                    : const Color(0xFF161615),
+                                borderRadius: BorderRadius.circular(16),
+                              ),
+                              child: Row(
+                                mainAxisSize: MainAxisSize.min,
+                                children: [
+                                  Text(
+                                    'READ',
+                                    style: TextStyle(
+                                      fontFamily: AppTheme.fontUI,
+                                      color: isDark
+                                          ? const Color(0xFF161615)
+                                          : const Color(0xFFFBF9F5),
+                                      fontWeight: FontWeight.w700,
+                                      fontSize: 11,
+                                      letterSpacing: 0.8,
+                                    ),
+                                  ),
+                                  const SizedBox(width: 5),
+                                  Icon(
+                                    Icons.arrow_forward_rounded,
+                                    size: 13,
                                     color: isDark
                                         ? const Color(0xFF161615)
                                         : const Color(0xFFFBF9F5),
-                                    fontWeight: FontWeight.w700,
-                                    fontSize: 11,
-                                    letterSpacing: 0.8,
-                                  ),
-                                ),
-                                const SizedBox(width: 5),
-                                Icon(
-                                  Icons.arrow_forward_rounded,
-                                  size: 13,
-                                  color: isDark
-                                      ? const Color(0xFF161615)
-                                      : const Color(0xFFFBF9F5),
-                                ),
-                              ],
-                            ),
-                          ),
-                        ],
-                        PopupMenuButton<String>(
-                          icon: Icon(
-                            Icons.more_vert_rounded,
-                            color: isDark
-                                ? const Color(0xFF9E9E9E)
-                                : AppTheme.textMuted,
-                            size: 18,
-                          ),
-                          color:
-                              isDark ? const Color(0xFF222222) : Colors.white,
-                          elevation: 4,
-                          shape: RoundedRectangleBorder(
-                            borderRadius: BorderRadius.circular(14),
-                            side: BorderSide(
-                                color: isDark
-                                    ? const Color(0xFF333333)
-                                    : const Color(0xFFE2DDD5)),
-                          ),
-                          onSelected: (value) {
-                            if (value == 'delete') widget.onDelete();
-                          },
-                          itemBuilder: (_) => [
-                            const PopupMenuItem(
-                              value: 'delete',
-                              child: Row(
-                                children: [
-                                  Icon(
-                                    Icons.delete_outline_rounded,
-                                    color: Colors.redAccent,
-                                    size: 16,
-                                  ),
-                                  SizedBox(width: 8),
-                                  Text(
-                                    'Delete',
-                                    style: TextStyle(
-                                      fontFamily: AppTheme.fontUI,
-                                      color: Colors.redAccent,
-                                      fontWeight: FontWeight.w500,
-                                      fontSize: 13,
-                                    ),
                                   ),
                                 ],
                               ),
                             ),
                           ],
-                        ),
-                      ],
+                          PopupMenuButton<String>(
+                            icon: Icon(
+                              Icons.more_vert_rounded,
+                              color: isDark
+                                  ? const Color(0xFF9E9E9E)
+                                  : AppTheme.textMuted,
+                              size: 18,
+                            ),
+                            color:
+                                isDark ? const Color(0xFF222222) : Colors.white,
+                            elevation: 4,
+                            shape: RoundedRectangleBorder(
+                              borderRadius: BorderRadius.circular(14),
+                              side: BorderSide(
+                                  color: isDark
+                                      ? const Color(0xFF333333)
+                                      : const Color(0xFFE2DDD5)),
+                            ),
+                            onSelected: (value) {
+                              if (value == 'delete') widget.onDelete();
+                            },
+                            itemBuilder: (_) => [
+                              const PopupMenuItem(
+                                value: 'delete',
+                                child: Row(
+                                  children: [
+                                    Icon(
+                                      Icons.delete_outline_rounded,
+                                      color: Colors.redAccent,
+                                      size: 16,
+                                    ),
+                                    SizedBox(width: 8),
+                                    Text(
+                                      'Delete',
+                                      style: TextStyle(
+                                        fontFamily: AppTheme.fontUI,
+                                        color: Colors.redAccent,
+                                        fontWeight: FontWeight.w500,
+                                        fontSize: 13,
+                                      ),
+                                    ),
+                                  ],
+                                ),
+                              ),
+                            ],
+                          ),
+                        ],
+                      ),
                     ),
                   ),
-                ),
-              ],
+                ],
+              ),
             ),
           ),
         ),
       ),
-    ),
-  );
-}
+    );
+  }
 }
 
 class _StatusChip extends StatelessWidget {

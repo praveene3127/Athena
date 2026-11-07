@@ -20,6 +20,7 @@ from app.services.marginalia.providers import (
     fetch_provider_models,
     test_provider_model,
 )
+from app.security import validate_public_http_url
 
 logger = logging.getLogger("athena.settings")
 router = APIRouter(prefix="/api/settings", tags=["settings"])
@@ -31,7 +32,7 @@ def _mask_key(key: Optional[str]) -> Optional[str]:
     k = key.strip()
     if len(k) < 8:
         return "••••••••"
-    return f"{k[:6]}...{k[-4:]}"
+    return "••••••••" + k[-4:]
 
 
 class FetchModelsRequest(BaseModel):
@@ -77,6 +78,8 @@ async def list_providers():
 async def fetch_models(payload: FetchModelsRequest, session: Session = Depends(get_session)):
     """Dynamically queries the provider's live models catalog API."""
     api_key = payload.api_key
+    if payload.base_url:
+        validate_public_http_url(payload.base_url)
     # If key wasn't supplied or is masked placeholder, check saved DB setting
     if not api_key or "..." in api_key:
         saved = session.exec(select(AISettings).where(AISettings.id == "global")).first()
@@ -98,6 +101,8 @@ async def fetch_models(payload: FetchModelsRequest, session: Session = Depends(g
 async def test_connection(payload: TestConnectionRequest, session: Session = Depends(get_session)):
     """Tests live connection to the provider with a 5-token completion ping."""
     api_key = payload.api_key
+    if payload.base_url:
+        validate_public_http_url(payload.base_url)
     if not api_key or "..." in api_key:
         saved = session.exec(select(AISettings).where(AISettings.id == "global")).first()
         if saved:

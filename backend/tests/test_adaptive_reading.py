@@ -110,7 +110,7 @@ def test_spanning_region_overlap_marks_reading_order_uncertain():
     assert {block["text"] for block in ordered} == {block["text"] for block in blocks}
 
 
-def test_document_profile_adapts_target_without_changing_source():
+def test_document_profile_uses_shared_mobile_target_without_changing_source():
     from app.services.chunker import _paragraph_units, _target_words_for_document
 
     short_paragraphs = [
@@ -125,9 +125,7 @@ def test_document_profile_adapts_target_without_changing_source():
     short_target = _target_words_for_document(_paragraph_units(short_text, []))
     long_target = _target_words_for_document(_paragraph_units(long_text, []))
 
-    assert short_target < long_target
-    assert 45 <= short_target <= 55
-    assert 55 <= long_target <= 70
+    assert short_target == long_target == 50
 
 
 def test_heading_is_attached_to_its_first_reading_card():
@@ -1113,9 +1111,12 @@ def test_app_update_and_platform_downloads():
 
     # 6. GET /api/download/ios
     res_dl_ios = client.get("/api/download/ios", follow_redirects=False)
-    assert res_dl_ios.status_code == 200
-    assert 'filename="Athena-iOS.ipa"' in res_dl_ios.headers.get("content-disposition", "")
-    assert len(res_dl_ios.content) > 0
+    assert res_dl_ios.status_code in (200, 302)
+    if res_dl_ios.status_code == 200:
+        assert 'filename="Athena-iOS.ipa"' in res_dl_ios.headers.get("content-disposition", "")
+        assert len(res_dl_ios.content) > 0
+    else:
+        assert "github.com" in res_dl_ios.headers.get("location", "")
 
 
 

@@ -38,6 +38,10 @@ htmlcov/
 *.cer
 *.mobileprovision
 AuthKey_*.p8
+*.jks
+*.keystore
+key.properties
+app/android/key.properties
 
 # --- Athena Application Data & Databases ---
 data/

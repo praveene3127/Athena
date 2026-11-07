@@ -8,6 +8,8 @@ import 'package:athena/features/reader/widgets/context_card_widget.dart';
 /// Implements vertical PageView with PageScrollPhysics and allowImplicitScrolling
 /// for GPU pre-rasterization. Card widgets rendered inside never intercept vertical drag gestures.
 class ReaderFeedView extends StatelessWidget {
+  final String documentId;
+  final ValueChanged<String> onJumpToPassage;
   final PageController pageController;
   final List<ReaderItem> feedItems;
   final String themeId;
@@ -26,10 +28,13 @@ class ReaderFeedView extends StatelessWidget {
   final void Function(ReaderItem card) onAskAthenaForCard;
   final Map<String, String>? chunkEdits;
   final Map<String, String>? chunkNotes;
-  final void Function(String chunkId, String? editedText, String? userNote)? onEditSaved;
+  final void Function(String chunkId, String? editedText, String? userNote)?
+      onEditSaved;
 
   const ReaderFeedView({
     super.key,
+    required this.documentId,
+    required this.onJumpToPassage,
     required this.pageController,
     required this.feedItems,
     required this.themeId,
@@ -91,6 +96,8 @@ class ReaderFeedView extends StatelessWidget {
           return Center(
             child: ContextCardWidget(
               card: item,
+              documentId: documentId,
+              onJumpToPassage: onJumpToPassage,
               themeId: themeId,
               isFeedMode: true,
               onToggleSave: () => onToggleSaveCard(item),

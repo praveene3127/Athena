@@ -10,7 +10,7 @@
   <img src="https://img.shields.io/badge/Rust_Core-PyO3%20%7C%20Rayon-DEA584?logo=rust&logoColor=white" alt="Rust Core" />
   <img src="https://img.shields.io/badge/Zero--JSON-Binary%20Book%20Tape-8B5CF6" alt="Binary Book Tape" />
   <img src="https://img.shields.io/badge/SHA--256-Lossless%20Canonical-10B981" alt="Lossless Canonical" />
-  <img src="https://img.shields.io/badge/Tests-95%2F95%20Passing-brightgreen" alt="Tests" />
+  <img src="https://img.shields.io/badge/Backend%20tests-66%20passed-blue" alt="Backend tests" />
   <a href="docs/LICENSE"><img src="https://img.shields.io/badge/License-MIT-blue" alt="License" /></a>
 </p>
 
@@ -25,17 +25,19 @@ Athena operates in two distinct, versatile modes: **100% Standalone On-Device Mo
     <img src="https://img.shields.io/badge/Download_for_Android-.APK_Installer-2D6A4F?style=for-the-badge&logo=android&logoColor=white" alt="Download Android APK" />
   </a>
   &nbsp;&nbsp;
-  <a href="https://github.com/praveene3127/Athena/raw/main/releases/athena-ios-release.ipa">
+  <a href="https://github.com/praveene3127/Athena/releases/latest/download/Athena-iOS.ipa">
     <img src="https://img.shields.io/badge/Download_for_iOS-.IPA_Package-161615?style=for-the-badge&logo=apple&logoColor=white" alt="Download iOS IPA" />
   </a>
 </p>
 
 | Target Platform | Package / Distribution | Installation & Execution Mode |
 | :--- | :--- | :--- |
-| **Android** | [Athena-Android.apk](https://github.com/praveene3127/Athena/raw/main/releases/athena-release.apk) | Direct APK download (61.8 MB). Runs 100% standalone on device or pairs with desktop. In-app updater and [Obtainium](https://obtainium.imranr.dev) compatible. |
-| **iOS (Native IPA)** | [Athena-iOS.ipa](https://github.com/praveene3127/Athena/raw/main/releases/athena-ios-release.ipa) | Sideload via [Sideloadly](https://sideloadly.io/) or AltStore with any free Apple ID (no paid developer account required). |
+| **Android** | [Athena-Android.apk](https://github.com/praveene3127/Athena/raw/main/releases/athena-release.apk) | Direct APK download (61.9 MB). Runs 100% standalone on device or pairs with desktop. In-app updater and [Obtainium](https://obtainium.imranr.dev) compatible. |
+| **iOS (Native IPA)** | [Athena-iOS.ipa](https://github.com/praveene3127/Athena/releases/latest/download/Athena-iOS.ipa) | Sideload via [Sideloadly](https://sideloadly.io/) or AltStore (built on macOS / GitHub Actions `macos-latest` CI). |
 | **iOS / Web (PWA)** | Standalone Fullscreen WebApp | Open `http://<LAN_IP>:8000` in Safari &rarr; Tap **Share** &rarr; **Add to Home Screen**. |
 | **Companion Engine** | Windows, macOS, Linux | Python 3.12+ FastAPI backend hosting the Rust text engine, static Web Reader, and ONNX embedder. |
+
+The mobile app uses `syncfusion_flutter_pdf` under the [Syncfusion Community License](https://www.syncfusion.com/communitylicense).
 
 ### Quick Start Options
 
@@ -67,11 +69,11 @@ Long-form non-fiction books present an ongoing cognitive challenge: traditional 
 
 Athena resolves this through **Feed-Driven Deep Reading**:
 1. **100% Verbatim Canonical Prose**: Not a single sentence, word, or clause is summarized, condensed, or rewritten.
-2. **High-Surprisal Grounded Marginalia**: As the reader scrolls through digestible chunks (80–140 words), the engine interweaves grounded pedagogical context cards anchored to exact author quotes.
+2. **High-Surprisal Grounded Marginalia**: As the reader scrolls through digestible chunks (typically around 50 words, bounded at 35–65 words and 380 characters), the engine interweaves grounded pedagogical context cards anchored to exact author quotes.
 
 ```text
 +---------------------------------------------------------------------------------------+
-|  Author's Verbatim Chunk (80–140 words)                                               |
+|  Author's Verbatim Chunk (about 50 words; bounded reading-card size)                   |
 |  "The first rule of the Roman Stoics was not emotional repression, but the cognitive   |
 |   separation of perception from value judgment..."                                    |
 +---------------------------------------------------------------------------------------+
@@ -157,7 +159,7 @@ Athena features a dual-mode topology: an on-device standalone mobile architectur
   - **Shannon Entropy Filter**: Strips border artifacts, scanner noise, and repetitive headers where character entropy falls below $H(w) < 0.65\text{ bits}$.
   - **Universal Dehyphenation**: Heals line-wrap hyphens (`trans- formation` &rarr; `transformation`) while preserving true compounds (`self-esteem`, `high-dimensional`).
   - **Viterbi Word De-Compounding**: Unfuses collided words (`inorderto` &rarr; `in order to`) while strictly protecting scientific terms (`neuroplasticity`, `electromagnetism`).
-- **Stage 2: Lossless Chunker (80–140 words)**: Respects paragraph and sentence boundaries while strictly preserving 100% byte-exact author text.
+- **Stage 2: Lossless Chunker (target 50 words; 35–65 words / 380 characters)**: Respects paragraph and sentence boundaries while strictly preserving 100% byte-exact author text.
 
 ### 2. High-Performance Rust Core (`backend/rust_core/`)
 Compiled via PyO3 as the native Python extension `athena_rust_core`:
@@ -333,12 +335,11 @@ Athena/
 │   ├── rust_core/                       # Pure Rust text processing engine (PyO3)
 │   │   ├── Cargo.toml                   # Rayon, Aho-Corasick, Regex, Serde, SHA-2
 │   │   └── src/lib.rs                   # De-hyphenation, SimHash, and Binary Tape (ATHN)
-│   ├── tests/                           # 6 pytest test suites (54 automated tests)
+│   ├── tests/                           # Backend pytest suite (66 tests)
 │   └── requirements.txt                 # Backend Python dependencies
 │
 ├── releases/                            # Distribution release binaries
-│   ├── athena-release.apk               # Verified production Android APK (61.8 MB)
-│   └── Athena-iOS.ipa                   # Sideloadable iOS IPA package
+│   └── athena-release.apk               # Verified production Android APK (61.9 MB)
 │
 ├── scripts/                             # Operational tooling & verification engines
 │   ├── run_athena.py                    # Unified supervisor (FastAPI + LAN IP discovery)
@@ -360,7 +361,7 @@ When running the Companion Engine, the FastAPI server mounts the Flutter Web cli
 
 | Endpoint | Method | Request Payload | Response | Description |
 | :--- | :--- | :--- | :--- | :--- |
-| `/api/health` | `GET` | None | `{"status": "ok", "database": "reachable"}` | Verifies database connectivity, ONNX runtime, and AI provider status |
+| `/api/health` | `GET` | None | `{"status": "ok", "database": "configured", "model_status": "...", "llm_configured": false}` | Fast liveness/readiness flags; does not open the database or download an embedding model |
 | `/api/pair-info` | `GET` | None | `{"lan_ip": "...", "api_port": 8000}` | Returns dynamic local LAN IP coordinates for mobile pairing |
 | `/api/documents` | `GET` | None | `[{"id": "doc_...", "title": "...", "chunks": 120}]` | Lists processed books with reading progress and metadata |
 | `/api/documents/upload` | `POST` | Multipart PDF/EPUB | `{"document_id": "doc_...", "status": "processing"}` | Uploads book for structural triage and ingestion |
@@ -391,7 +392,7 @@ cd app
 flutter pub get
 flutter analyze lib
 
-# Run Flutter unit and architecture harness tests (41 tests)
+# Run Flutter unit and architecture harness tests (45 tests)
 flutter test
 
 # Run app on Chrome or connected Android device
@@ -425,7 +426,7 @@ maturin develop --release
 # Install dependencies
 pip install -r backend/requirements.txt
 
-# Run pytest suite (54 automated tests)
+# Run backend pytest suite (66 tests)
 pytest backend/tests -q
 
 # Launch unified server with dynamic LAN Wi-Fi resolution

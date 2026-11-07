@@ -1,4 +1,7 @@
 import os
+import ipaddress
+from pathlib import Path
+import shutil
 import socket
 import subprocess
 import sys
@@ -8,11 +11,29 @@ import urllib.request
 ROOT_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 BACKEND_DIR = os.path.join(ROOT_DIR, "backend")
 APP_DIR = os.path.join(ROOT_DIR, "app")
-VENV_PYTHON = os.path.join(ROOT_DIR, ".venv", "Scripts", "python.exe")
+VENV_PYTHON = str(Path(ROOT_DIR) / ".venv" / ("Scripts/python.exe" if os.name == "nt" else "bin/python"))
+if not os.path.isfile(VENV_PYTHON):
+    VENV_PYTHON = sys.executable
 
 
 def get_lan_ip() -> str:
     """Discovers the laptop's Wi-Fi / LAN IP for wireless phone connection."""
+    try:
+        with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as s:
+            s.connect(("10.255.255.255", 1))
+            address = s.getsockname()[0]
+            if address and not address.startswith("127."):
+                return address
+    except Exception:
+        pass
+    try:
+        local_addresses = socket.getaddrinfo(socket.gethostname(), None, socket.AF_INET)
+        for info in local_addresses:
+            address = info[4][0]
+            if ipaddress.ip_address(address).is_private and not address.startswith("169.254."):
+                return address
+    except Exception:
+        pass
     try:
         with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as s:
             s.connect(("8.8.8.8", 80))

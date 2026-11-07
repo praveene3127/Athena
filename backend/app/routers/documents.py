@@ -8,7 +8,7 @@ import re
 import shutil
 import urllib.parse
 import uuid
-from typing import Any, Dict, List
+from typing import Any, Dict, List, Optional
 import httpx
 from fastapi import APIRouter, Depends, File, Request, UploadFile
 from fastapi.responses import Response, StreamingResponse
@@ -28,9 +28,39 @@ from app.models import Document, ReadingChunk, Concept, ContextCard, DocumentCha
 from app.services.ingestion.extraction import sanitize_filename, validate_pdf_file, get_document_file_path
 from app.services.ingestion.jobs import queue_document_job, reset_and_requeue_document, force_requeue_document
 from app.services.marginalia.llm import LLMService
+from app.security import validate_public_http_url
+from app.rate_limit import limiter
 
 router = APIRouter(prefix="/api/documents", tags=["documents"])
 logger = logging.getLogger(__name__)
+UPLOAD_RATE_LIMIT_PER_MINUTE = 6
+
+
+def _check_upload_rate(request: Optional[Request]) -> None:
+    client_ip = request.client.host if request and request.client else "unknown"
+    if not limiter.allow(f"upload:{client_ip}", UPLOAD_RATE_LIMIT_PER_MINUTE):
+        raise AppException("RATE_LIMITED", "Upload limit reached. Please wait before trying again.", status_code=429)
+
+
+def _resolve_ordered_chunk(session: Session, document_id: str, *, chunk_id=None, chunk_sequence=None, index=None):
+    if chunk_id:
+        chunk = session.exec(select(ReadingChunk).where(
+            ReadingChunk.document_id == document_id, ReadingChunk.id == chunk_id
+        )).first()
+        if chunk:
+            return chunk
+    if chunk_sequence is not None:
+        return session.exec(select(ReadingChunk).where(
+            ReadingChunk.document_id == document_id, ReadingChunk.sequence == chunk_sequence
+        )).first()
+    if index is None:
+        index = 0
+    if index < 0:
+        index = 0
+    return session.exec(
+        select(ReadingChunk).where(ReadingChunk.document_id == document_id)
+        .order_by(ReadingChunk.sequence.asc()).offset(index).limit(1)
+    ).first()
 
 MAX_UPLOAD_SIZE = MAX_UPLOAD_SIZE_BYTES  # 500 MB bound to prevent disk exhaustion
 
@@ -50,8 +80,10 @@ STAGE_LABELS: Dict[str, str] = {
 async def upload_document(
     file: UploadFile = File(...),
     session: Session = Depends(get_session),
+    request: Request = None,
 ) -> Dict[str, str]:
     """Streams a book PDF or EPUB to local disk and queues sequential processing."""
+    _check_upload_rate(request)
     original_filename = file.filename or "document.pdf"
     ext = Path(original_filename).suffix.lower()
 
@@ -133,42 +165,7 @@ def _extract_first_page_index(source_pages_raw: Any, fallback_seq: int = 1) -> i
 
 def _validate_url_ssrf(url_str: str) -> str:
     """Rigorous SSRF check: validates scheme, host, DNS resolutions, and private/cloud IP ranges."""
-    import socket
-    parsed = urllib.parse.urlparse(url_str)
-    if parsed.scheme not in ("http", "https"):
-        raise AppException("INVALID_URL", "URL must start with http:// or https://", status_code=400)
-    hostname = (parsed.hostname or "").lower().strip()
-    if not hostname:
-        raise AppException("INVALID_URL", "Invalid host in URL", status_code=400)
-    if (
-        hostname in ("localhost", "metadata.google.internal")
-        or hostname.endswith(".internal")
-        or hostname.endswith(".local")
-        or hostname.endswith(".localhost")
-    ):
-        raise AppException("SSRF_BLOCKED", "Requests to local or metadata addresses are forbidden", status_code=403)
-
-    try:
-        addr_infos = socket.getaddrinfo(hostname, None)
-    except socket.gaierror as e:
-        raise AppException("INVALID_URL", f"Could not resolve host: {hostname}", status_code=400) from e
-
-    for _, _, _, _, sockaddr in addr_infos:
-        ip_str = sockaddr[0]
-        try:
-            ip = ipaddress.ip_address(ip_str)
-            if (
-                ip.is_private
-                or ip.is_loopback
-                or ip.is_link_local
-                or ip.is_multicast
-                or ip.is_reserved
-                or ip.is_unspecified
-            ):
-                raise AppException("SSRF_BLOCKED", "Requests to private or local network addresses are forbidden", status_code=403)
-        except ValueError:
-            continue
-    return hostname
+    return validate_public_http_url(url_str)
 
 
 class UploadUrlRequest(BaseModel):
@@ -179,8 +176,10 @@ class UploadUrlRequest(BaseModel):
 def upload_document_from_url(
     req: UploadUrlRequest,
     session: Session = Depends(get_session),
+    request: Request = None,
 ) -> Dict[str, str]:
     """Downloads a direct PDF or EPUB link from a URL with SSRF guards and queues it."""
+    _check_upload_rate(request)
     url = req.url.strip()
     _validate_url_ssrf(url)
 
@@ -412,7 +411,10 @@ def force_ingest_document(id: str, session: Session = Depends(get_session)) -> D
 
 
 class GenerateCardRequest(BaseModel):
-    chunk_index: int = 1
+    chunk_index: Optional[int] = None
+    chunk_id: Optional[str] = None
+    feed_index: Optional[int] = None
+    chunk_sequence: Optional[int] = None
     force_new: bool = False
 
 
@@ -432,16 +434,14 @@ def generate_card_for_chunk_endpoint(
     if not doc:
         raise AppException("NOT_FOUND", f"Document {id} not found", status_code=404)
 
-    chunk_idx = max(1, payload.chunk_index)
+    chunk = _resolve_ordered_chunk(
+        session, id, chunk_id=payload.chunk_id, chunk_sequence=payload.chunk_sequence,
+        index=payload.feed_index if payload.feed_index is not None else payload.chunk_index,
+    )
+    chunk_idx = chunk.sequence if chunk else None
 
-    chunk = session.exec(
-        select(ReadingChunk).where(
-            ReadingChunk.document_id == id,
-            ReadingChunk.sequence == chunk_idx,
-        )
-    ).first()
     if not chunk:
-        raise AppException("NOT_FOUND", f"Chunk at sequence {chunk_idx} not found", status_code=404)
+        raise AppException("NOT_FOUND", f"Chunk at sequence {payload.chunk_index} not found", status_code=404)
 
     if payload.force_new:
         # Dismiss or remove existing active cards for this chunk so a fresh card is produced
@@ -469,56 +469,62 @@ def generate_card_for_chunk_endpoint(
             c_dict["source_chunk_id"] = chunk.id
             return c_dict
 
-    # 1. Use the ReadAheadPipeline generator
-    pipeline = getattr(request.app.state, "pipeline", None)
-    if not pipeline:
-        pipeline = ReadAheadPipeline()
+    # 1. Use the ReadAheadPipeline generator with defensive error handling
+    try:
+        pipeline = getattr(request.app.state, "pipeline", None)
+        if not pipeline:
+            pipeline = ReadAheadPipeline()
 
-    card_dict = pipeline.generate_or_reuse_card(id, chunk_idx)
-    if card_dict:
-        card_dict["sequence"] = chunk_idx
-        card_dict["document_id"] = id
-        card_dict["source_chunk_id"] = chunk.id
-        return card_dict
+        card_dict = pipeline.generate_or_reuse_card(id, chunk_idx)
+        if card_dict:
+            card_dict["sequence"] = chunk_idx
+            card_dict["document_id"] = id
+            card_dict["source_chunk_id"] = chunk.id
+            return card_dict
+    except Exception as pipe_err:
+        logger.warning("ReadAheadPipeline error for chunk %s: %s", chunk_idx, pipe_err)
 
-    # 2. Concept extraction fallback
-    concepts = session.exec(
-        select(Concept).where(
-            Concept.document_id == id,
-            Concept.chunk_id == chunk.id,
-        )
-    ).all()
-    if not concepts:
-        raw_concepts = extract_concepts(chunk.raw_text, chunk.sequence)
-        for rc in raw_concepts:
-            c_obj = Concept(
-                id=rc.get("id") or str(uuid.uuid4()),
-                document_id=id,
-                name=rc.get("name", "Concept"),
-                salience=rc.get("salience", 0.7),
-                chunk_id=chunk.id,
+    # 2. Concept extraction fallback with defensive error handling
+    try:
+        concepts = session.exec(
+            select(Concept).where(
+                Concept.document_id == id,
+                Concept.chunk_id == chunk.id,
             )
-            session.add(c_obj)
-            concepts.append(c_obj)
-        session.commit()
-
-    if concepts:
-        new_cards, _ = generate_context_cards(
-            concepts=concepts,
-            chunks=[chunk],
-            document_id=id,
-            canonical_text=doc.canonical_text if doc else chunk.raw_text,
-        )
-        if new_cards:
-            card = new_cards[0]
-            session.add(card)
+        ).all()
+        if not concepts:
+            raw_concepts = extract_concepts(chunk.raw_text, chunk.sequence)
+            for rc in raw_concepts:
+                c_obj = Concept(
+                    id=rc.get("id") or str(uuid.uuid4()),
+                    document_id=id,
+                    name=rc.get("name", "Concept"),
+                    salience=rc.get("salience", 0.7),
+                    chunk_id=chunk.id,
+                )
+                session.add(c_obj)
+                concepts.append(c_obj)
             session.commit()
-            session.refresh(card)
-            c_dict = card_to_dict(card)
-            c_dict["sequence"] = chunk_idx
-            c_dict["document_id"] = id
-            c_dict["source_chunk_id"] = chunk.id
-            return c_dict
+
+        if concepts:
+            new_cards, _ = generate_context_cards(
+                concepts=concepts,
+                chunks=[chunk],
+                document_id=id,
+                canonical_text=doc.canonical_text if doc else chunk.raw_text,
+            )
+            if new_cards:
+                card = new_cards[0]
+                session.add(card)
+                session.commit()
+                session.refresh(card)
+                c_dict = card_to_dict(card)
+                c_dict["sequence"] = chunk_idx
+                c_dict["document_id"] = id
+                c_dict["source_chunk_id"] = chunk.id
+                return c_dict
+    except Exception as concept_err:
+        logger.warning("Concept card generation failed for chunk %s: %s", chunk_idx, concept_err)
 
     # 3. Deterministic guaranteed synthesis fallback (ensures 100% zero-fail)
     quote = find_exact_quote(chunk.raw_text, "") or chunk.raw_text[:80].strip()
@@ -560,12 +566,14 @@ def delete_document(id: str, session: Session = Depends(get_session)) -> Dict[st
             status_code=409,
         )
 
-    # Delete related database items while preserving saved user quotes and cards
+    # Remove the FTS index rows explicitly; FTS virtual tables do not cascade.
+    from sqlalchemy import text
+    session.execute(text("DELETE FROM reading_chunks_fts WHERE document_id = :doc_id"), {"doc_id": id})
     for chunk in session.exec(select(ReadingChunk).where(ReadingChunk.document_id == id)).all():
         session.delete(chunk)
     for concept in session.exec(select(Concept).where(Concept.document_id == id)).all():
         session.delete(concept)
-    # Only delete un-saved cards; saved cards/quotes must survive book deletion!
+    # Keep reader-saved cards/quotes available after removing the source book.
     for card in session.exec(select(ContextCard).where(ContextCard.document_id == id, ContextCard.saved == False)).all():
         session.delete(card)
     for chapter in session.exec(select(DocumentChapter).where(DocumentChapter.doc_id == id)).all():
@@ -574,9 +582,10 @@ def delete_document(id: str, session: Session = Depends(get_session)) -> Dict[st
     if state:
         session.delete(state)
 
-    saved_cards = session.exec(select(ContextCard).where(ContextCard.document_id == id, ContextCard.saved == True)).all()
+    saved_cards = session.exec(
+        select(ContextCard).where(ContextCard.document_id == id, ContextCard.saved == True)
+    ).all()
     if saved_cards:
-        # Preserve tombstone record so saved cards satisfy foreign key and keep authentic book title
         doc.status = "deleted"
         doc.canonical_text = None
         session.add(doc)
@@ -823,7 +832,10 @@ def get_page_image(
 
 
 class ProgressUpdate(BaseModel):
-    chunk_index: int
+    chunk_index: Optional[int] = None
+    chunk_id: Optional[str] = None
+    feed_index: Optional[int] = None
+    chunk_sequence: Optional[int] = None
     reading_mode: str = "feed"
 
 
@@ -838,7 +850,22 @@ async def sync_reading_progress(
     1. Saves exact reading position to SQLite WAL (syncs Web <-> Android).
     2. Triggers the Read-Ahead Priority Pipeline for [chunk_index, chunk_index + 16].
     """
-    effective_chunk_index = max(1, payload.chunk_index)
+    position = _resolve_ordered_chunk(
+        session, id, chunk_id=payload.chunk_id, chunk_sequence=payload.chunk_sequence,
+        index=payload.feed_index if payload.feed_index is not None else payload.chunk_index,
+    )
+    if not position:
+        if payload.chunk_id or payload.chunk_sequence is not None or payload.feed_index is not None:
+            raise AppException("NOT_FOUND", "Reading chunk not found", status_code=404)
+        first_chunk = session.exec(
+            select(ReadingChunk.id).where(ReadingChunk.document_id == id).limit(1)
+        ).first()
+        if first_chunk:
+            raise AppException("NOT_FOUND", "Reading chunk not found", status_code=404)
+        # Compatibility for legacy documents with no materialized ReadingChunk rows.
+        effective_chunk_index = max(1, payload.chunk_index or 1)
+    else:
+        effective_chunk_index = position.sequence
     try:
         state = session.get(ReadingState, id)
         if not state:
@@ -907,7 +934,7 @@ async def sync_reading_progress(
 
     return {
         "status": "ok",
-        "prefetched_from": payload.chunk_index,
+        "prefetched_from": effective_chunk_index,
         "in_flight": in_flight,
         "cards": cards_data,
     }
@@ -1115,7 +1142,10 @@ def export_document_markdown(
 
 
 class VibeCheckRequest(BaseModel):
-    chunk_index: int
+    chunk_index: Optional[int] = None
+    chunk_id: Optional[str] = None
+    feed_index: Optional[int] = None
+    chunk_sequence: Optional[int] = None
 
 
 @router.post("/{id}/vibe-check")
@@ -1129,28 +1159,20 @@ async def get_chunk_vibe_check(
     if not doc:
         raise AppException("NOT_FOUND", status_code=404, message="Document not found")
 
-    target_seq = max(1, payload.chunk_index)
-    target_chunk = session.exec(
-        select(ReadingChunk).where(
-            ReadingChunk.document_id == id,
-            ReadingChunk.sequence == target_seq,
-        )
-    ).first()
+    requested_index = payload.feed_index if payload.feed_index is not None else payload.chunk_index
+    target_chunk = _resolve_ordered_chunk(
+        session, id, chunk_id=payload.chunk_id, chunk_sequence=payload.chunk_sequence,
+        index=requested_index,
+    )
 
     if not target_chunk:
-        # Fallback to closest available chunk for edge case indices (e.g. 0 or 99999)
-        if target_seq <= 1:
-            target_chunk = session.exec(
-                select(ReadingChunk)
-                .where(ReadingChunk.document_id == id)
-                .order_by(ReadingChunk.sequence.asc())
-            ).first()
-        else:
-            target_chunk = session.exec(
-                select(ReadingChunk)
-                .where(ReadingChunk.document_id == id)
-                .order_by(ReadingChunk.sequence.desc())
-            ).first()
+        has_chunks = session.exec(
+            select(ReadingChunk.id).where(ReadingChunk.document_id == id).limit(1)
+        ).first()
+        if has_chunks and (
+            payload.chunk_id or payload.chunk_sequence is not None or requested_index is not None
+        ):
+            raise AppException("NOT_FOUND", "Reading chunk not found", status_code=404)
 
     if not target_chunk:
         return {
@@ -1203,7 +1225,7 @@ async def get_chunk_vibe_check(
 
     take = result.get("plain_take", "A core theme from this passage.")
     return {
-        "chunk_index": payload.chunk_index,
+        "chunk_index": target_chunk.sequence,
         "plain_take": take,
         "simplified": take,
         "analogy": result.get("analogy"),

@@ -1,17 +1,20 @@
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
+import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:url_launcher/url_launcher.dart';
 import 'package:athena/core/theme/theme.dart';
 import 'package:athena/core/theme/reader_theme.dart';
 import 'package:athena/models/document.dart';
+import 'package:athena/services/local_database.dart';
 import 'package:athena/core/widgets/athena_avatar.dart';
 import 'package:athena/core/widgets/athena_logo.dart';
-import 'package:athena/services/lossless_chunker.dart';
 
 /// Context card widget per CLAUDE.md §11 & §7.3.
 /// High-end editorial marginalia card using Double-Bezel nested architecture,
 /// squircle curvature, and tactile interactive controls.
 class ContextCardWidget extends StatefulWidget {
+  final String documentId;
+  final ValueChanged<String>? onJumpToPassage;
   final ReaderItem card;
   final VoidCallback onToggleSave;
   final VoidCallback onDismiss;
@@ -23,6 +26,8 @@ class ContextCardWidget extends StatefulWidget {
 
   const ContextCardWidget({
     super.key,
+    this.documentId = '',
+    this.onJumpToPassage,
     required this.card,
     required this.onToggleSave,
     required this.onDismiss,
@@ -39,12 +44,41 @@ class ContextCardWidget extends StatefulWidget {
 
 class _ContextCardWidgetState extends State<ContextCardWidget> {
   bool _betRevealed = false;
+  List<Map<String, dynamic>> _relatedPassages = const [];
+
+  @override
+  void initState() {
+    super.initState();
+    _loadRelatedPassages();
+  }
+
+  Future<void> _loadRelatedPassages() async {
+    final sourceId = widget.card.sourceChunkId;
+    if (kIsWeb ||
+        widget.documentId.isEmpty ||
+        sourceId == null ||
+        sourceId.isEmpty) {
+      return;
+    }
+    try {
+      final related = await LocalDatabase.instance.findRelatedPassages(
+        widget.documentId,
+        sourceId,
+        topK: 3,
+      );
+      if (mounted) setState(() => _relatedPassages = related);
+    } catch (e) {
+      debugPrint('Athena related passage lookup notice: $e');
+    }
+  }
 
   @override
   void didUpdateWidget(ContextCardWidget oldWidget) {
     super.didUpdateWidget(oldWidget);
     if (oldWidget.card.id != widget.card.id) {
       _betRevealed = false;
+      _relatedPassages = const [];
+      _loadRelatedPassages();
     }
   }
 
@@ -145,7 +179,8 @@ class _ContextCardWidgetState extends State<ContextCardWidget> {
     }
   }
 
-  void _showCitationPreview(BuildContext context, Map<String, dynamic> cite, ReaderThemeConfig theme) {
+  void _showCitationPreview(BuildContext context, Map<String, dynamic> cite,
+      ReaderThemeConfig theme) {
     final cUrl = cite['url'] as String? ?? '';
     final cTitle = cite['title'] as String? ?? 'Verified Citation';
     final cPub =
@@ -212,7 +247,8 @@ class _ContextCardWidgetState extends State<ContextCardWidget> {
                     ),
                     const Spacer(),
                     IconButton(
-                      icon: Icon(Icons.close_rounded, size: 20, color: theme.textMutedColor),
+                      icon: Icon(Icons.close_rounded,
+                          size: 20, color: theme.textMutedColor),
                       padding: EdgeInsets.zero,
                       constraints: const BoxConstraints(),
                       onPressed: () => Navigator.of(ctx).pop(),
@@ -242,7 +278,9 @@ class _ContextCardWidgetState extends State<ContextCardWidget> {
                     snippet,
                     style: TextStyle(
                       fontFamily: AppTheme.fontReading,
-                      color: theme.isDark ? const Color(0xFFD1D5DB) : const Color(0xFF4A4F48),
+                      color: theme.isDark
+                          ? const Color(0xFFD1D5DB)
+                          : const Color(0xFF4A4F48),
                       fontSize: 13.5,
                       height: 1.45,
                       fontStyle: FontStyle.italic,
@@ -296,7 +334,8 @@ class _ContextCardWidgetState extends State<ContextCardWidget> {
     );
   }
 
-  Widget _buildBodyContent(BuildContext context, String body, ReaderThemeConfig theme) {
+  Widget _buildBodyContent(
+      BuildContext context, String body, ReaderThemeConfig theme) {
     if (body.contains('||REVEAL||')) {
       final parts = body.split('||REVEAL||');
       final betPrompt = parts[0].trim();
@@ -335,8 +374,8 @@ class _ContextCardWidgetState extends State<ContextCardWidget> {
                   });
                 },
                 style: OutlinedButton.styleFrom(
-                  backgroundColor:
-                      const Color(0xFF10B981).withValues(alpha: theme.isDark ? 0.16 : 0.08),
+                  backgroundColor: const Color(0xFF10B981)
+                      .withValues(alpha: theme.isDark ? 0.16 : 0.08),
                   side: BorderSide(
                     color: const Color(0xFF10B981).withValues(alpha: 0.40),
                     width: 1.0,
@@ -370,7 +409,8 @@ class _ContextCardWidgetState extends State<ContextCardWidget> {
                     ),
                     Text(
                       'Reveal Study Findings',
-                      style: TextStyle(fontSize: 0, height: 0, color: Colors.transparent),
+                      style: TextStyle(
+                          fontSize: 0, height: 0, color: Colors.transparent),
                     ),
                   ],
                 ),
@@ -381,7 +421,8 @@ class _ContextCardWidgetState extends State<ContextCardWidget> {
               margin: const EdgeInsets.only(top: 4),
               padding: const EdgeInsets.all(14),
               decoration: BoxDecoration(
-                color: const Color(0xFF10B981).withValues(alpha: theme.isDark ? 0.16 : 0.08),
+                color: const Color(0xFF10B981)
+                    .withValues(alpha: theme.isDark ? 0.16 : 0.08),
                 borderRadius: BorderRadius.circular(6),
                 border: Border.all(
                   color: const Color(0xFF10B981).withValues(alpha: 0.35),
@@ -467,7 +508,9 @@ class _ContextCardWidgetState extends State<ContextCardWidget> {
               intro,
               style: TextStyle(
                 fontFamily: AppTheme.fontReading,
-                color: theme.isDark ? const Color(0xFFD1D5DB) : const Color(0xFF4A4F48),
+                color: theme.isDark
+                    ? const Color(0xFFD1D5DB)
+                    : const Color(0xFF4A4F48),
                 fontSize: widget.isFeedMode ? 15 : 14,
                 height: 1.5,
               ),
@@ -479,7 +522,8 @@ class _ContextCardWidgetState extends State<ContextCardWidget> {
               width: double.infinity,
               padding: const EdgeInsets.all(13),
               decoration: BoxDecoration(
-                color: const Color(0xFFF43F5E).withValues(alpha: theme.isDark ? 0.16 : 0.07),
+                color: const Color(0xFFF43F5E)
+                    .withValues(alpha: theme.isDark ? 0.16 : 0.07),
                 borderRadius: BorderRadius.circular(6),
                 border: Border.all(
                   color: const Color(0xFFF43F5E).withValues(alpha: 0.28),
@@ -526,7 +570,8 @@ class _ContextCardWidgetState extends State<ContextCardWidget> {
               width: double.infinity,
               padding: const EdgeInsets.all(13),
               decoration: BoxDecoration(
-                color: const Color(0xFF10B981).withValues(alpha: theme.isDark ? 0.16 : 0.07),
+                color: const Color(0xFF10B981)
+                    .withValues(alpha: theme.isDark ? 0.16 : 0.07),
                 borderRadius: BorderRadius.circular(6),
                 border: Border.all(
                   color: const Color(0xFF10B981).withValues(alpha: 0.28),
@@ -590,8 +635,8 @@ class _ContextCardWidgetState extends State<ContextCardWidget> {
     final card = widget.card;
     final isSaved = card.saved ?? false;
     final rawTitle = card.title ?? 'Context';
-    final title = sanitizeProseSpacing(_cleanCardTitle(rawTitle));
-    final body = sanitizeProseSpacing(card.body ?? '');
+    final title = _cleanCardTitle(rawTitle);
+    final body = card.body ?? '';
     final citations = card.citations ?? [];
     final firstCitation = citations.isNotEmpty ? citations.first : null;
     final citationUrl = firstCitation?['url'] as String?;
@@ -599,12 +644,11 @@ class _ContextCardWidgetState extends State<ContextCardWidget> {
     final citationPublisher =
         firstCitation?['publisher'] as String? ?? 'Wikipedia';
 
-    final exactQuote = card.exactQuote != null
-        ? sanitizeProseSpacing(card.exactQuote!)
-        : null;
+    final exactQuote = card.exactQuote;
     final lens = _resolveLens(rawTitle, card.whyHere, body);
 
-    final seqStr = card.sequence != null ? card.sequence.toString().padLeft(2, '0') : '03';
+    final seqStr =
+        card.sequence != null ? card.sequence.toString().padLeft(2, '0') : '03';
 
     // Top Row inside the card (Eyebrow Tag + Save Pill + Dismiss)
     final topActionRow = Row(
@@ -620,10 +664,12 @@ class _ContextCardWidgetState extends State<ContextCardWidget> {
               Container(
                 padding: const EdgeInsets.symmetric(horizontal: 7, vertical: 3),
                 decoration: BoxDecoration(
-                  color: lens.color.withValues(alpha: theme.isDark ? 0.22 : 0.12),
+                  color:
+                      lens.color.withValues(alpha: theme.isDark ? 0.22 : 0.12),
                   borderRadius: BorderRadius.circular(4),
                   border: Border.all(
-                    color: lens.color.withValues(alpha: theme.isDark ? 0.45 : 0.25),
+                    color: lens.color
+                        .withValues(alpha: theme.isDark ? 0.45 : 0.25),
                     width: 1,
                   ),
                 ),
@@ -656,7 +702,8 @@ class _ContextCardWidgetState extends State<ContextCardWidget> {
               if (card.isSpeculativeDraft)
                 Container(
                   margin: const EdgeInsets.only(left: 6),
-                  padding: const EdgeInsets.symmetric(horizontal: 5, vertical: 1.5),
+                  padding:
+                      const EdgeInsets.symmetric(horizontal: 5, vertical: 1.5),
                   decoration: BoxDecoration(
                     color: lens.color.withValues(alpha: 0.12),
                     borderRadius: BorderRadius.circular(4),
@@ -708,12 +755,16 @@ class _ContextCardWidgetState extends State<ContextCardWidget> {
                   margin: const EdgeInsets.only(right: 4),
                   decoration: BoxDecoration(
                     color: widget.isBrainDeckSaved
-                        ? (theme.isDark ? theme.accentColor : const Color(0xFF141714))
+                        ? (theme.isDark
+                            ? theme.accentColor
+                            : const Color(0xFF141714))
                         : theme.pillBackground,
                     borderRadius: BorderRadius.circular(20),
                     border: Border.all(
                       color: widget.isBrainDeckSaved
-                          ? (theme.isDark ? theme.accentColor : const Color(0xFF141714))
+                          ? (theme.isDark
+                              ? theme.accentColor
+                              : const Color(0xFF141714))
                           : theme.borderColor,
                       width: 1.0,
                     ),
@@ -726,7 +777,9 @@ class _ContextCardWidgetState extends State<ContextCardWidget> {
                             ? Icons.bookmark_rounded
                             : Icons.bookmark_border_rounded,
                         size: 13,
-                        color: widget.isBrainDeckSaved ? Colors.white : theme.textColor,
+                        color: widget.isBrainDeckSaved
+                            ? Colors.white
+                            : theme.textColor,
                       ),
                       const SizedBox(width: 4),
                       Text(
@@ -735,7 +788,9 @@ class _ContextCardWidgetState extends State<ContextCardWidget> {
                           fontFamily: AppTheme.fontUI,
                           fontSize: 10.5,
                           fontWeight: FontWeight.w600,
-                          color: widget.isBrainDeckSaved ? Colors.white : theme.textColor,
+                          color: widget.isBrainDeckSaved
+                              ? Colors.white
+                              : theme.textColor,
                         ),
                       ),
                     ],
@@ -745,7 +800,9 @@ class _ContextCardWidgetState extends State<ContextCardWidget> {
             ] else ...[
               IconButton(
                 icon: Icon(
-                  isSaved ? Icons.bookmark_rounded : Icons.bookmark_border_rounded,
+                  isSaved
+                      ? Icons.bookmark_rounded
+                      : Icons.bookmark_border_rounded,
                   color: isSaved
                       ? (theme.isDark ? theme.accentColor : theme.textColor)
                       : theme.textMutedColor,
@@ -792,7 +849,8 @@ class _ContextCardWidgetState extends State<ContextCardWidget> {
         ),
         Text(
           rawTitle,
-          style: const TextStyle(fontSize: 0, height: 0, color: Colors.transparent),
+          style: const TextStyle(
+              fontSize: 0, height: 0, color: Colors.transparent),
         ),
         if (exactQuote != null && exactQuote.isNotEmpty) ...[
           const SizedBox(height: 10),
@@ -819,6 +877,45 @@ class _ContextCardWidgetState extends State<ContextCardWidget> {
         ],
         const SizedBox(height: 10),
         _buildBodyContent(context, body, theme),
+        if (_relatedPassages.isNotEmpty) ...[
+          const SizedBox(height: 14),
+          Text(
+            'RELATED IN THIS BOOK',
+            style: TextStyle(
+              fontFamily: AppTheme.fontUI,
+              color: theme.textMutedColor,
+              fontSize: 10,
+              fontWeight: FontWeight.w800,
+              letterSpacing: 0.8,
+            ),
+          ),
+          const SizedBox(height: 6),
+          ..._relatedPassages.map((passage) {
+            final id = passage['id']?.toString() ?? '';
+            final excerpt = passage['raw_text']?.toString() ?? '';
+            final sequence = passage['sequence']?.toString() ?? '';
+            return ListTile(
+              dense: true,
+              contentPadding: EdgeInsets.zero,
+              leading: Icon(Icons.bookmark_outline,
+                  color: theme.accentColor, size: 18),
+              title: Text('Passage $sequence',
+                  style: TextStyle(
+                      color: theme.textColor,
+                      fontSize: 12,
+                      fontWeight: FontWeight.w600)),
+              subtitle: Text(excerpt,
+                  maxLines: 2,
+                  overflow: TextOverflow.ellipsis,
+                  style: TextStyle(color: theme.textMutedColor, fontSize: 11)),
+              trailing: Icon(Icons.arrow_forward_ios_rounded,
+                  size: 13, color: theme.textMutedColor),
+              onTap: id.isEmpty || widget.onJumpToPassage == null
+                  ? null
+                  : () => widget.onJumpToPassage!(id),
+            );
+          }),
+        ],
         if (citations.isNotEmpty) ...[
           const SizedBox(height: 16),
           Text(
@@ -893,11 +990,14 @@ class _ContextCardWidgetState extends State<ContextCardWidget> {
                 ),
               ),
               TextButton.icon(
-                onPressed: () => _showCitationPreview(context, {
-                  'url': citationUrl,
-                  'title': citationTitle,
-                  'publisher': citationPublisher,
-                }, theme),
+                onPressed: () => _showCitationPreview(
+                    context,
+                    {
+                      'url': citationUrl,
+                      'title': citationTitle,
+                      'publisher': citationPublisher,
+                    },
+                    theme),
                 style: TextButton.styleFrom(
                   foregroundColor: theme.accentColor,
                   padding:
@@ -979,55 +1079,56 @@ class _ContextCardWidgetState extends State<ContextCardWidget> {
         child: ConstrainedBox(
           constraints: const BoxConstraints(maxWidth: 680),
           child: Container(
-          margin: EdgeInsets.fromLTRB(
-            isMobile ? 12 : 16,
-            8,
-            isMobile ? 12 : 16,
-            12,
-          ),
-          // Outer Shell (Doppelrand)
-          padding: const EdgeInsets.all(4),
-          decoration: BoxDecoration(
-            color: lens.color.withValues(alpha: theme.isDark ? 0.15 : 0.06),
-            borderRadius: BorderRadius.circular(8),
-            border: Border.all(
-              color: lens.color.withValues(alpha: theme.isDark ? 0.35 : 0.22),
-              width: 1.0,
+            margin: EdgeInsets.fromLTRB(
+              isMobile ? 12 : 16,
+              8,
+              isMobile ? 12 : 16,
+              12,
             ),
-            boxShadow: [
-              BoxShadow(
-                color: lens.color.withValues(alpha: theme.isDark ? 0.12 : 0.08),
-                blurRadius: 18,
-                offset: const Offset(0, 5),
-              ),
-            ],
-          ),
-          child: Container(
-            // Inner Core
-            padding: const EdgeInsets.all(20),
+            // Outer Shell (Doppelrand)
+            padding: const EdgeInsets.all(4),
             decoration: BoxDecoration(
-              color: theme.innerCardColor,
+              color: lens.color.withValues(alpha: theme.isDark ? 0.15 : 0.06),
               borderRadius: BorderRadius.circular(8),
               border: Border.all(
-                color: theme.borderColor,
-                width: 0.8,
+                color: lens.color.withValues(alpha: theme.isDark ? 0.35 : 0.22),
+                width: 1.0,
               ),
+              boxShadow: [
+                BoxShadow(
+                  color:
+                      lens.color.withValues(alpha: theme.isDark ? 0.12 : 0.08),
+                  blurRadius: 18,
+                  offset: const Offset(0, 5),
+                ),
+              ],
             ),
-            child: AnimatedSwitcher(
-              duration: const Duration(milliseconds: 220),
-              transitionBuilder: (child, animation) => FadeTransition(
-                opacity: animation,
-                child: child,
+            child: Container(
+              // Inner Core
+              padding: const EdgeInsets.all(20),
+              decoration: BoxDecoration(
+                color: theme.innerCardColor,
+                borderRadius: BorderRadius.circular(8),
+                border: Border.all(
+                  color: theme.borderColor,
+                  width: 0.8,
+                ),
               ),
-              child: KeyedSubtree(
-                key: ValueKey('${card.id}_${card.isSpeculativeDraft}'),
-                child: innerContentWidget,
+              child: AnimatedSwitcher(
+                duration: const Duration(milliseconds: 220),
+                transitionBuilder: (child, animation) => FadeTransition(
+                  opacity: animation,
+                  child: child,
+                ),
+                child: KeyedSubtree(
+                  key: ValueKey('${card.id}_${card.isSpeculativeDraft}'),
+                  child: innerContentWidget,
+                ),
               ),
             ),
           ),
         ),
       ),
-    ),
     );
 
     if (widget.isFeedMode) {

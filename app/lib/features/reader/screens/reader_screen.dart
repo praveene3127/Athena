@@ -24,6 +24,7 @@ import 'package:athena/features/reader/widgets/reader_search_sheet.dart';
 import 'package:athena/features/reader/widgets/chapters_drawer.dart';
 import 'package:athena/features/reader/widgets/original_page_sheet.dart';
 import 'package:athena/features/ask/widgets/ask_sheet.dart';
+import 'package:athena/features/saved/screens/saved_screen.dart';
 
 /// Provider for loading ReaderData for a given documentId.
 final readerDataProvider =
@@ -60,7 +61,8 @@ class _ReaderScreenState extends ConsumerState<ReaderScreen> {
   late ItemPositionsListener _flowPositionsListener;
   late final KinematicScrollGovernor _governor;
 
-  String _readingMode = 'feed'; // 'feed' (1-swipe=1-card) or 'flow' (continuous)
+  String _readingMode =
+      'feed'; // 'feed' (1-swipe=1-card) or 'flow' (continuous)
   String _themeId = 'paper';
   double _fontSize = 18.0;
   String _fontFamily = 'Georgia';
@@ -72,6 +74,10 @@ class _ReaderScreenState extends ConsumerState<ReaderScreen> {
   final Set<String> _dismissedCardIds = {};
   final Map<String, String> _chunkEdits = {};
   final Map<String, String> _chunkNotes = {};
+  List<ReaderItem> _currentFeed = const [];
+  bool _initialPositionResolved = false;
+  bool _preferencesLoaded = false;
+  bool _hasLocalSavedPosition = false;
 
   @override
   void initState() {
@@ -79,6 +85,7 @@ class _ReaderScreenState extends ConsumerState<ReaderScreen> {
     _pageController = PageController(initialPage: 0);
     _flowScrollController = ItemScrollController();
     _flowPositionsListener = ItemPositionsListener.create();
+    _flowPositionsListener.itemPositions.addListener(_onFlowPositionsChanged);
 
     _governor = KinematicScrollGovernor(
       localDwellDuration: const Duration(milliseconds: 450),
@@ -88,11 +95,20 @@ class _ReaderScreenState extends ConsumerState<ReaderScreen> {
           prefs.setInt('reader_pos_${widget.documentId}', index);
         });
         if (AppConfig.apiBaseUrl.isNotEmpty) {
-          ref.read(apiClientProvider).syncReadingProgress(widget.documentId, index);
+          final chunk = _readingChunkAt(index, _currentFeed);
+          if (chunk?.sequence != null) {
+            ref.read(apiClientProvider).syncReadingProgress(
+                  widget.documentId,
+                  chunk!.sequence!,
+                  chunkId: chunk.id,
+                  feedIndex: index,
+                );
+          }
         }
       },
       onAiDwell: (index) {
-        debugPrint('[Athena Governor] User dwelled on index $index (>= 1500ms). Background AI synthesis permitted.');
+        debugPrint(
+            '[Athena Governor] User dwelled on index $index (>= 1500ms). Background AI synthesis permitted.');
       },
     );
 
@@ -107,6 +123,8 @@ class _ReaderScreenState extends ConsumerState<ReaderScreen> {
       final savedTheme = prefs.getString('reader_theme');
       final savedSize = prefs.getDouble('reader_font_size');
       final savedFont = prefs.getString('reader_font_family');
+      final savedLineHeight = prefs.getDouble('reader_line_height');
+      final savedBionic = prefs.getBool('reader_bionic_reading');
       final savedPos = prefs.getInt('reader_pos_${widget.documentId}');
 
       if (mounted) {
@@ -123,11 +141,15 @@ class _ReaderScreenState extends ConsumerState<ReaderScreen> {
           if (savedFont != null) {
             _fontFamily = savedFont;
           }
-          if (savedPos != null && savedPos > 0) {
+          if (savedLineHeight != null) _lineHeight = savedLineHeight;
+          if (savedBionic != null) _bionic = savedBionic;
+          if (savedPos != null) {
             _currentIndex = savedPos;
+            _hasLocalSavedPosition = true;
           }
+          _preferencesLoaded = true;
         });
-        if (savedPos != null && savedPos > 0 && _pageController.hasClients) {
+        if (savedPos != null && _pageController.hasClients) {
           _pageController.jumpToPage(savedPos);
         }
       }
@@ -138,7 +160,8 @@ class _ReaderScreenState extends ConsumerState<ReaderScreen> {
 
   Future<void> _loadChunkEdits() async {
     try {
-      final edits = await LocalDatabase.instance.getChunkEdits(widget.documentId);
+      final edits =
+          await LocalDatabase.instance.getChunkEdits(widget.documentId);
       if (mounted && edits.isNotEmpty) {
         setState(() {
           for (final entry in edits.entries) {
@@ -160,9 +183,56 @@ class _ReaderScreenState extends ConsumerState<ReaderScreen> {
 
   @override
   void dispose() {
+    _flowPositionsListener.itemPositions
+        .removeListener(_onFlowPositionsChanged);
     _governor.dispose();
     _pageController.dispose();
     super.dispose();
+  }
+
+  void _onFlowPositionsChanged() {
+    if (!mounted || _readingMode != 'flow' || _currentFeed.isEmpty) return;
+    final visible = _flowPositionsListener.itemPositions.value
+        .where((position) =>
+            position.itemTrailingEdge > 0 && position.itemLeadingEdge < 1)
+        .toList()
+      ..sort((a, b) => a.itemLeadingEdge.compareTo(b.itemLeadingEdge));
+    if (visible.isEmpty) return;
+    final index = visible.first.index.clamp(0, _currentFeed.length - 1);
+    if (index != _currentIndex) {
+      setState(() => _currentIndex = index);
+      unawaited(SharedPreferences.getInstance().then(
+          (prefs) => prefs.setInt('reader_pos_${widget.documentId}', index)));
+      final chunk = _readingChunkAt(index, _currentFeed);
+      if (chunk?.sequence != null) {
+        ref.read(apiClientProvider).syncReadingProgress(
+              widget.documentId,
+              chunk!.sequence!,
+              chunkId: chunk.id,
+              feedIndex: index,
+            );
+      }
+      _governor.onPageTurn(index);
+    }
+  }
+
+  ReaderItem? _readingChunkAt(int index, List<ReaderItem> items) {
+    if (index < 0 || index >= items.length) return null;
+    final item = items[index];
+    if (item.isReadingChunk) return item;
+    final sourceId = item.sourceChunkId ?? item.insertAfter;
+    if (sourceId == null) return null;
+    for (final candidate in items) {
+      if (candidate.isReadingChunk && candidate.id == sourceId) return candidate;
+    }
+    return null;
+  }
+
+  Future<void> _persistTypography(String key, Object value) async {
+    final prefs = await SharedPreferences.getInstance();
+    if (value is double) await prefs.setDouble(key, value);
+    if (value is String) await prefs.setString(key, value);
+    if (value is bool) await prefs.setBool(key, value);
   }
 
   void _onPageChanged(int index) {
@@ -227,16 +297,20 @@ class _ReaderScreenState extends ConsumerState<ReaderScreen> {
         readingMode: _readingMode,
         theme: theme,
         isDark: isDark,
-        progress: readerAsync.value != null && readerAsync.value!.items.isNotEmpty
-            ? (_currentIndex + 1) / readerAsync.value!.items.length
-            : 0.0,
+        progress:
+            readerAsync.value != null && readerAsync.value!.items.isNotEmpty
+                ? (_currentIndex + 1) / readerAsync.value!.items.length
+                : 0.0,
         onBack: () => context.go('/'),
         onReadingModeChanged: (mode) {
           setState(() => _readingMode = mode);
-          SharedPreferences.getInstance().then((p) => p.setString('reader_mode_${widget.documentId}', mode));
+          SharedPreferences.getInstance().then(
+              (p) => p.setString('reader_mode_${widget.documentId}', mode));
         },
         onSearch: () {
-          final items = readerAsync.value != null ? _buildFeed(readerAsync.value!) : <ReaderItem>[];
+          final items = readerAsync.value != null
+              ? _buildFeed(readerAsync.value!)
+              : <ReaderItem>[];
           ReaderSearchSheet.show(
             context,
             documentId: widget.documentId,
@@ -253,11 +327,26 @@ class _ReaderScreenState extends ConsumerState<ReaderScreen> {
           fontFamily: _fontFamily,
           lineHeight: _lineHeight,
           bionic: _bionic,
-          onThemeChanged: (t) => setState(() => _themeId = t),
-          onFontSizeChanged: (s) => setState(() => _fontSize = s),
-          onFontFamilyChanged: (f) => setState(() => _fontFamily = f),
-          onLineHeightChanged: (lh) => setState(() => _lineHeight = lh),
-          onBionicChanged: (b) => setState(() => _bionic = b),
+          onThemeChanged: (t) {
+            setState(() => _themeId = t);
+            unawaited(_persistTypography('reader_theme', t));
+          },
+          onFontSizeChanged: (s) {
+            setState(() => _fontSize = s);
+            unawaited(_persistTypography('reader_font_size', s));
+          },
+          onFontFamilyChanged: (f) {
+            setState(() => _fontFamily = f);
+            unawaited(_persistTypography('reader_font_family', f));
+          },
+          onLineHeightChanged: (lh) {
+            setState(() => _lineHeight = lh);
+            unawaited(_persistTypography('reader_line_height', lh));
+          },
+          onBionicChanged: (b) {
+            setState(() => _bionic = b);
+            unawaited(_persistTypography('reader_bionic_reading', b));
+          },
         ),
         onToggleTheme: () => ref.read(themeModeProvider.notifier).toggleTheme(),
       ),
@@ -265,10 +354,47 @@ class _ReaderScreenState extends ConsumerState<ReaderScreen> {
         top: false,
         child: readerAsync.when(
           loading: () => const Center(child: CircularProgressIndicator()),
-          error: (e, _) => Center(child: Text('Error loading reader: $e', style: TextStyle(color: theme.textColor))),
+          error: (e, _) => Center(
+              child: Text('Error loading reader: $e',
+                  style: TextStyle(color: theme.textColor))),
           data: (data) {
             final feedItems = _buildFeed(data);
             final chunks = feedItems.where((it) => it.isReadingChunk).toList();
+            if (!_initialPositionResolved &&
+                _preferencesLoaded &&
+                feedItems.isNotEmpty) {
+              _initialPositionResolved = true;
+              var target = _currentIndex.clamp(0, feedItems.length - 1);
+              final serverSequence = data.currentChunkIndex;
+              final serverTarget = serverSequence == null
+                  ? -1
+                  : feedItems.indexWhere((item) =>
+                      item.isReadingChunk && item.sequence == serverSequence);
+              final localChunk = _hasLocalSavedPosition
+                  ? _readingChunkAt(target, feedItems)
+                  : null;
+              if (serverTarget >= 0 &&
+                  (!_hasLocalSavedPosition ||
+                      (localChunk?.sequence ?? 0) < serverSequence!)) {
+                target = serverTarget;
+              }
+              final deepLink = widget.initialChunkId;
+              if (deepLink != null && deepLink.isNotEmpty) {
+                final match = feedItems.indexWhere((item) =>
+                    item.id == deepLink || item.sourceChunkId == deepLink);
+                if (match >= 0) target = match;
+              }
+              _currentIndex = target;
+              WidgetsBinding.instance.addPostFrameCallback((_) {
+                if (!mounted) return;
+                if (_readingMode == 'feed' && _pageController.hasClients) {
+                  _pageController.jumpToPage(target);
+                } else if (_readingMode == 'flow' &&
+                    _flowScrollController.isAttached) {
+                  _flowScrollController.jumpTo(index: target);
+                }
+              });
+            }
 
             return Column(
               children: [
@@ -276,9 +402,13 @@ class _ReaderScreenState extends ConsumerState<ReaderScreen> {
                 Expanded(
                   child: Focus(
                     autofocus: true,
-                    onKeyEvent: (_, event) => _handleKeyEvent(event, feedItems.length),
+                    onKeyEvent: (_, event) =>
+                        _handleKeyEvent(event, feedItems.length),
                     child: _readingMode == 'feed'
                         ? ReaderFeedView(
+                            documentId: widget.documentId,
+                            onJumpToPassage: (id) =>
+                                _jumpToChunkId(id, feedItems),
                             pageController: _pageController,
                             feedItems: feedItems,
                             themeId: _themeId,
@@ -308,10 +438,13 @@ class _ReaderScreenState extends ConsumerState<ReaderScreen> {
                             onAsk: (c) => _openAsk(c),
                             onSaveQuote: (c, [q]) => _saveQuote(c, q),
                             onToggleSaveCard: (card) => _toggleSaveCard(card),
-                            onDismissCard: (card) => setState(() => _dismissedCardIds.add(card.id)),
+                            onDismissCard: _dismissCard,
                             onAskAthenaForCard: (card) => _openAsk(card),
                           )
                         : ReaderFlowView(
+                            documentId: widget.documentId,
+                            onJumpToPassage: (id) =>
+                                _jumpToChunkId(id, feedItems),
                             itemScrollController: _flowScrollController,
                             itemPositionsListener: _flowPositionsListener,
                             feedItems: feedItems,
@@ -342,7 +475,7 @@ class _ReaderScreenState extends ConsumerState<ReaderScreen> {
                             onAsk: (c) => _openAsk(c),
                             onSaveQuote: (c, [q]) => _saveQuote(c, q),
                             onToggleSaveCard: (card) => _toggleSaveCard(card),
-                            onDismissCard: (card) => setState(() => _dismissedCardIds.add(card.id)),
+                            onDismissCard: _dismissCard,
                             onAskAthenaForCard: (card) => _openAsk(card),
                           ),
                   ),
@@ -355,10 +488,17 @@ class _ReaderScreenState extends ConsumerState<ReaderScreen> {
                   feedItems: feedItems,
                   readingChunks: chunks,
                   theme: theme,
-                  onPrevious: _currentIndex > 0 ? () => _jumpTo(_currentIndex - 1, feedItems.length) : null,
-                  onNext: _currentIndex < feedItems.length - 1 ? () => _jumpTo(_currentIndex + 1, feedItems.length) : null,
-                  onJumpToChapter: () => _scaffoldKey.currentState?.openDrawer(),
-                  onAsk: chunks.isNotEmpty ? () => _openAsk(chunks[_currentIndex.clamp(0, chunks.length - 1)]) : null,
+                  onPrevious: _currentIndex > 0
+                      ? () => _jumpTo(_currentIndex - 1, feedItems.length)
+                      : null,
+                  onNext: _currentIndex < feedItems.length - 1
+                      ? () => _jumpTo(_currentIndex + 1, feedItems.length)
+                      : null,
+                  onJumpToChapter: () =>
+                      _scaffoldKey.currentState?.openDrawer(),
+                  onAsk: chunks.isNotEmpty
+                      ? () => _openAsk(_activeChunk(feedItems, chunks))
+                      : null,
                   onGenerateCard: () => _handleGenerateCard(feedItems, chunks),
                 ),
               ],
@@ -377,12 +517,14 @@ class _ReaderScreenState extends ConsumerState<ReaderScreen> {
       }
     }
 
-    return buildInterleavedFeed(
+    final items = buildInterleavedFeed(
       rawItems: data.items,
       dynamicCardsBySeq: _cardsByChunkSeq,
       dismissedCardIds: _dismissedCardIds,
       showContextCards: true,
     );
+    _currentFeed = items;
+    return items;
   }
 
   void _showOriginalPage(ReaderItem chunk) {
@@ -410,11 +552,62 @@ class _ReaderScreenState extends ConsumerState<ReaderScreen> {
     );
   }
 
-  void _saveQuote(ReaderItem chunk, [String? quote]) {
+  Future<void> _saveQuote(ReaderItem chunk, [String? quote]) async {
     final text = quote ?? chunk.rawText;
+    try {
+      final title =
+          ref.read(readerDataProvider(widget.documentId)).value?.title;
+      await ref.read(apiClientProvider).saveUserQuote(
+            id: 'quote_${DateTime.now().microsecondsSinceEpoch}',
+            documentId: widget.documentId,
+            chunkId: chunk.id,
+            title: 'Saved passage',
+            quoteText: text,
+            exactQuote: text,
+            documentTitle: title,
+          );
+      ref.invalidate(savedCardsProvider);
+      if (!mounted) return;
+    } catch (e) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context)
+          .showSnackBar(SnackBar(content: Text('Could not save passage: $e')));
+      return;
+    }
     ScaffoldMessenger.of(context).showSnackBar(
-      SnackBar(content: Text('Quote saved: "${text.length > 40 ? '${text.substring(0, 40)}...' : text}"')),
+      SnackBar(
+          content: Text(
+              'Quote saved: "${text.length > 40 ? '${text.substring(0, 40)}...' : text}"')),
     );
+  }
+
+  Future<void> _dismissCard(ReaderItem card) async {
+    setState(() => _dismissedCardIds.add(card.id));
+    try {
+      await LocalDatabase.instance.setCardDismissed(card.id, true);
+      await ref.read(apiClientProvider).dismissCard(card.id);
+      ref.invalidate(readerDataProvider(widget.documentId));
+    } catch (e) {
+      debugPrint('[Athena] Card dismissal persistence notice: $e');
+    }
+  }
+
+  ReaderItem _activeChunk(List<ReaderItem> feedItems, List<ReaderItem> chunks) {
+    if (_currentIndex >= 0 && _currentIndex < feedItems.length) {
+      final item = feedItems[_currentIndex];
+      if (item.isReadingChunk) return item;
+      final parentId = item.sourceChunkId ?? item.insertAfter;
+      for (final chunk in chunks) {
+        if (chunk.id == parentId) return chunk;
+      }
+    }
+    return chunks.first;
+  }
+
+  void _jumpToChunkId(String chunkId, List<ReaderItem> feedItems) {
+    final index = feedItems
+        .indexWhere((item) => item.isReadingChunk && item.id == chunkId);
+    if (index >= 0) _jumpTo(index, feedItems.length);
   }
 
   void _toggleSaveCard(ReaderItem card) async {
@@ -432,7 +625,8 @@ class _ReaderScreenState extends ConsumerState<ReaderScreen> {
     }
   }
 
-  Future<void> _handleGenerateCard(List<ReaderItem> feedItems, List<ReaderItem> chunks) async {
+  Future<void> _handleGenerateCard(
+      List<ReaderItem> feedItems, List<ReaderItem> chunks) async {
     if (chunks.isEmpty) return;
     final currentItem = (_currentIndex >= 0 && _currentIndex < feedItems.length)
         ? feedItems[_currentIndex]
@@ -475,7 +669,8 @@ class _ReaderScreenState extends ConsumerState<ReaderScreen> {
 
     // Stage 2: Seamless In-Place Cloud Upgrade
     unawaited(service
-        .generateCardForChunk(widget.documentId, chunkMap, _cardsByChunkSeq.length)
+        .generateCardForChunk(
+            widget.documentId, chunkMap, _cardsByChunkSeq.length)
         .then((deepMap) async {
       if (deepMap != null && mounted) {
         final deepItem = ReaderItem.fromJson({

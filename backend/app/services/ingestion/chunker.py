@@ -8,11 +8,15 @@ Boundary selection is driven by the Intelligent Reading Arrangement graph
 """
 
 import hashlib
+import logging
 import re
 from typing import Any, Dict, List, Tuple
 
 from app.services.ingestion.canonical import find_safe_sentence_boundaries
 from app.services.ingestion.arrangement import classify_block, UnitType
+from app.config import MAX_CHUNK_CHARS, MAX_CHUNK_WORDS, MIN_CHUNK_WORDS, TARGET_CHUNK_WORDS
+
+logger = logging.getLogger(__name__)
 
 try:
     from athena_rust_core import rust_plan_feed_chunks as _rust_plan_feed_chunks
@@ -20,8 +24,8 @@ except ImportError:
     _rust_plan_feed_chunks = None
 
 
-_FEED_MIN_WORDS = 25
-_FEED_MAX_WORDS = 90
+_FEED_MIN_WORDS = MIN_CHUNK_WORDS
+_FEED_MAX_WORDS = MAX_CHUNK_WORDS
 _CONTINUATION_START = re.compile(
     r"^(however|therefore|thus|moreover|furthermore|for example|for instance|"
     r"as a result|in contrast|because|but|and|so|this|these|they|it)\b",
@@ -73,7 +77,7 @@ def _split_oversized_unit(text: str, max_words: int) -> List[Tuple[int, int]]:
     boundaries = find_safe_sentence_boundaries(text)
 
     if not boundaries:
-        if _word_count(text) > 200:
+        if _word_count(text) > max_words or len(text) > MAX_CHUNK_CHARS:
             return _hard_split_offsets(text, max_words)
         return [(0, len(text))]
 
@@ -93,7 +97,7 @@ def _split_oversized_unit(text: str, max_words: int) -> List[Tuple[int, int]]:
         piece_text = text[p_start:p_end]
         piece_words = _word_count(piece_text)
 
-        if piece_words > 200:
+        if piece_words > max_words or len(piece_text) > MAX_CHUNK_CHARS:
             if current_end > current_start:
                 packed.append((current_start, current_end))
             sub_splits = _hard_split_offsets(piece_text, max_words)
@@ -106,7 +110,7 @@ def _split_oversized_unit(text: str, max_words: int) -> List[Tuple[int, int]]:
         current_text = text[current_start:p_end]
         current_words = _word_count(current_text)
 
-        if current_words <= max_words:
+        if current_words <= max_words and len(current_text) <= MAX_CHUNK_CHARS:
             current_end = p_end
         else:
             if current_end > current_start:
@@ -144,11 +148,15 @@ def _hard_split_offsets(text: str, max_words: int) -> List[Tuple[int, int]]:
 
     for i, ws in enumerate(word_starts):
         word_count += 1
-        if word_count >= max_words and i + 1 < len(word_starts):
-            chunk_end = word_starts[i + 1]
+        next_start = word_starts[i + 1] if i + 1 < len(word_starts) else len(text)
+        char_overflow = next_start - chunk_start > MAX_CHUNK_CHARS
+        if (word_count >= max_words or char_overflow) and i + 1 < len(word_starts):
+            chunk_end = ws if char_overflow and word_count > 1 else next_start
+            if chunk_end <= chunk_start:
+                continue
             splits.append((chunk_start, chunk_end))
             chunk_start = chunk_end
-            word_count = 0
+            word_count = 1 if char_overflow and chunk_end == ws else 0
 
     if chunk_start < len(text):
         splits.append((chunk_start, len(text)))
@@ -204,21 +212,7 @@ def _target_words_for_document(units: List[Dict[str, Any]]) -> int:
         for unit in units
         if unit["type"] != UnitType.HEADING and _word_count(unit["text"]) > 0
     ]
-    if not body_lengths:
-        return 56
-
-    body_lengths.sort()
-    median = body_lengths[len(body_lengths) // 2]
-    short_ratio = sum(length <= 30 for length in body_lengths) / len(body_lengths)
-    long_ratio = sum(length >= 90 for length in body_lengths) / len(body_lengths)
-
-    # These are document-shape profiles, not genre claims. A book with many short
-    # paragraphs gets a slightly smaller target; long-block books get more room.
-    if median <= 30 and short_ratio >= 0.55:
-        return 48
-    if median >= 70 or long_ratio >= 0.35:
-        return 64
-    return 56
+    return TARGET_CHUNK_WORDS
 
 
 def _make_reading_atoms(
@@ -366,7 +360,7 @@ def _plan_feed_chunks(
             atom_para_ids = [int(a["paragraph_id"]) for a in atoms]
             atom_is_sentence = [bool(a.get("boundary_after") == "sentence") for a in atoms]
             atom_starts_section = [bool(a.get("starts_section", False)) for a in atoms]
-            return _rust_plan_feed_chunks(
+            rust_ranges = _rust_plan_feed_chunks(
                 canonical_text,
                 atom_starts,
                 atom_ends,
@@ -376,8 +370,21 @@ def _plan_feed_chunks(
                 atom_starts_section,
                 int(target_words),
             )
-        except Exception:
-            pass
+            valid_rust_ranges = bool(rust_ranges) and rust_ranges[0][0] == 0 and rust_ranges[-1][1] == len(atoms)
+            valid_rust_ranges = valid_rust_ranges and all(
+                rust_ranges[i][1] == rust_ranges[i + 1][0]
+                for i in range(len(rust_ranges) - 1)
+            )
+            if valid_rust_ranges and all(
+                0 <= start < end <= len(atoms)
+                and _word_count(canonical_text[atoms[start]["start"]:atoms[end - 1]["end"]]) <= _FEED_MAX_WORDS
+                and len(canonical_text[atoms[start]["start"]:atoms[end - 1]["end"]]) <= MAX_CHUNK_CHARS
+                for start, end in rust_ranges
+            ):
+                return rust_ranges
+            logger.warning("Rust chunk planner returned ranges outside the shared mobile bounds; using Python planner")
+        except Exception as exc:
+            logger.warning("Rust chunk planner failed; using Python planner: %s", exc)
 
     min_words = max(_FEED_MIN_WORDS, int(target_words * 0.55))
     costs = [float("inf")] * (len(atoms) + 1)
@@ -390,7 +397,8 @@ def _plan_feed_chunks(
             if end > start and atoms[end]["starts_section"]:
                 break
             words += atoms[end]["word_count"]
-            if words > _FEED_MAX_WORDS and end > start:
+            candidate_text = canonical_text[atoms[start]["start"]:atoms[end]["end"]]
+            if (words > _FEED_MAX_WORDS or len(candidate_text) > MAX_CHUNK_CHARS) and end > start:
                 break
 
             deviation = (words - target_words) / target_words
@@ -419,7 +427,7 @@ def _plan_feed_chunks(
                 next_index[start] = end + 1
 
             # A single oversized indivisible sentence/paragraph is retained whole.
-            if words > _FEED_MAX_WORDS:
+            if words > _FEED_MAX_WORDS or len(candidate_text) > MAX_CHUNK_CHARS:
                 break
 
     ranges: List[Tuple[int, int]] = []

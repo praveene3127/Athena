@@ -3,7 +3,6 @@ import 'package:flutter/services.dart';
 import 'package:athena/core/theme/theme.dart';
 import 'package:athena/core/theme/reader_theme.dart';
 import 'package:athena/models/document.dart';
-import 'package:athena/services/lossless_chunker.dart';
 import 'package:athena/services/local_database.dart';
 
 /// L7 Editorial Print & Monospace Reading Card.
@@ -355,7 +354,7 @@ class _ChunkWidgetState extends State<ChunkWidget> {
   }
 
   Widget _buildReadingContent(ReaderThemeConfig theme, String text, bool hasCode) {
-    final cleanText = sanitizeProseSpacing(text);
+    final cleanText = text;
 
     if (hasCode) {
       return Padding(

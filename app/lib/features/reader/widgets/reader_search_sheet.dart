@@ -69,10 +69,12 @@ class _ReaderSearchSheetState extends State<ReaderSearchSheet> {
 
     setState(() => _isSearching = true);
     try {
-      final results = await LocalDatabase.instance.searchChunks(widget.documentId, q);
+      final results =
+          await LocalDatabase.instance.searchChunks(widget.documentId, q);
       if (mounted) {
+        final resolved = results.isNotEmpty ? results : _searchInMemory(q);
         setState(() {
-          _searchResults = results;
+          _searchResults = resolved;
           _isSearching = false;
         });
       }
@@ -80,16 +82,7 @@ class _ReaderSearchSheetState extends State<ReaderSearchSheet> {
       debugPrint('[Athena] Search error: $e');
       if (mounted) {
         // Fallback to in-memory search over feedItems
-        final lower = q.toLowerCase();
-        final memoryMatches = widget.feedItems
-            .where((it) => it.isReadingChunk && it.rawText.toLowerCase().contains(lower))
-            .map((it) => {
-                  'id': it.id,
-                  'sequence': it.sequence,
-                  'raw_text': it.rawText,
-                  'section_title': it.sectionTitle,
-                })
-            .toList();
+        final memoryMatches = _searchInMemory(q);
 
         setState(() {
           _searchResults = memoryMatches;
@@ -97,6 +90,20 @@ class _ReaderSearchSheetState extends State<ReaderSearchSheet> {
         });
       }
     }
+  }
+
+  List<Map<String, dynamic>> _searchInMemory(String query) {
+    final lower = query.toLowerCase();
+    return widget.feedItems
+        .where((item) =>
+            item.isReadingChunk && item.rawText.toLowerCase().contains(lower))
+        .map((item) => {
+              'id': item.id,
+              'sequence': item.sequence,
+              'raw_text': item.rawText,
+              'section_title': item.sectionTitle,
+            })
+        .toList();
   }
 
   @override
@@ -133,14 +140,20 @@ class _ReaderSearchSheetState extends State<ReaderSearchSheet> {
                 controller: _queryController,
                 autofocus: true,
                 onChanged: _performSearch,
-                style: TextStyle(fontFamily: AppTheme.fontUI, color: theme.textColor, fontSize: 14),
+                style: TextStyle(
+                    fontFamily: AppTheme.fontUI,
+                    color: theme.textColor,
+                    fontSize: 14),
                 decoration: InputDecoration(
                   hintText: 'Search text, concepts, or keywords...',
-                  hintStyle: TextStyle(color: theme.textMutedColor, fontSize: 14),
-                  prefixIcon: Icon(Icons.search_rounded, color: theme.accentColor, size: 20),
+                  hintStyle:
+                      TextStyle(color: theme.textMutedColor, fontSize: 14),
+                  prefixIcon: Icon(Icons.search_rounded,
+                      color: theme.accentColor, size: 20),
                   suffixIcon: _queryController.text.isNotEmpty
                       ? IconButton(
-                          icon: Icon(Icons.clear_rounded, size: 18, color: theme.textMutedColor),
+                          icon: Icon(Icons.clear_rounded,
+                              size: 18, color: theme.textMutedColor),
                           onPressed: () {
                             _queryController.clear();
                             _performSearch('');
@@ -164,8 +177,13 @@ class _ReaderSearchSheetState extends State<ReaderSearchSheet> {
               child: _searchResults.isEmpty
                   ? Center(
                       child: Text(
-                        _queryController.text.isEmpty ? 'Type to search across the entire book' : 'No matches found',
-                        style: TextStyle(fontFamily: AppTheme.fontUI, color: theme.textMutedColor, fontSize: 13),
+                        _queryController.text.isEmpty
+                            ? 'Type to search across the entire book'
+                            : 'No matches found',
+                        style: TextStyle(
+                            fontFamily: AppTheme.fontUI,
+                            color: theme.textMutedColor,
+                            fontSize: 13),
                       ),
                     )
                   : ListView.builder(
@@ -199,7 +217,9 @@ class _ReaderSearchSheetState extends State<ReaderSearchSheet> {
                             Navigator.of(context).pop();
                             // Locate index in feedItems
                             final targetIndex = widget.feedItems.indexWhere(
-                              (it) => it.id == chunkId || (seq != null && it.sequence == seq),
+                              (it) =>
+                                  it.id == chunkId ||
+                                  (seq != null && it.sequence == seq),
                             );
                             if (targetIndex >= 0) {
                               widget.onJumpToItemIndex(targetIndex);
@@ -215,4 +235,3 @@ class _ReaderSearchSheetState extends State<ReaderSearchSheet> {
     );
   }
 }
-

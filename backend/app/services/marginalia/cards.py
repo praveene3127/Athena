@@ -779,7 +779,11 @@ def generate_context_cards(
         used_titles.add(clean_heading.lower())
         used_titles.add(card_title.lower())
         existing_bodies.append(body.strip())
-        seen_wiki_titles.add((wiki_data.get("title") if wiki_data else concept.name).lower())
+        wiki_title = next(
+            (c["title"] for c in card_citations if "wikipedia.org" in c.get("url", "").lower() or c.get("publisher") == "Wikipedia"),
+            None,
+        )
+        seen_wiki_titles.add((wiki_title or concept.name).lower())
         section_card_counts[sec_title] += 1
         concept.status = "carded"
 

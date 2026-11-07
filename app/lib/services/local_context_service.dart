@@ -4,6 +4,7 @@ import 'dart:convert';
 import 'package:crypto/crypto.dart';
 import 'package:dio/dio.dart';
 import 'package:shared_preferences/shared_preferences.dart';
+import 'package:athena/services/secure_storage_service.dart';
 
 /// Retrieves cited 4-archetype context cards (EMPIRICAL STUDY, CRITICAL DEBATE,
 /// HISTORICAL CONTEXT, CORE PARADOX) on device using the user's saved BYOK API key
@@ -33,7 +34,8 @@ class LocalContextService {
       final chunk = targetChunks[i];
       final seq = (chunk['sequence'] as num?)?.toInt() ?? (i + 1);
       if (seq % 3 == 0) {
-        final card = await generateCardForChunk(documentId, chunk, cards.length);
+        final card =
+            await generateCardForChunk(documentId, chunk, cards.length);
         if (card != null) {
           cards.add(card);
         }
@@ -55,7 +57,8 @@ class LocalContextService {
       // Place context cards at intervals of 3 chunks: sequence 3, 6, 9, 12...
       if (sequence % 3 != 0) continue;
 
-      final card = generateSpeculativeDraftCard(documentId, chunk, cards.length);
+      final card =
+          generateSpeculativeDraftCard(documentId, chunk, cards.length);
       final title = (card['title'] as String?)?.toLowerCase() ?? '';
       if (seen.add(title)) {
         cards.add(card);
@@ -78,7 +81,9 @@ class LocalContextService {
     final concept = _extractSalientConcept(passage);
 
     var exactQuote = _exactQuote(passage, concept);
-    if (exactQuote == null || exactQuote.isEmpty || !passage.contains(exactQuote)) {
+    if (exactQuote == null ||
+        exactQuote.isEmpty ||
+        !passage.contains(exactQuote)) {
       exactQuote = _fallbackSentence(passage);
     }
     if (!passage.contains(exactQuote)) {
@@ -102,10 +107,16 @@ class LocalContextService {
       'concept_name': concept,
       'card_type': archetype.toLowerCase().replaceAll(' ', '_'),
       'title': '$archetype: $concept',
-      'body': 'Question: How does the author ground $concept in this passage?\n||REVEAL||\nKey Thesis: "$exactQuote"$crossRef',
-      'why_here': 'Instant local structural draft for “$concept”. Grounded to author’s text.',
+      'body':
+          'Question: How does the author ground $concept in this passage?\n||REVEAL||\nKey Thesis: "$exactQuote"$crossRef',
+      'why_here':
+          'Instant local structural draft for “$concept”. Grounded to author’s text.',
       'citations_json': jsonEncode([
-        {'title': 'Primary Author Passage', 'publisher': 'Direct Text Anchor', 'url': ''}
+        {
+          'title': 'Primary Author Passage',
+          'publisher': 'Direct Text Anchor',
+          'url': ''
+        }
       ]),
       'exact_quote': exactQuote,
       'support_status': 'grounded',
@@ -135,7 +146,9 @@ class LocalContextService {
 
     // 2. Extract verbatim exact quote from chunk
     var exactQuote = _exactQuote(passage, concept);
-    if (exactQuote == null || exactQuote.isEmpty || !passage.contains(exactQuote)) {
+    if (exactQuote == null ||
+        exactQuote.isEmpty ||
+        !passage.contains(exactQuote)) {
       exactQuote = _fallbackSentence(passage);
     }
     if (!passage.contains(exactQuote)) {
@@ -148,9 +161,11 @@ class LocalContextService {
     try {
       prefs = await SharedPreferences.getInstance();
     } catch (e) {
-      debugPrint('[Athena] SharedPreferences notice in LocalContextService: $e');
+      debugPrint(
+          '[Athena] SharedPreferences notice in LocalContextService: $e');
     }
-    final apiKey = prefs?.getString('athena_ai_primary_api_key');
+    final apiKey = await SecureStorageService.instance
+        .getAIKey('athena_ai_primary_api_key');
     final provider = prefs?.getString('athena_ai_primary_provider') ?? 'gemini';
     final model = prefs?.getString('athena_ai_primary_model');
     final baseUrl = prefs?.getString('athena_ai_primary_base_url');
@@ -170,10 +185,13 @@ class LocalContextService {
     }
 
     // If AI card synthesis succeeded
-    if (aiCard != null && aiCard['body'] != null && aiCard['body'].toString().isNotEmpty) {
+    if (aiCard != null &&
+        aiCard['body'] != null &&
+        aiCard['body'].toString().isNotEmpty) {
       final title = aiCard['title']?.toString() ?? '$archetype: $concept';
       final body = aiCard['body']?.toString() ?? '';
-      final citations = aiCard['citations'] is List ? aiCard['citations'] as List : [];
+      final citations =
+          aiCard['citations'] is List ? aiCard['citations'] as List : [];
       final id = sha256
           .convert(utf8.encode('$documentId:$chunkId:$title'))
           .toString()
@@ -187,7 +205,8 @@ class LocalContextService {
         'card_type': 'explain',
         'title': title,
         'body': body,
-        'why_here': 'Direct AI marginalia for “$concept”. Grounded to the author’s text.',
+        'why_here':
+            'Direct AI marginalia for “$concept”. Grounded to the author’s text.',
         'citations_json': jsonEncode(citations),
         'exact_quote': exactQuote,
         'support_status': 'fully_supported',
@@ -195,7 +214,7 @@ class LocalContextService {
         'generation_mode': 'ai_grounded',
         'is_speculative_draft': false,
         'verified': 1,
-      'saved': 0,
+        'saved': 0,
         'dismissed': 0,
         'created_at': DateTime.now().toUtc().toIso8601String(),
       };
@@ -204,8 +223,10 @@ class LocalContextService {
     // 4. Fallback: Query Wikipedia or generate structured local archetype
     final wikiResult = await _lookup(concept);
     final wikiTitle = wikiResult?['title'] ?? concept;
-    final wikiExtract = wikiResult?['extract'] ?? _summarizeLocally(passage, concept);
-    final wikiUrl = wikiResult?['url'] ?? 'https://en.wikipedia.org/wiki/${Uri.encodeComponent(wikiTitle.replaceAll(' ', '_'))}';
+    final wikiExtract =
+        wikiResult?['extract'] ?? _summarizeLocally(passage, concept);
+    final wikiUrl = wikiResult?['url'] ??
+        'https://en.wikipedia.org/wiki/${Uri.encodeComponent(wikiTitle.replaceAll(' ', '_'))}';
 
     final body = _formatArchetypeBody(archetype, concept, wikiExtract);
     final title = '$archetype: $wikiTitle';
@@ -222,7 +243,8 @@ class LocalContextService {
       'card_type': 'explain',
       'title': title,
       'body': body,
-      'why_here': 'Grounded context for “$concept”. Exact quote copied from this passage; verified from independent sources.',
+      'why_here':
+          'Grounded context for “$concept”. Exact quote copied from this passage; verified from independent sources.',
       'citations_json': jsonEncode([
         {'title': wikiTitle, 'publisher': 'Wikipedia', 'url': wikiUrl}
       ]),
@@ -238,7 +260,8 @@ class LocalContextService {
     };
   }
 
-  String _formatArchetypeBody(String archetype, String concept, String extract) {
+  String _formatArchetypeBody(
+      String archetype, String concept, String extract) {
     final cleanExtract = _leadingSentences(extract, 75);
     switch (archetype) {
       case 'EMPIRICAL STUDY':
@@ -307,8 +330,7 @@ Respond ONLY with valid JSON with this exact schema:
       String? rawResponse;
 
       if (pKey == 'gemini') {
-        final targetModel =
-            (model != null && model.isNotEmpty) ? model : '';
+        final targetModel = (model != null && model.isNotEmpty) ? model : '';
         if (targetModel.isEmpty) return null;
         final url =
             'https://generativelanguage.googleapis.com/v1beta/models/$targetModel:generateContent?key=$apiKey';
@@ -330,9 +352,7 @@ Respond ONLY with valid JSON with this exact schema:
           }
         }
       } else if (pKey == 'groq') {
-        final targetModel = (model != null && model.isNotEmpty)
-            ? model
-            : '';
+        final targetModel = (model != null && model.isNotEmpty) ? model : '';
         if (targetModel.isEmpty) return null;
         final res = await client.post(
           'https://api.groq.com/openai/v1/chat/completions',
@@ -350,9 +370,7 @@ Respond ONLY with valid JSON with this exact schema:
               res.data['choices']?[0]?['message']?['content']?.toString();
         }
       } else if (pKey == 'openrouter') {
-        final targetModel = (model != null && model.isNotEmpty)
-            ? model
-            : '';
+        final targetModel = (model != null && model.isNotEmpty) ? model : '';
         if (targetModel.isEmpty) return null;
         final res = await client.post(
           'https://openrouter.ai/api/v1/chat/completions',
@@ -369,8 +387,7 @@ Respond ONLY with valid JSON with this exact schema:
               res.data['choices']?[0]?['message']?['content']?.toString();
         }
       } else if (pKey == 'openai') {
-        final targetModel =
-            (model != null && model.isNotEmpty) ? model : '';
+        final targetModel = (model != null && model.isNotEmpty) ? model : '';
         if (targetModel.isEmpty) return null;
         final res = await client.post(
           'https://api.openai.com/v1/chat/completions',
@@ -388,9 +405,7 @@ Respond ONLY with valid JSON with this exact schema:
               res.data['choices']?[0]?['message']?['content']?.toString();
         }
       } else if (pKey == 'anthropic') {
-        final targetModel = (model != null && model.isNotEmpty)
-            ? model
-            : '';
+        final targetModel = (model != null && model.isNotEmpty) ? model : '';
         if (targetModel.isEmpty) return null;
         final res = await client.post(
           'https://api.anthropic.com/v1/messages',
@@ -425,22 +440,40 @@ Respond ONLY with valid JSON with this exact schema:
         }
       }
     } catch (e) {
-        debugPrint('Athena caught error: $e');
-      }
+      debugPrint('Athena caught error: $e');
+    }
     return null;
   }
 
   String _extractSalientConcept(String passage) {
     final phrases = RegExp(r'\b[A-Z][a-z]{3,}(?:\s+[A-Z][a-z]{3,}){0,2}\b');
-    final matches = phrases.allMatches(passage).map((m) => m.group(0)!.trim()).toList();
+    final matches =
+        phrases.allMatches(passage).map((m) => m.group(0)!.trim()).toList();
     const common = {
-      'The', 'This', 'That', 'These', 'Those', 'Chapter', 'Section', 'There', 'When',
-      'Where', 'While', 'After', 'Before', 'Then', 'They', 'Here', 'Some', 'Many'
+      'The',
+      'This',
+      'That',
+      'These',
+      'Those',
+      'Chapter',
+      'Section',
+      'There',
+      'When',
+      'Where',
+      'While',
+      'After',
+      'Before',
+      'Then',
+      'They',
+      'Here',
+      'Some',
+      'Many'
     };
     for (final m in matches) {
       if (!common.contains(m) && m.length >= 4) return m;
     }
-    final words = passage.split(RegExp(r'\s+')).where((w) => w.length >= 6).toList();
+    final words =
+        passage.split(RegExp(r'\s+')).where((w) => w.length >= 6).toList();
     if (words.isNotEmpty) {
       return words.first.replaceAll(RegExp(r'[^A-Za-z]'), '');
     }
@@ -448,7 +481,10 @@ Respond ONLY with valid JSON with this exact schema:
   }
 
   String _summarizeLocally(String passage, String concept) {
-    final sentences = passage.split(RegExp(r'(?<=[.!?])\s+')).where((s) => s.trim().length >= 20).toList();
+    final sentences = passage
+        .split(RegExp(r'(?<=[.!?])\s+'))
+        .where((s) => s.trim().length >= 20)
+        .toList();
     if (sentences.isNotEmpty) {
       return sentences.first.trim();
     }

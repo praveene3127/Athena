@@ -103,7 +103,6 @@ class _ProcessingScreenState extends ConsumerState<ProcessingScreen>
   void dispose() {
     _pollTimer?.cancel();
     WidgetsBinding.instance.removeObserver(this);
-    ref.invalidate(documentsProvider);
     super.dispose();
   }
 
@@ -141,6 +140,7 @@ class _ProcessingScreenState extends ConsumerState<ProcessingScreen>
 
         if (status.isDone) {
           _pollTimer?.cancel();
+          ref.invalidate(documentsProvider);
           if (status.isReady) {
             Future.delayed(const Duration(milliseconds: 300), () {
               if (mounted) context.go('/reader/${widget.documentId}');
@@ -216,7 +216,10 @@ class _ProcessingScreenState extends ConsumerState<ProcessingScreen>
     try {
       final client = ref.read(apiClientProvider);
       await client.deleteDocument(widget.documentId);
-      if (mounted) context.go('/');
+      if (mounted) {
+        ref.invalidate(documentsProvider);
+        context.go('/');
+      }
     } catch (e) {
       if (mounted) context.go('/');
     }

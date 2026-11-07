@@ -1,9 +1,8 @@
+import re
 import time
 import secrets
-from collections import deque
-from threading import Lock
 from typing import Any, Dict, Optional
-from fastapi import APIRouter, Depends, Header
+from fastapi import APIRouter, Depends, Header, Request
 from pydantic import BaseModel, Field
 from sqlmodel import Session, select
 
@@ -16,26 +15,13 @@ from app.db import get_session
 from app.errors import AppException
 from app.models import ReadingChunk, ContextCard, DocumentChapter
 from app.services.marginalia.llm import LLMService
+from app.rate_limit import limiter
 
 router = APIRouter(tags=["ask"])
 
-# In-memory sliding-window rate limiter (12 req / 60 seconds per CLAUDE.md §2 & §8)
-_request_timestamps = deque()
-_rate_limit_lock = Lock()
-
-
-def check_rate_limit() -> bool:
-    """Returns True if request is allowed, False if rate limited."""
-    with _rate_limit_lock:
-        now = time.time()
-        while _request_timestamps and _request_timestamps[0] < now - 60.0:
-            _request_timestamps.popleft()
-
-        if len(_request_timestamps) >= ASK_RATE_LIMIT:
-            return False
-
-        _request_timestamps.append(now)
-        return True
+def check_rate_limit(client_ip: str = "unknown") -> bool:
+    """Returns True if this client IP is below the per-minute ask limit."""
+    return limiter.allow(f"ask:{client_ip}", ASK_RATE_LIMIT)
 
 
 class AskRequest(BaseModel):
@@ -72,6 +58,7 @@ def require_context_proxy_token(token: Optional[str]) -> bool:
 @router.post("/api/ask")
 def ask_about_passage(
     req: AskRequest,
+    request: Request,
     session: Session = Depends(get_session),
 ) -> Dict[str, Any]:
     """
@@ -79,7 +66,7 @@ def ask_about_passage(
     Always returns HTTP 200 with status: ok | unverified | unavailable | not_configured | rate_limited.
     """
     # 1. Rate limit check
-    if not check_rate_limit():
+    if not check_rate_limit(request.client.host if request.client else "unknown"):
         return {
             "status": "rate_limited",
             "answer": None,
@@ -212,12 +199,13 @@ def ask_about_passage(
 @router.post("/api/ask/local")
 def ask_about_local_passage(
     req: LocalAskRequest,
+    request: Request,
     context_token: Optional[str] = Header(default=None, alias="X-Athena-Context-Token"),
 ) -> Dict[str, Any]:
     """Authenticated Gemini proxy for excerpts from the phone-local database."""
     if not require_context_proxy_token(context_token):
         raise AppException("UNAUTHORIZED", "AI service authentication failed", status_code=401)
-    if not check_rate_limit():
+    if not check_rate_limit(request.client.host if request.client else "unknown"):
         return {"status": "rate_limited", "answer": None}
     llm = LLMService()
     if not llm.is_gemini_configured:
@@ -237,12 +225,13 @@ def ask_about_local_passage(
 @router.post("/api/context/local")
 def generate_local_context(
     req: LocalContextRequest,
+    request: Request,
     context_token: Optional[str] = Header(default=None, alias="X-Athena-Context-Token"),
 ) -> Dict[str, Any]:
     """Search-grounded context for a phone-local chunk; never accepts a PDF."""
     if not require_context_proxy_token(context_token):
         raise AppException("UNAUTHORIZED", "AI service authentication failed", status_code=401)
-    if not check_rate_limit():
+    if not check_rate_limit(request.client.host if request.client else "unknown"):
         return {"status": "rate_limited", "card": None}
     if req.exact_quote not in req.passage_text:
         return {"status": "invalid_quote", "card": None}

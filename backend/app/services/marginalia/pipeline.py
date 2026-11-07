@@ -62,7 +62,7 @@ RE_RABBIT_HOLE_TRIGGER = re.compile(
 
 # 5. Meta-Editorial / Boilerplate Penalty (-0.45)
 RE_EDITORIAL_PENALTY = re.compile(
-    r"\b(?:this edition|translator'?s note|spelling and punctuation|footnote|in the next chapter|table of contents|editor'?s note|published by|all rights reserved|typeset in|printed in)\b",
+    r"\b(?:all rights reserved|isbn|library of congress|printed in)\b",
     re.IGNORECASE,
 )
 

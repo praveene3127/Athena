@@ -48,13 +48,23 @@ def get_shared_wikipedia_http_client(user_agent: Optional[str] = None, timeout: 
     global _shared_wiki_http_client
     if _shared_wiki_http_client is None or _shared_wiki_http_client.is_closed:
         ua = user_agent or f"Athena/0.1 (hackathon; contact: {WIKI_CONTACT})"
-        _shared_wiki_http_client = httpx.Client(
-            headers={"User-Agent": ua},
-            timeout=timeout,
-            follow_redirects=True,
-            limits=httpx.Limits(max_keepalive_connections=10, max_connections=20),
-            http2=True,
-        )
+        try:
+            _shared_wiki_http_client = httpx.Client(
+                headers={"User-Agent": ua},
+                timeout=timeout,
+                follow_redirects=True,
+                limits=httpx.Limits(max_keepalive_connections=10, max_connections=20),
+                http2=True,
+            )
+        except (ImportError, Exception) as exc:
+            logger.warning("Failed to initialize httpx.Client with http2=True, falling back to http2=False: %s", exc)
+            _shared_wiki_http_client = httpx.Client(
+                headers={"User-Agent": ua},
+                timeout=timeout,
+                follow_redirects=True,
+                limits=httpx.Limits(max_keepalive_connections=10, max_connections=20),
+                http2=False,
+            )
     return _shared_wiki_http_client
 
 

@@ -55,9 +55,6 @@ const BANNED_GENERIC_SLOP_PHRASES: &[&str] = &[
 ];
 
 // Globally compiled LazyLock Regexes & Automatons (zero runtime re-compilation)
-static SPACED_CHAR_RE: LazyLock<Regex> = LazyLock::new(|| {
-    Regex::new(r"(?i)\b([a-z])\s+(?:\1\s+){2,}[a-z]\b").unwrap()
-});
 static LETTER_SPACED_RE: LazyLock<Regex> = LazyLock::new(|| {
     Regex::new(r"\b[A-Za-z](?:\s+[A-Za-z]){3,}\b").unwrap()
 });
@@ -109,6 +106,37 @@ fn calculate_shannon_entropy(s: &str) -> f64 {
     entropy
 }
 
+fn remove_spaced_repeated_chars(text: &str) -> String {
+    let words: Vec<&str> = text.split_whitespace().collect();
+    if words.len() < 4 {
+        return text.to_string();
+    }
+    let mut kept = Vec::with_capacity(words.len());
+    let mut i = 0;
+    while i < words.len() {
+        let w = words[i];
+        if w.chars().count() == 1 && w.chars().next().unwrap().is_ascii_alphabetic() {
+            let target_char = w.chars().next().unwrap().to_ascii_lowercase();
+            let mut j = i + 1;
+            while j < words.len() {
+                let next_w = words[j];
+                if next_w.chars().count() == 1 && next_w.chars().next().unwrap().to_ascii_lowercase() == target_char {
+                    j += 1;
+                } else {
+                    break;
+                }
+            }
+            if j - i >= 4 {
+                i = j;
+                continue;
+            }
+        }
+        kept.push(words[i]);
+        i += 1;
+    }
+    kept.join(" ")
+}
+
 /// Core prose self-healing implementation in pure Rust.
 pub fn self_heal_prose_text_core(text: &str) -> String {
     if text.is_empty() {
@@ -120,7 +148,7 @@ pub fn self_heal_prose_text_core(text: &str) -> String {
     let technical_set: HashSet<&str> = KNOWN_TECHNICAL_WORDS.iter().copied().collect();
 
     // 1. Spaced char runs removal: e.g. "i i i i i" or "u u u u"
-    let cleaned = SPACED_CHAR_RE.replace_all(text, "");
+    let cleaned = remove_spaced_repeated_chars(text);
 
     // 2. Letter-spaced imprint collapse: e.g. "L I B E R T Y" -> "LIBERTY"
     let cleaned = LETTER_SPACED_RE.replace_all(&cleaned, |caps: &regex::Captures| {
@@ -219,8 +247,17 @@ pub fn plan_feed_chunks_core(
         return Err("Mismatched atom slice lengths".to_string());
     }
 
-    let min_words = 40.max((target_words as f64 * 0.55) as usize);
-    let max_words = 340usize;
+    let min_words = 35.max((target_words as f64 * 0.70) as usize);
+    let max_words = 65usize;
+    let max_chars = 380usize;
+
+    // Fast char-to-byte offset lookup vector so character offsets from Python
+    // never cause byte boundary panics on multi-byte UTF-8 Unicode text!
+    let char_to_byte: Vec<usize> = canonical_text
+        .char_indices()
+        .map(|(b, _)| b)
+        .chain(std::iter::once(canonical_text.len()))
+        .collect();
 
     let mut costs = vec![f64::INFINITY; n + 1];
     let mut next_index = vec![n; n];
@@ -233,7 +270,8 @@ pub fn plan_feed_chunks_core(
                 break;
             }
             words += atom_words[end];
-            if words > max_words && end > start {
+            let chars = atom_ends[end].saturating_sub(atom_starts[start]);
+            if (words > max_words || chars > max_chars) && end > start {
                 break;
             }
 
@@ -255,8 +293,10 @@ pub fn plan_feed_chunks_core(
                 let same_para = atom_para_ids[end] == atom_para_ids[end + 1];
 
                 let boundary_cost = if same_para {
-                    if left_end <= canonical_text.len() && right_start <= canonical_text.len() {
-                        let sep = &canonical_text[left_end..right_start];
+                    let left_byte = char_to_byte.get(left_end).copied().unwrap_or(canonical_text.len());
+                    let right_byte = char_to_byte.get(right_start).copied().unwrap_or(canonical_text.len());
+                    if left_byte <= right_byte && right_byte <= canonical_text.len() {
+                        let sep = canonical_text.get(left_byte..right_byte).unwrap_or("");
                         if sep.contains('\n') {
                             0.20
                         } else {

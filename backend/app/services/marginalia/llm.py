@@ -109,11 +109,19 @@ _shared_llm_http_client: Optional[httpx.Client] = None
 def get_shared_llm_http_client() -> httpx.Client:
     global _shared_llm_http_client
     if _shared_llm_http_client is None or _shared_llm_http_client.is_closed:
-        _shared_llm_http_client = httpx.Client(
-            timeout=LLM_TIMEOUT_S,
-            limits=httpx.Limits(max_keepalive_connections=10, max_connections=20),
-            http2=True,
-        )
+        try:
+            _shared_llm_http_client = httpx.Client(
+                timeout=LLM_TIMEOUT_S,
+                limits=httpx.Limits(max_keepalive_connections=10, max_connections=20),
+                http2=True,
+            )
+        except (ImportError, Exception) as exc:
+            logger.warning("Failed to initialize httpx.Client with http2=True, falling back to http2=False: %s", exc)
+            _shared_llm_http_client = httpx.Client(
+                timeout=LLM_TIMEOUT_S,
+                limits=httpx.Limits(max_keepalive_connections=10, max_connections=20),
+                http2=False,
+            )
     return _shared_llm_http_client
 
 
@@ -137,7 +145,7 @@ class AnthropicAdapter:
                 user_messages.append({"role": m.get("role", "user"), "content": m.get("content", "")})
 
         payload = {
-            "model": model or "claude-3-5-sonnet-20241022",
+            "model": model or "",
             "max_tokens": 1024,
             "messages": user_messages,
         }
@@ -210,7 +218,7 @@ class LLMService:
         if client is not None:
             self._clients = [client]
             self._openai_clients = [client]
-            self.model = model or LLM_MODEL or "gpt-4o-mini"
+            self.model = model or LLM_MODEL or ""
             self._endpoints = [{
                 "type": "openai",
                 "provider": "custom",
@@ -220,7 +228,7 @@ class LLMService:
             return
 
         if api_key:
-            self.model = model or LLM_MODEL or "gpt-4o-mini"
+            self.model = model or LLM_MODEL or ""
             provider_base_url = base_url or LLM_BASE_URL
             kwargs = {
                 "api_key": api_key,
@@ -254,9 +262,7 @@ class LLMService:
         if active_settings and (active_settings.primary_api_key or active_settings.primary_provider == "custom"):
             p_prov = (active_settings.primary_provider or "openrouter").lower()
             p_key = active_settings.primary_api_key or ""
-            p_model = model or active_settings.primary_model or (
-                "gemini-2.5-flash" if p_prov == "gemini" else "gpt-4o-mini"
-            )
+            p_model = model or active_settings.primary_model or ""
             p_url = active_settings.primary_base_url
 
             self.model = p_model
@@ -290,9 +296,7 @@ class LLMService:
                 f_prov = active_settings.fallback_provider.lower()
                 f_key = active_settings.fallback_api_key or ""
                 f_url = active_settings.fallback_base_url
-                f_model = active_settings.fallback_model or (
-                    "gemini-2.5-flash" if f_prov == "gemini" else "gpt-4o-mini"
-                )
+                f_model = active_settings.fallback_model or ""
 
                 if f_prov == "gemini":
                     f_client = genai.Client(
@@ -327,7 +331,7 @@ class LLMService:
             for key in (GEMINI_API_KEY_PRIMARY, GEMINI_API_KEY_SECONDARY)
             if key and key.strip()
         ]
-        self.model = model or (GEMINI_MODEL if gemini_keys and not api_key else None) or LLM_MODEL or "gpt-4o-mini"
+        self.model = model or (GEMINI_MODEL if gemini_keys and not api_key else None) or LLM_MODEL or ""
         if gemini_keys and not api_key:
             for key in gemini_keys:
                 c = genai.Client(
@@ -390,14 +394,14 @@ class LLMService:
                 "type": "gemini",
                 "provider": "gemini",
                 "client": c,
-                "model": self.model or "gemini-2.5-flash",
+                "model": self.model or "",
             })
         for c in self._openai_clients:
             eps.append({
                 "type": "openai",
                 "provider": "openai",
                 "client": c,
-                "model": self.model or "gpt-4o-mini",
+                "model": self.model or "",
             })
         return eps
 
@@ -519,8 +523,9 @@ class LLMService:
         if not self.is_configured:
             return None
 
+        prev_tag = f"<prev_context>\n{previous_context}\n</prev_context>\n\n" if previous_context else ""
         prompt = (
-            f"{(f'<prev_context>\n{previous_context}\n</prev_context>\n\n') if previous_context else ''}"
+            f"{prev_tag}"
             f"<passage>\n{passage_text}\n</passage>\n\n"
             f"<extract>\n{extract_text}\n</extract>"
         )
@@ -529,7 +534,7 @@ class LLMService:
         for idx, ep in enumerate(endpoints):
             client = ep["client"]
             ep_type = ep["type"]
-            ep_model = ep.get("model") or self.model or "gpt-4o-mini"
+            ep_model = ep.get("model") or self.model or ""
             try:
                 if ep_type == "gemini":
                     response = client.models.generate_content(
@@ -683,6 +688,7 @@ class LLMService:
             f"{flavor_guidance}"
         )
 
+        ref_tag = f"<reference_context>\n{reference_context}\n</reference_context>\n\n" if reference_context else ""
         prompt = (
             f"You are curating an active reading Context Card (High Bayesian Surprise Marginalia) "
             f"for the concept or claim <concept>{concept_name}</concept> in the following book passage.\n"
@@ -697,7 +703,7 @@ class LLMService:
             "- BANNED PHRASES: Do NOT begin with 'In this passage', 'The author highlights', 'The author explains', 'This passage illustrates', 'reminds the reader', or 'Studies have shown that'.\n"
             "- Execute a 2-Hop Orthogonal Lookup using Google Search to introduce verified external facts, named researchers, sample sizes, archival dates, or modern counter-evidence that DO NOT appear in the passage.\n\n"
             f"{archetype_mandate}"
-            f"{(f'<reference_context>\n{reference_context}\n</reference_context>\n\n') if reference_context else ''}"
+            f"{ref_tag}"
             "Editorial Archetypes Reference:\n\n"
             "1. EMPIRICAL STUDY: (When the author references a study, experiment, statistic, or testable human behavior).\n"
             "   Search: \"<claim/study> replication crisis meta-analysis sample size criticism\" or modern 2015-2026 empirical studies.\n"
@@ -730,15 +736,15 @@ class LLMService:
         for idx, ep in enumerate(endpoints):
             client = ep["client"]
             ep_type = ep["type"]
-            ep_model = ep.get("model") or self.model or "gpt-4o-mini"
+            ep_model = ep.get("model") or self.model or ""
             raw_text = None
             gemini_response = None
 
             try:
                 if ep_type == "gemini":
                     models_to_try = [ep_model]
-                    if "gemini-2.5-flash" not in models_to_try:
-                        models_to_try.insert(0, "gemini-2.5-flash")
+                    if self.model and self.model not in models_to_try:
+                        models_to_try.insert(0, self.model)
                     if "gemini-2.0-flash" not in models_to_try:
                         models_to_try.append("gemini-2.0-flash")
 
@@ -1019,12 +1025,12 @@ class LLMService:
         for idx, ep in enumerate(endpoints):
             client = ep["client"]
             ep_type = ep["type"]
-            ep_model = ep.get("model") or self.model or "gpt-4o-mini"
+            ep_model = ep.get("model") or self.model or ""
             try:
                 if ep_type == "gemini":
                     models_to_try = [ep_model]
-                    if "gemini-2.5-flash" not in models_to_try:
-                        models_to_try.insert(0, "gemini-2.5-flash")
+                    if self.model and self.model not in models_to_try:
+                        models_to_try.insert(0, self.model)
                     if "gemini-2.0-flash" not in models_to_try:
                         models_to_try.append("gemini-2.0-flash")
 
@@ -1169,7 +1175,7 @@ class LLMService:
         for idx, ep in enumerate(endpoints):
             client = ep["client"]
             ep_type = ep["type"]
-            ep_model = ep.get("model") or self.model or "gpt-4o-mini"
+            ep_model = ep.get("model") or self.model or ""
             try:
                 if ep_type == "gemini":
                     response = client.models.generate_content(

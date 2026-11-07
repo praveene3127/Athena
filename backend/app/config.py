@@ -36,10 +36,10 @@ class Settings(BaseSettings):
     # AI & Proxy Keys
     LLM_API_KEY: Optional[str] = None
     LLM_BASE_URL: Optional[str] = None
-    LLM_MODEL: Optional[str] = None
+    LLM_MODEL: Optional[str] = ""
     GEMINI_API_KEY_PRIMARY: Optional[str] = None
     GEMINI_API_KEY_SECONDARY: Optional[str] = None
-    GEMINI_MODEL: str = "gemini-2.5-flash"
+    GEMINI_MODEL: str = ""
     ATHENA_CONTEXT_PROXY_TOKEN: Optional[str] = None
     WIKI_CONTACT: str = "athena-reader@example.com"
     VIBE_CHECK_TIMEOUT_S: float = 4.5
@@ -48,8 +48,10 @@ class Settings(BaseSettings):
 settings = Settings()
 
 # --- Athena Constants (§2 in CLAUDE.md) ---
-MIN_CHUNK_WORDS: int = 80
-MAX_CHUNK_WORDS: int = 160
+TARGET_CHUNK_WORDS: int = 50
+MIN_CHUNK_WORDS: int = 35
+MAX_CHUNK_WORDS: int = 65
+MAX_CHUNK_CHARS: int = 380
 MARGIN_FRACTION: float = 0.07
 MAX_CARDS_PER_DOC: int = 8
 MIN_CHUNK_GAP_BETWEEN_CARDS: int = 3
@@ -61,7 +63,6 @@ LLM_TIMEOUT_S: float = 20.0
 MAX_WIKI_LOOKUPS_PER_DOC: int = 14
 STATUS_POLL_MS: int = 1500
 ASK_RATE_LIMIT: int = 12  # requests per minute
-VIBE_CHECK_TIMEOUT_S: float = settings.VIBE_CHECK_TIMEOUT_S
 MAX_UPLOAD_SIZE_BYTES: int = settings.MAX_UPLOAD_SIZE_BYTES
 MAX_PAGE_COUNT: int = settings.MAX_PAGE_COUNT
 MIN_PROSE_WORDS: int = settings.MIN_PROSE_WORDS

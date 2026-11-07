@@ -3,6 +3,9 @@ from sqlmodel import SQLModel, create_engine, Session
 from sqlalchemy import event
 from sqlalchemy.engine import Engine
 from app.config import DB_PATH
+import logging
+
+logger = logging.getLogger("athena.db")
 
 # Format SQLite URL; ensure forward slashes on Windows
 _db_url = f"sqlite:///{DB_PATH.as_posix()}"
@@ -65,8 +68,8 @@ def _ensure_fts() -> None:
                 "CREATE VIRTUAL TABLE IF NOT EXISTS reading_chunks_fts "
                 "USING fts5(chunk_id UNINDEXED, document_id UNINDEXED, sequence UNINDEXED, section_title, raw_text, tokenize='porter unicode61');"
             ))
-        except Exception:
-            pass
+        except Exception as exc:
+            logger.warning("SQLite FTS5 unavailable; lexical search index was not initialized: %s", exc)
 
 
 def init_db() -> None:

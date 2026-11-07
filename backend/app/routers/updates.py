@@ -1,3 +1,4 @@
+import json
 import os
 import re
 from pathlib import Path
@@ -8,6 +9,19 @@ from fastapi.responses import FileResponse, RedirectResponse
 router = APIRouter(tags=["updates"])
 
 GITHUB_REPO_DEFAULT = "praveene3127/Athena"
+
+
+def _version_data() -> dict:
+    root = Path(__file__).resolve().parents[3]
+    version_path = root / "scripts" / "version.json"
+    try:
+        with version_path.open("r", encoding="utf-8") as handle:
+            data = json.load(handle)
+        return data if isinstance(data, dict) else {}
+    except (OSError, json.JSONDecodeError) as exc:
+        logger = __import__("logging").getLogger("athena.updates")
+        logger.warning("Could not read canonical version metadata at %s: %s", version_path, exc)
+        return {}
 
 
 def parse_semver(v: str) -> tuple:
@@ -24,7 +38,8 @@ def get_app_update(
     platform: str = Query("unknown", description="Client device platform (android, ios, desktop)"),
 ):
     """Checks for latest Athena client release across Android (.apk) and iOS (.ipa)."""
-    latest_version = os.environ.get("ATHENA_LATEST_VERSION", "1.1.0")
+    version_data = _version_data()
+    latest_version = str(version_data.get("version") or "0.0.0")
     github_repo = os.environ.get("GITHUB_REPO", GITHUB_REPO_DEFAULT)
 
     curr_tuple = parse_semver(current_version)
@@ -35,32 +50,32 @@ def get_app_update(
         "Improved Per-Page Document Bouncer, 4-Archetype Marginalia Cards, "
         "and Mobile Touch Ergonomics."
     )
-    published_at = "2026-11-01"
+    published_at = version_data.get("published_at")
 
     android_gh = f"https://github.com/{github_repo}/releases/latest/download/Athena-Android.apk"
     ios_gh = f"https://github.com/{github_repo}/releases/latest/download/Athena-iOS.ipa"
-    android_raw = f"https://github.com/{github_repo}/raw/main/releases/athena-release.apk"
-    ios_raw = f"https://github.com/{github_repo}/raw/main/releases/athena-ios-release.ipa"
+    android_raw = version_data.get("github_apk_url") or f"https://github.com/{github_repo}/raw/main/releases/athena-release.apk"
+    ios_raw = version_data.get("github_ipa_url") or f"https://github.com/{github_repo}/raw/main/releases/athena-ios-release.ipa"
 
     return {
         "version": latest_version,
-        "build_number": 2,
+        "build_number": version_data.get("build_number", 1),
         "update_available": update_available,
         "current_version": current_version,
         "latest_version": latest_version,
-        "release_notes": release_notes,
+        "release_notes": version_data.get("release_notes", release_notes),
         "published_at": published_at,
         "android": {
             "filename": "Athena-Android.apk",
             "download_url": "/api/download/android",
             "github_release_url": android_gh,
-            "github_raw_url": android_gh,
+            "github_raw_url": android_raw,
         },
         "ios": {
             "filename": "Athena-iOS.ipa",
             "download_url": "/api/download/ios",
             "github_release_url": ios_gh,
-            "github_raw_url": ios_gh,
+            "github_raw_url": ios_raw,
             "altstore_url": f"altstore://install?url={ios_gh}",
         },
     }
@@ -135,7 +150,9 @@ def download_ios_ipa():
 def get_ios_ota_manifest():
     """Generates Apple OTA itms-services manifest.plist pointing to latest unsigned IPA."""
     github_repo = os.environ.get("GITHUB_REPO", GITHUB_REPO_DEFAULT)
-    ipa_url = f"https://github.com/{github_repo}/releases/latest/download/Athena-iOS.ipa"
+    version_data = _version_data()
+    ipa_url = version_data.get("github_ipa_url") or f"https://github.com/{github_repo}/releases/latest/download/Athena-iOS.ipa"
+    version = str(version_data.get("version") or "0.0.0")
     xml = f"""<?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
@@ -155,9 +172,9 @@ def get_ios_ota_manifest():
             <key>metadata</key>
             <dict>
                 <key>bundle-identifier</key>
-                <string>com.athena.reader</string>
+                <string>com.athena.reading</string>
                 <key>bundle-version</key>
-                <string>1.1.0</string>
+                <string>{version}</string>
                 <key>kind</key>
                 <string>software</string>
                 <key>title</key>
