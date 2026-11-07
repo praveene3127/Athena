@@ -682,11 +682,13 @@ class LLMService:
             )
 
         formula_mandate = (
-            "*** HIGH-DOPAMINE EDITORIAL FACT FORMULA (MANDATORY) ***\n"
-            "- 100% Declarative Insight (45-80 words): Write a continuous, uninterrupted factual narrative.\n"
+            "*** 3 PSYCHOLOGICAL LAWS OF READING IMMERSION (MANDATORY) ***\n"
+            "1. Deepen the Scene (Never Summarize): Never summarize or paraphrase what the reader just read. Introduce external, orthogonal facts that expand the concept.\n"
+            "2. Conversational Vivid Voice: Write as an erudite, engaging storyteller—concrete, sharp, and punchy (45-80 words).\n"
+            "3. Forward-Pull Closing Line: End with a gripping bridge sentence that propels the reader back into the next page with curiosity.\n\n"
             "- STRICT PROHIBITION ON QUESTIONS & REVEALS: NEVER ask the reader a question (NO '?', NO 'Question: ... Answer: ...', NO 'Did you know?'). NEVER use '||REVEAL||' or hide text.\n"
             "- Hard Empirical Receipts: Name specific researchers, universities, publication years, sample sizes (N=), exact percentages, or historical archival records.\n"
-            "- BANNED PATTERNS: Never write dictionary definitions ('X is defined as...', 'According to Wikipedia...'). Never echo or summarize the passage the reader just read.\n\n"
+            "- STRICTLY BANNED PHRASES: NEVER use 'In this passage', 'This passage explores', 'The text demonstrates', 'Structural synthesis', 'Empirical observation indicates', 'In documented investigations into', 'Key takeaway', 'The author highlights', 'According to Wikipedia'.\n\n"
             f"{flavor_guidance}"
         )
 

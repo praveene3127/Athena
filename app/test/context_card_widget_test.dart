@@ -83,7 +83,10 @@ void main() {
       expect(find.textContaining('Re: '), findsOneWidget);
 
       // 4. Full declarative body is 100% visible immediately without tapping anything
-      expect(find.textContaining('In documented investigations into'), findsOneWidget);
+      expect(find.textContaining('alters autonomic nervous activity by over 32%'),
+          findsOneWidget);
+      expect(find.textContaining('In documented investigations into'),
+          findsNothing);
 
       // 5. Verified Source Footer verified
       expect(find.textContaining('SOURCE: JOURNAL OF CLASSICAL HISTORY'), findsOneWidget);

@@ -288,6 +288,121 @@ class LocalDatabase {
     }
   }
 
+  /// Windowed incremental chunk insertion that preserves earlier batch chunks in FTS5
+  /// and updates the BinaryBookTape upon the final batch.
+  Future<void> insertChunksBatch(
+    List<Map<String, Object?>> chunks, {
+    bool isFinalBatch = false,
+  }) async {
+    if (chunks.isEmpty) return;
+    final db = await database;
+    final indexedChunks = chunks.map((chunk) {
+      final fingerprint =
+          SimHashService.computeSimHash64(chunk['raw_text']?.toString() ?? '');
+      return <String, Object?>{
+        ...chunk,
+        'simhash_hi': fingerprint.high32,
+        'simhash_lo': fingerprint.low32,
+      };
+    }).toList();
+
+    await db.transaction((txn) async {
+      final batch = txn.batch();
+      for (final c in indexedChunks) {
+        batch.insert(
+          'reading_chunks',
+          c,
+          conflictAlgorithm: ConflictAlgorithm.replace,
+        );
+      }
+      await batch.commit(noResult: true);
+
+      try {
+        final ftsBatch = txn.batch();
+        for (final c in indexedChunks) {
+          final cId = c['id']?.toString() ?? '';
+          final dId = c['document_id']?.toString() ?? '';
+          final rawText = c['raw_text']?.toString() ?? '';
+          final sectionTitle = c['section_title']?.toString() ?? '';
+          ftsBatch.rawInsert(
+            'INSERT OR REPLACE INTO reading_chunks_fts(chunk_id, document_id, raw_text, section_title) VALUES (?, ?, ?, ?)',
+            [cId, dId, rawText, sectionTitle],
+          );
+        }
+        await ftsBatch.commit(noResult: true);
+      } catch (e) {
+        debugPrint('Athena FTS5 batch insert notice: $e');
+      }
+    });
+
+    if (!kIsWeb && isFinalBatch) {
+      try {
+        final documentId = chunks.first['document_id']?.toString() ?? '';
+        if (documentId.isNotEmpty) {
+          final allChunks = await getChunks(documentId);
+          final tapeRows = <Map<String, dynamic>>[];
+          for (final chunk in allChunks) {
+            final text = chunk['raw_text']?.toString() ?? '';
+            final pages =
+                jsonDecode(chunk['source_pages_json']?.toString() ?? '[]')
+                    as List;
+            tapeRows.add({
+              ...chunk,
+              'raw_text': text,
+              'page_number': pages.isEmpty ? 1 : (pages.first as num).toInt(),
+              'simhash': SimHashFingerprint(
+                (chunk['simhash_hi'] as num?)?.toInt() ?? 0,
+                (chunk['simhash_lo'] as num?)?.toInt() ?? 0,
+              ),
+            });
+          }
+          final dir = await getApplicationDocumentsDirectory();
+          final safeId = documentId.replaceAll(RegExp(r'[^A-Za-z0-9_-]'), '_');
+          await File(p.join(dir.path, '$safeId.athena.bin')).writeAsBytes(
+            BinaryBookTape.encode(chunks: tapeRows),
+            flush: true,
+          );
+        }
+      } catch (e) {
+        debugPrint('Athena BinaryBookTape batch write fallback: $e');
+      }
+    }
+  }
+
+  /// Updates document progress, status, and metadata checkpoint during streaming ingestion.
+  Future<void> updateDocumentProgress(
+    String id, {
+    String? status,
+    String? stage,
+    String? stageLabel,
+    int? percent,
+    int? processedPage,
+    int? pageCount,
+    String? canonicalText,
+    int? totalWords,
+    int? totalCharacters,
+    int? readingTimeMinutes,
+  }) async {
+    final db = await database;
+    final updates = <String, Object?>{
+      'updated_at': DateTime.now().toIso8601String(),
+    };
+    if (status != null) updates['status'] = status;
+    if (stage != null) updates['stage'] = stage;
+    if (stageLabel != null) updates['stage_label'] = stageLabel;
+    if (percent != null) updates['percent'] = percent;
+    if (processedPage != null) updates['processed_page'] = processedPage;
+    if (pageCount != null) updates['page_count'] = pageCount;
+    if (canonicalText != null) updates['canonical_text'] = canonicalText;
+    if (totalWords != null) updates['total_words'] = totalWords;
+    if (totalCharacters != null) updates['total_characters'] = totalCharacters;
+    if (readingTimeMinutes != null) {
+      updates['reading_time_minutes'] = readingTimeMinutes;
+    }
+
+    await db.update('documents', updates, where: 'id = ?', whereArgs: [id]);
+  }
+
   Future<List<Map<String, dynamic>>> searchChunks(
     String documentId,
     String query, {

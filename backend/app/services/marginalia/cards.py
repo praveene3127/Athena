@@ -704,7 +704,7 @@ def generate_context_cards(
         body = body.replace("||REVEAL||", " ")
         body = re.sub(r"^(?:Question|Q):\s*.*?\n+(?:Answer|A|Evidence|Finding|Result):\s*", "", body, flags=re.I)
         body = re.sub(
-            r"^(?:In this passage[,\s]+|This passage discusses[,\s]+|This excerpt explains[,\s]+|According to this passage[,\s]+)",
+            r"^(?:In this passage[,\s]+|This passage discusses[,\s]+|This excerpt explains[,\s]+|According to this passage[,\s]+|In documented investigations into[,\s]+|Structural synthesis[,\s]+|Empirical observation indicates[,\s]+|The text demonstrates[,\s]+)",
             "",
             body,
             flags=re.I,
@@ -730,7 +730,7 @@ def generate_context_cards(
                     fallback_body = fallback_body.replace("||REVEAL||", " ")
                     fallback_body = re.sub(r"^(?:Question|Q):\s*.*?\n+(?:Answer|A|Evidence|Finding|Result):\s*", "", fallback_body, flags=re.I)
                     fallback_body = re.sub(
-                        r"^(?:In this passage[,\s]+|This passage discusses[,\s]+|This excerpt explains[,\s]+)",
+                        r"^(?:In this passage[,\s]+|This passage discusses[,\s]+|This excerpt explains[,\s]+|In documented investigations into[,\s]+|Structural synthesis[,\s]+|Empirical observation indicates[,\s]+|The text demonstrates[,\s]+)",
                         "",
                         fallback_body,
                         flags=re.I,

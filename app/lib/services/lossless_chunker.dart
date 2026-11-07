@@ -1414,6 +1414,8 @@ class LosslessChunker {
     required String documentId,
     required String canonicalText,
     required List<Map<String, dynamic>> spans,
+    int initialSequence = 1,
+    int offsetDelta = 0,
   }) {
     if (canonicalText.isEmpty) return const [];
     final units = _paragraphUnits(canonicalText, spans);
@@ -1447,10 +1449,11 @@ class LosslessChunker {
         throw StateError('Adaptive chunking produced non-contiguous offsets.');
       }
       final rawText = canonicalText.substring(start, end);
+      final seq = initialSequence + i;
       result.add({
-        'id': '$documentId-c${(i + 1).toString().padLeft(4, '0')}',
+        'id': '$documentId-c${seq.toString().padLeft(4, '0')}',
         'document_id': documentId,
-        'sequence': i + 1,
+        'sequence': seq,
         'section_title': atoms
             .skip(atomStart)
             .take(atomEnd - atomStart)
@@ -1459,8 +1462,8 @@ class LosslessChunker {
             .firstOrNull,
         'raw_text': rawText,
         'source_pages_json': jsonEncode(_pagesForSpan(start, end, spans)),
-        'start_offset': start,
-        'end_offset': end,
+        'start_offset': start + offsetDelta,
+        'end_offset': end + offsetDelta,
         'checksum': _sha256(rawText),
         'boundary_method': last.boundaryAfter,
         'canonical_sha256': canonicalHash,

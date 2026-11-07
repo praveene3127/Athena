@@ -216,6 +216,233 @@ class _ParseDocumentResult {
   });
 }
 
+bool _isTocOrFrontMatter(String text) {
+  final lower = text.toLowerCase().trim();
+  if (lower.isEmpty) return true;
+  final lines = text
+      .split('\n')
+      .map((l) => l.trim())
+      .where((l) => l.isNotEmpty)
+      .toList();
+  if (lines.isEmpty) return true;
+  if (lower.contains('table of contents') ||
+      lower.startsWith('contents') ||
+      lower.contains('\ncontents\n')) {
+    return true;
+  }
+  final chapterMatches =
+      RegExp(r'\bchapter\s+\d+\b', caseSensitive: false)
+          .allMatches(lower)
+          .length;
+  if (chapterMatches >= 4) return true;
+  if ((lower.contains('all rights reserved') ||
+          lower.contains('printed in the united states') ||
+          lower.contains('isbn:')) &&
+      lines.length < 20) {
+    return true;
+  }
+  return false;
+}
+
+final _closingPunctRe = RegExp(r'^[.,!?;:)\]}"”’]');
+final _openingPunctRe = RegExp(r'[(\[{"“‘\-]$');
+
+String _reconstructWordWithGlyphSpacing(TextWord word) {
+  if (word.glyphs.isEmpty) return word.text.trim();
+  if (word.glyphs.length == 1) return word.glyphs.first.text.trim();
+
+  final sb = StringBuffer();
+  for (int g = 0; g < word.glyphs.length; g++) {
+    final currGlyph = word.glyphs[g];
+    if (g > 0) {
+      final prevGlyph = word.glyphs[g - 1];
+      final horizontalGap =
+          currGlyph.bounds.left - prevGlyph.bounds.right;
+      final gapThreshold =
+          (currGlyph.bounds.width * 0.18).clamp(1.0, 3.5);
+      if (horizontalGap > gapThreshold || horizontalGap >= 1.2) {
+        final prevText = sb.toString();
+        if (prevText.isNotEmpty &&
+            !prevText.endsWith(' ') &&
+            !prevText.endsWith('-')) {
+          sb.write(' ');
+        }
+      }
+    }
+    sb.write(currGlyph.text);
+  }
+  return sb.toString().trim();
+}
+
+String _extractSinglePageText(PdfTextExtractor extractor, int index) {
+  try {
+    final lines = extractor.extractTextLines(
+        startPageIndex: index, endPageIndex: index);
+    if (lines.isNotEmpty) {
+      final lineStrings = <String>[];
+      for (final line in lines) {
+        if (line.wordCollection.isNotEmpty) {
+          final lineBuffer = StringBuffer();
+          for (int w = 0; w < line.wordCollection.length; w++) {
+            final wordStr =
+                _reconstructWordWithGlyphSpacing(line.wordCollection[w]);
+            if (wordStr.isEmpty) continue;
+            if (lineBuffer.isNotEmpty) {
+              final prev = lineBuffer.toString();
+              final prevEndsOpening = _openingPunctRe.hasMatch(prev);
+              final currStartsClosing = _closingPunctRe.hasMatch(wordStr);
+              if (!prevEndsOpening &&
+                  !currStartsClosing &&
+                  !prev.endsWith(' ')) {
+                lineBuffer.write(' ');
+              }
+            }
+            lineBuffer.write(wordStr);
+          }
+          final lineStr = lineBuffer.toString().trim();
+          if (lineStr.isNotEmpty) {
+            lineStrings.add(lineStr);
+          }
+        } else if (line.text.trim().isNotEmpty) {
+          lineStrings.add(line.text.trim());
+        }
+      }
+      if (lineStrings.isNotEmpty) {
+        return lineStrings.join('\n');
+      }
+    }
+  } catch (e) {
+    debugPrint('Athena caught error: $e');
+  }
+
+  try {
+    return extractor.extractText(
+      startPageIndex: index,
+      endPageIndex: index,
+      layoutText: true,
+    );
+  } catch (e) {
+    try {
+      return extractor.extractText(
+        startPageIndex: index,
+        endPageIndex: index,
+      );
+    } catch (e) {
+      return '';
+    }
+  }
+}
+
+class _PdfWindowBatchArgs {
+  final String? filePath;
+  final List<int>? fileBytes;
+  final int startPageIndex;
+  final int endPageIndex;
+  final int totalPages;
+
+  const _PdfWindowBatchArgs({
+    this.filePath,
+    this.fileBytes,
+    required this.startPageIndex,
+    required this.endPageIndex,
+    required this.totalPages,
+  });
+}
+
+class _PdfWindowBatchResult {
+  final Map<int, String> pageTexts;
+
+  const _PdfWindowBatchResult({required this.pageTexts});
+}
+
+Future<_PdfWindowBatchResult> _extractPdfWindowBatchTopLevel(
+    _PdfWindowBatchArgs args) async {
+  List<int>? bytes = args.fileBytes;
+  if ((bytes == null || bytes.isEmpty) &&
+      args.filePath != null &&
+      args.filePath!.isNotEmpty) {
+    try {
+      bytes = await XFile(args.filePath!).readAsBytes();
+    } catch (e) {
+      debugPrint('[Athena] File read error in window batch isolate: $e');
+    }
+  }
+  if (bytes == null || bytes.isEmpty) {
+    return const _PdfWindowBatchResult(pageTexts: {});
+  }
+
+  final Map<int, String> pageTexts = {};
+  PdfDocument? pdfDoc;
+  try {
+    pdfDoc = PdfDocument(inputBytes: bytes);
+    final extractor = PdfTextExtractor(pdfDoc);
+    final frontMatterCutoff = (args.totalPages * 0.15).ceil().clamp(1, 15);
+    final maxPage = pdfDoc.pages.count;
+
+    for (int i = args.startPageIndex;
+        i <= args.endPageIndex && i < maxPage;
+        i++) {
+      final pageNum = i + 1;
+      final rawText = _extractSinglePageText(extractor, i);
+
+      // Fast-skip guard for empty or scanned image pages without text layer (< 10 chars)
+      if (rawText.trim().length < 10) {
+        continue;
+      }
+
+      if (i < frontMatterCutoff && _isTocOrFrontMatter(rawText)) {
+        continue;
+      }
+
+      final sanitized = sanitizeProseSpacing(rawText).trim();
+      if (sanitized.length >= 10) {
+        pageTexts[pageNum] = sanitized;
+      }
+    }
+  } catch (e) {
+    debugPrint('[Athena] Batch extraction error in isolate: $e');
+  } finally {
+    try {
+      pdfDoc?.dispose(); // CRITICAL: Immediate memory disposal!
+    } catch (_) {}
+  }
+
+  return _PdfWindowBatchResult(pageTexts: pageTexts);
+}
+
+class _PdfPageCountArgs {
+  final String? filePath;
+  final List<int>? fileBytes;
+
+  const _PdfPageCountArgs({this.filePath, this.fileBytes});
+}
+
+Future<int> _getPdfPageCountTopLevel(_PdfPageCountArgs args) async {
+  List<int>? bytes = args.fileBytes;
+  if ((bytes == null || bytes.isEmpty) &&
+      args.filePath != null &&
+      args.filePath!.isNotEmpty) {
+    try {
+      bytes = await XFile(args.filePath!).readAsBytes();
+    } catch (e) {
+      debugPrint('[Athena] Error reading file for page count: $e');
+    }
+  }
+  if (bytes == null || bytes.isEmpty) return 1;
+
+  PdfDocument? doc;
+  try {
+    doc = PdfDocument(inputBytes: bytes);
+    return doc.pages.count;
+  } catch (e) {
+    return 1;
+  } finally {
+    try {
+      doc?.dispose();
+    } catch (_) {}
+  }
+}
+
 _ParseDocumentResult _parseAndChunkDocumentInBackground(
     _ParseDocumentParams params) {
   final bytes = params.bytes;
@@ -234,133 +461,21 @@ _ParseDocumentResult _parseAndChunkDocumentInBackground(
       final buffer = StringBuffer();
       final frontMatterCutoff = (pageCount * 0.15).ceil().clamp(1, 15);
 
-      bool isTocOrFrontMatter(String text) {
-        final lower = text.toLowerCase().trim();
-        if (lower.isEmpty) return true;
-        final lines = text
-            .split('\n')
-            .map((l) => l.trim())
-            .where((l) => l.isNotEmpty)
-            .toList();
-        if (lines.isEmpty) return true;
-        if (lower.contains('table of contents') ||
-            lower.startsWith('contents') ||
-            lower.contains('\ncontents\n')) {
-          return true;
-        }
-        final chapterMatches =
-            RegExp(r'\bchapter\s+\d+\b', caseSensitive: false)
-                .allMatches(lower)
-                .length;
-        if (chapterMatches >= 4) return true;
-        if ((lower.contains('all rights reserved') ||
-                lower.contains('printed in the united states') ||
-                lower.contains('isbn:')) &&
-            lines.length < 20) {
-          return true;
-        }
-        return false;
-      }
-
-      final closingPunct = RegExp(r'^[.,!?;:)\]}"”’]');
-      final openingPunct = RegExp(r'[(\[{"“‘\-]$');
-
-      String reconstructWordWithGlyphSpacing(TextWord word) {
-        if (word.glyphs.isEmpty) return word.text.trim();
-        if (word.glyphs.length == 1) return word.glyphs.first.text.trim();
-
-        final sb = StringBuffer();
-        for (int g = 0; g < word.glyphs.length; g++) {
-          final currGlyph = word.glyphs[g];
-          if (g > 0) {
-            final prevGlyph = word.glyphs[g - 1];
-            final horizontalGap =
-                currGlyph.bounds.left - prevGlyph.bounds.right;
-            final gapThreshold =
-                (currGlyph.bounds.width * 0.18).clamp(1.0, 3.5);
-            if (horizontalGap > gapThreshold || horizontalGap >= 1.2) {
-              final prevText = sb.toString();
-              if (prevText.isNotEmpty &&
-                  !prevText.endsWith(' ') &&
-                  !prevText.endsWith('-')) {
-                sb.write(' ');
-              }
-            }
-          }
-          sb.write(currGlyph.text);
-        }
-        return sb.toString().trim();
-      }
-
-      String extractPageText(int index) {
-        try {
-          final lines = extractor.extractTextLines(
-              startPageIndex: index, endPageIndex: index);
-          if (lines.isNotEmpty) {
-            final lineStrings = <String>[];
-            for (final line in lines) {
-              if (line.wordCollection.isNotEmpty) {
-                final lineBuffer = StringBuffer();
-                for (int w = 0; w < line.wordCollection.length; w++) {
-                  final wordStr =
-                      reconstructWordWithGlyphSpacing(line.wordCollection[w]);
-                  if (wordStr.isEmpty) continue;
-                  if (lineBuffer.isNotEmpty) {
-                    final prev = lineBuffer.toString();
-                    final prevEndsOpening = openingPunct.hasMatch(prev);
-                    final currStartsClosing = closingPunct.hasMatch(wordStr);
-                    if (!prevEndsOpening &&
-                        !currStartsClosing &&
-                        !prev.endsWith(' ')) {
-                      lineBuffer.write(' ');
-                    }
-                  }
-                  lineBuffer.write(wordStr);
-                }
-                final lineStr = lineBuffer.toString().trim();
-                if (lineStr.isNotEmpty) {
-                  lineStrings.add(lineStr);
-                }
-              } else if (line.text.trim().isNotEmpty) {
-                lineStrings.add(line.text.trim());
-              }
-            }
-            if (lineStrings.isNotEmpty) {
-              return lineStrings.join('\n');
-            }
-          }
-        } catch (e) {
-          debugPrint('Athena caught error: $e');
-        }
-
-        try {
-          return extractor.extractText(
-            startPageIndex: index,
-            endPageIndex: index,
-            layoutText: true,
-          );
-        } catch (e) {
-          try {
-            return extractor.extractText(
-              startPageIndex: index,
-              endPageIndex: index,
-            );
-          } catch (e) {
-            return '';
-          }
-        }
-      }
-
       for (int i = 0; i < pageCount; i++) {
         final pageNum = i + 1;
-        final pageText = extractPageText(i);
+        final pageText = _extractSinglePageText(extractor, i);
 
-        if (i < frontMatterCutoff && isTocOrFrontMatter(pageText)) {
+        // Fast-skip guard for empty or scanned image pages (< 10 chars)
+        if (pageText.trim().length < 10) {
+          continue;
+        }
+
+        if (i < frontMatterCutoff && _isTocOrFrontMatter(pageText)) {
           continue;
         }
 
         final sanitizedPage = sanitizeProseSpacing(pageText).trim();
-        if (sanitizedPage.isEmpty) continue;
+        if (sanitizedPage.length < 10) continue;
 
         if (buffer.isNotEmpty) {
           buffer.write('\n\n');
@@ -382,7 +497,7 @@ _ParseDocumentResult _parseAndChunkDocumentInBackground(
       if (buffer.isEmpty) {
         for (int i = 0; i < pageCount; i++) {
           final pageNum = i + 1;
-          final pageText = extractPageText(i);
+          final pageText = _extractSinglePageText(extractor, i);
           final sanitizedPage = sanitizeProseSpacing(pageText).trim();
           if (sanitizedPage.isEmpty) continue;
 
@@ -461,6 +576,24 @@ _ParseDocumentResult _parseAndChunkDocumentInBackground(
 }
 
 class ApiClient {
+  static Future<int> _getPdfPageCount({
+    String? filePath,
+    List<int>? fileBytes,
+  }) async {
+    final countArgs =
+        _PdfPageCountArgs(filePath: filePath, fileBytes: fileBytes);
+    if (kIsWeb) {
+      return await _getPdfPageCountTopLevel(countArgs);
+    }
+    try {
+      return await Isolate.run(
+          () async => await _getPdfPageCountTopLevel(countArgs));
+    } catch (e) {
+      debugPrint('[Athena Error] Page count isolate failed, falling back: $e');
+      return await _getPdfPageCountTopLevel(countArgs);
+    }
+  }
+
   static Future<_ParseDocumentResult> _runIsolateParser(
     String docId,
     String fileName,
@@ -758,8 +891,25 @@ class ApiClient {
 
     // 2. On-device standalone extraction and lossless chunking
     final docId = 'doc_${DateTime.now().millisecondsSinceEpoch}';
-    Uint8List? rawBytes;
+    final cleanTitle = fileName.replaceAll(RegExp(r'\.[a-zA-Z0-9]+$'), '');
+    final now = DateTime.now().toUtc().toIso8601String();
+    final lowerName = fileName.toLowerCase();
+    final isPdf = lowerName.endsWith('.pdf');
 
+    // If PDF and we have filePath on non-web, we do NOT load the full 150MB file into RAM!
+    if (isPdf && !kIsWeb && filePath != null && filePath.isNotEmpty) {
+      return _uploadPdfStreamedOnDevice(
+        docId: docId,
+        fileName: fileName,
+        cleanTitle: cleanTitle,
+        filePath: filePath,
+        fileBytes: null,
+        onProgress: onProgress,
+      );
+    }
+
+    // Otherwise, obtain bytes (for web or EPUB/TXT or in-memory streams)
+    Uint8List? rawBytes;
     if (fileBytes != null && fileBytes.isNotEmpty) {
       rawBytes =
           fileBytes is Uint8List ? fileBytes : Uint8List.fromList(fileBytes);
@@ -789,9 +939,19 @@ class ApiClient {
       );
     }
 
+    if (isPdf) {
+      return _uploadPdfStreamedOnDevice(
+        docId: docId,
+        fileName: fileName,
+        cleanTitle: cleanTitle,
+        filePath: filePath,
+        fileBytes: rawBytes,
+        onProgress: onProgress,
+      );
+    }
+
     onProgress?.call(0.40, '2/4 Extracting & healing text...');
 
-    // Call static helper that has zero reference to fileStream or this
     final parseResult = await _runIsolateParser(
       docId,
       fileName,
@@ -802,9 +962,6 @@ class ApiClient {
     final canonicalText = parseResult.canonicalText;
     final pageCount = parseResult.pageCount;
     final chunkMaps = parseResult.chunkMaps;
-
-    final now = DateTime.now().toIso8601String();
-    final cleanTitle = fileName.replaceAll(RegExp(r'\.[a-zA-Z0-9]+$'), '');
 
     onProgress?.call(
         0.70, '3/4 Building single-screen chunks & Context Cards...');
@@ -865,6 +1022,250 @@ class ApiClient {
       }
     } catch (e, st) {
       debugPrint('[Athena Error] LocalDatabase insert notice: $e\n$st');
+    }
+
+    onProgress?.call(1.0, 'Ready to read');
+    return docId;
+  }
+
+  Future<String> _uploadPdfStreamedOnDevice({
+    required String docId,
+    required String fileName,
+    required String cleanTitle,
+    required String? filePath,
+    required List<int>? fileBytes,
+    required void Function(double progress, String stage)? onProgress,
+  }) async {
+    final now = DateTime.now().toUtc().toIso8601String();
+    onProgress?.call(0.05, '1/4 Initializing document library...');
+
+    final totalPages = await _getPdfPageCount(
+      filePath: filePath,
+      fileBytes: fileBytes,
+    );
+
+    // Step A: Insert Document at 5% progress before extraction starts
+    try {
+      await LocalDatabase.instance.insertDocument({
+        'id': docId,
+        'filename': fileName,
+        'title': cleanTitle,
+        'status': 'processing',
+        'stage': 'extracting',
+        'stage_label': 'Initializing document extraction...',
+        'percent': 5,
+        'page_count': totalPages,
+        'processed_page': 0,
+        'file_path': filePath ?? 'local://$fileName',
+        'integrity_verified': 0,
+        'context_status': 'pending',
+        'created_at': now,
+        'updated_at': now,
+      });
+    } catch (e) {
+      debugPrint('[Athena Error] Initial insertDocument notice: $e');
+    }
+
+    const int windowSize = 25;
+    int chunkSequence = 1;
+    int offsetDelta = 0;
+    final List<Map<String, Object?>> allChunks = [];
+    final StringBuffer fullCanonical = StringBuffer();
+
+    for (int startPage = 0; startPage < totalPages; startPage += windowSize) {
+      final endPage = (startPage + windowSize - 1).clamp(0, totalPages - 1);
+      final isFinalBatch = (endPage == totalPages - 1);
+
+      final progressFraction = 0.05 + 0.65 * ((endPage + 1) / totalPages);
+      final pctInt = (progressFraction * 100).toInt();
+      final stageMsg =
+          'Extracting pages ${startPage + 1}–${endPage + 1} of $totalPages ($pctInt%)...';
+      onProgress?.call(progressFraction, stageMsg);
+
+      final batchArgs = _PdfWindowBatchArgs(
+        filePath: filePath,
+        fileBytes: fileBytes,
+        startPageIndex: startPage,
+        endPageIndex: endPage,
+        totalPages: totalPages,
+      );
+
+      _PdfWindowBatchResult batchResult;
+      if (kIsWeb) {
+        batchResult = await _extractPdfWindowBatchTopLevel(batchArgs);
+      } else {
+        try {
+          batchResult = await Isolate.run(
+              () async => await _extractPdfWindowBatchTopLevel(batchArgs));
+        } catch (e) {
+          debugPrint('[Athena] Isolate batch failed, falling back: $e');
+          batchResult = await _extractPdfWindowBatchTopLevel(batchArgs);
+        }
+      }
+
+      final batchBuffer = StringBuffer();
+      final batchSpans = <Map<String, dynamic>>[];
+
+      final sortedPageNums = batchResult.pageTexts.keys.toList()..sort();
+      for (final pageNum in sortedPageNums) {
+        final pageText = batchResult.pageTexts[pageNum]!;
+        if (pageText.isEmpty) continue;
+
+        if (batchBuffer.isNotEmpty) {
+          batchBuffer.write('\n\n');
+        }
+        final pageStart = batchBuffer.length;
+        batchBuffer.write(pageText);
+        final pageEnd = batchBuffer.length;
+
+        batchSpans.add({
+          'start': pageStart,
+          'end': pageEnd,
+          'page_start': pageNum,
+          'page_end': pageNum,
+          'type': 'paragraph',
+        });
+      }
+
+      final batchText = batchBuffer.toString().trim();
+      if (batchText.isNotEmpty) {
+        if (fullCanonical.isNotEmpty) {
+          fullCanonical.write('\n\n');
+          offsetDelta = fullCanonical.length;
+        }
+        fullCanonical.write(batchText);
+
+        final batchChunks = LosslessChunker().build(
+          documentId: docId,
+          canonicalText: batchText,
+          spans: batchSpans,
+          initialSequence: chunkSequence,
+          offsetDelta: offsetDelta,
+        );
+
+        if (batchChunks.isNotEmpty) {
+          allChunks.addAll(batchChunks);
+          chunkSequence += batchChunks.length;
+
+          try {
+            await LocalDatabase.instance.insertChunksBatch(
+              batchChunks,
+              isFinalBatch: isFinalBatch,
+            );
+          } catch (e) {
+            debugPrint('[Athena Error] insertChunksBatch notice: $e');
+          }
+        }
+      }
+
+      // Fast-start reading check for large books (> 120 pages):
+      final bool canFastStart = (totalPages > 120 && (endPage + 1) >= 60);
+
+      try {
+        await LocalDatabase.instance.updateDocumentProgress(
+          docId,
+          status: canFastStart ? 'ready' : 'processing',
+          stage: 'extracting',
+          stageLabel: stageMsg,
+          percent: pctInt,
+          processedPage: endPage + 1,
+          pageCount: totalPages,
+        );
+      } catch (e) {
+        debugPrint('[Athena Error] updateDocumentProgress notice: $e');
+      }
+    }
+
+    if (allChunks.isEmpty) {
+      // Fallback if PDF parser produced no text (e.g. malformed or text disguised as PDF in tests)
+      Uint8List? fallbackBytes = fileBytes is Uint8List
+          ? fileBytes
+          : (fileBytes != null ? Uint8List.fromList(fileBytes) : null);
+      if (fallbackBytes == null && filePath != null) {
+        try {
+          fallbackBytes = await XFile(filePath).readAsBytes();
+        } catch (_) {}
+      }
+      if (fallbackBytes != null && fallbackBytes.isNotEmpty) {
+        final fallbackResult = await _runIsolateParser(
+          docId,
+          fileName,
+          filePath,
+          fallbackBytes,
+        );
+        if (fallbackResult.chunkMaps.isNotEmpty) {
+          allChunks.addAll(fallbackResult.chunkMaps);
+          fullCanonical.write(fallbackResult.canonicalText);
+          try {
+            await LocalDatabase.instance.insertChunksBatch(
+              fallbackResult.chunkMaps,
+              isFinalBatch: true,
+            );
+          } catch (_) {}
+        }
+      }
+    }
+
+    // Step B: Context Cards Generation
+    onProgress?.call(0.75, '3/4 Generating high-signal Context Cards...');
+    final cardMaps = <Map<String, Object?>>[];
+    try {
+      final contextService = LocalContextService();
+      final cards = await contextService.buildCards(docId, allChunks);
+      for (final cd in cards) {
+        cardMaps.add({
+          'id': cd['id'] ?? 'card_${cd['concept_name']}',
+          'document_id': docId,
+          'source_chunk_id': cd['source_chunk_id'] ??
+              (allChunks.isNotEmpty ? allChunks.first['id']! : ''),
+          'concept_name': cd['concept_name'] ?? '',
+          'card_type': cd['card_type'] ?? 'context',
+          'title': cd['title'] ?? '',
+          'body': cd['body'] ?? '',
+          'why_here': cd['why_here'] ?? '',
+          'citations_json': cd['citations_json'] ?? '[]',
+          'exact_quote': cd['exact_quote'],
+          'support_status': 'fully_supported',
+          'canonical_sha256': cd['canonical_sha256'] ?? '',
+          'generation_mode': cd['generation_mode'] ?? 'speculative_draft',
+          'verified': 1,
+          'saved': 0,
+          'dismissed': 0,
+          'created_at': now,
+        });
+      }
+      if (cardMaps.isNotEmpty) {
+        await LocalDatabase.instance.insertCards(cardMaps);
+      }
+    } catch (e) {
+      debugPrint('[Athena Error] Context card generation notice: $e');
+    }
+
+    // Step C: Finalize Document
+    onProgress?.call(0.95, '4/4 Finalizing library index...');
+    final canonicalStr = fullCanonical.toString().trim();
+    final words =
+        canonicalStr.split(RegExp(r'\s+')).where((w) => w.isNotEmpty).length;
+    final readingTime = (words / 200).ceil().clamp(1, 9999);
+
+    try {
+      await LocalDatabase.instance.updateDocumentProgress(
+        docId,
+        status: 'ready',
+        stage: 'done',
+        stageLabel: 'Ready to read',
+        percent: 100,
+        processedPage: totalPages,
+        pageCount: totalPages,
+        canonicalText: canonicalStr.isNotEmpty
+            ? canonicalStr
+            : 'Document content preserved.',
+        totalWords: words,
+        totalCharacters: canonicalStr.length,
+        readingTimeMinutes: readingTime,
+      );
+    } catch (e) {
+      debugPrint('[Athena Error] Final updateDocumentProgress notice: $e');
     }
 
     onProgress?.call(1.0, 'Ready to read');
