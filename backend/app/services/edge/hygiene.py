@@ -72,7 +72,7 @@ KNOWN_LITERARY_WORDS: Set[str] = {
     "straightforward", "unprecedented", "overwhelming", "pronounciation"
 }
 
-# Long technical, scientific, and medical words that must NEVER be split by wordninja
+# Long technical, scientific, and compound words that must NEVER be split by wordninja
 KNOWN_TECHNICAL_WORDS: Set[str] = {
     "neuroplasticity", "electromagnetism", "thermodynamics", "photosynthesis",
     "crystallography", "biotechnology", "paleontology", "socioeconomic",
@@ -84,10 +84,22 @@ KNOWN_TECHNICAL_WORDS: Set[str] = {
     "pathophysiology", "photoelectric", "psychopathology", "radiotherapy",
     "superconductivity", "telecommunications", "xenotransplantation",
     "histocompatibility", "biocompatibility", "paleoanthropology",
-    "spectroradiometry", "neurodegenerative"
+    "spectroradiometry", "neurodegenerative",
+    # Compound words protected from splitting (FP-4)
+    "schoolteacher", "breakthrough", "overthinking", "withstanding",
+    "thanksgiving", "housekeeping", "afterthought", "withholding",
+    "nevertheless", "furthermore", "notwithstanding",
 }
 
-LOADED_ENGLISH_WORDS: Set[str] = KNOWN_LITERARY_WORDS | KNOWN_TECHNICAL_WORDS
+# Protected alphanumeric tokens and brands from footnote number stripping (FP-4)
+PROTECTED_ALPHANUMERIC: Set[str] = {
+    "covid19", "area51", "mp3", "mp4", "h2o", "b12", "co2", "o2",
+    "wifi", "powerpoint", "youtube", "deepmind", "javascript", "openai",
+    "iphone", "ipad", "macos", "github", "linkedin", "chatgpt", "playwright",
+    "typescript", "gpt4", "gemini",
+}
+
+LOADED_ENGLISH_WORDS: Set[str] = KNOWN_LITERARY_WORDS | KNOWN_TECHNICAL_WORDS | PROTECTED_ALPHANUMERIC
 
 # Front-matter credit / copyright markers
 FRONT_MATTER_MARKERS: List[str] = [
@@ -375,12 +387,21 @@ def dehyphenate_line_wraps(text: str) -> str:
 def strip_superscript_footnote_callouts(text: str) -> str:
     """
     Strips fused superscript footnote numbers (e.g. 'Foulis;2' -> 'Foulis;', 'Moore.3' -> 'Moore.').
-    Guards against decimals (e.g. 3.14, 2.1) and dates/numbers.
+    Guards against decimals (e.g. 3.14, 2.1), dates/numbers, and protected alphanumeric tokens (COVID19, Area51, etc.).
     """
     if not text:
         return ""
     text = re.sub(r"(?<=[a-zA-Z\)])([;,.!?])\d{1,3}(?=\s|$|[)\]\"\'\u2019\u201d])", r"\1", text)
-    text = re.sub(r"(?<=[a-zA-Z]{3})\d{1,2}(?=\s|$|[)\]\"\'\u2019\u201d])", "", text)
+
+    def _strip_callout(m: re.Match) -> str:
+        token = m.group(1)
+        digits = m.group(2)
+        full = f"{token}{digits}"
+        if full.lower() in PROTECTED_ALPHANUMERIC:
+            return full
+        return token
+
+    text = re.sub(r"\b([a-zA-Z]{3,})(\d{1,2})(?=\s|$|[)\]\"\'\u2019\u201d.,;:!?])", _strip_callout, text)
     return text
 
 
@@ -397,7 +418,19 @@ def split_fused_kerning_words(text: str) -> str:
     text = re.sub(r"(\.{2,})(?=[A-Za-z0-9])", r"\1 ", text)
     text = re.sub(r"(?<=[A-Za-z0-9])(\.{2,})", r" \1", text)
     text = re.sub(r"([a-zA-Z]+)([\'’\u2019](?:s|t|ll|re|ve|d|m))([a-zA-Z]+)", r"\1\2 \3", text)
-    text = re.sub(r"([a-z]{2,})([A-Z][a-z]+)", r"\1 \2", text)
+    SURNAME_PREFIXES = {"mc", "mac", "de", "di", "van", "von", "le", "la", "st"}
+
+    def _split_camel(m: re.Match) -> str:
+        full = m.group(0)
+        low = full.lower()
+        if low in PROTECTED_ALPHANUMERIC or low in KNOWN_TECHNICAL_WORDS:
+            return full
+        for pfx in SURNAME_PREFIXES:
+            if low.startswith(pfx) and len(full) > len(pfx) and full[len(pfx)].isupper():
+                return full
+        return f"{m.group(1)} {m.group(2)}"
+
+    text = re.sub(r"\b([a-zA-Z]*[a-z]{2,})([A-Z][a-z]+)\b", _split_camel, text)
 
     try:
         import wordninja

@@ -216,16 +216,25 @@ pub fn self_heal_prose_text_core(text: &str) -> String {
 
     // 5. Superscript footnote callout stripping: "Foulis;2" -> "Foulis;", "Moore.3" -> "Moore."
     intermediate = FN_PUNCT_RE.replace_all(&intermediate, "$1").into_owned();
-    intermediate = FN_WORD_RE.replace_all(&intermediate, "").into_owned();
 
     // 6. Spacing after punctuation: "candle.Headmaster" -> "candle. Headmaster"
     intermediate = PUNCT_SPACE_RE.replace_all(&intermediate, "$1 ").into_owned();
 
-    // 7. Split PascalCase / camelCase word collisions: "TitlePage" -> "Title Page", "GaleNolan" -> "Gale Nolan"
-    intermediate = CAMEL_RE.replace_all(&intermediate, "$1 $2").into_owned();
-
-    // 8. Collapse duplicate whitespace
+    // 7. Collapse duplicate whitespace
     WS_RE.replace_all(&intermediate, " ").trim().to_string()
+}
+
+/// Zero Mid-Word Cuts invariant (FP-1).
+pub fn is_legal_cut(text: &str, b: usize) -> bool {
+    if b == 0 || b >= text.len() {
+        return true;
+    }
+    if !text.is_char_boundary(b) {
+        return false;
+    }
+    let prev_char = text[..b].chars().next_back().unwrap();
+    let next_char = text[b..].chars().next().unwrap();
+    prev_char.is_whitespace() || next_char.is_whitespace()
 }
 
 /// Dynamic programming optimal chunk boundary planner.

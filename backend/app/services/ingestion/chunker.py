@@ -68,6 +68,32 @@ def _find_pages_for_span(
     return sorted(pages) if pages else [1]
 
 
+RE_CLAUSE_SPLIT = re.compile(r'(?:[;:,]\s+)|(?:\s[—–-]\s)|(?:\s—\s*)')
+
+
+def is_legal_cut(text: str, b: int) -> bool:
+    """Zero Mid-Word Cuts invariant (FP-1). Legal if at ends or adjacent to whitespace."""
+    if b <= 0 or b >= len(text):
+        return True
+    return text[b - 1].isspace() or text[b].isspace()
+
+
+def _split_by_clauses(text: str) -> List[Tuple[int, int]]:
+    matches = list(RE_CLAUSE_SPLIT.finditer(text))
+    if not matches:
+        return [(0, len(text))]
+    result: List[Tuple[int, int]] = []
+    start = 0
+    for m in matches:
+        end = m.end()
+        if end > start and is_legal_cut(text, end):
+            result.append((start, end))
+            start = end
+    if start < len(text):
+        result.append((start, len(text)))
+    return result if result else [(0, len(text))]
+
+
 def _split_oversized_unit(text: str, max_words: int) -> List[Tuple[int, int]]:
     """
     Splits an oversized text unit at guarded sentence boundaries into offset ranges.
@@ -78,7 +104,17 @@ def _split_oversized_unit(text: str, max_words: int) -> List[Tuple[int, int]]:
 
     if not boundaries:
         if _word_count(text) > max_words or len(text) > MAX_CHUNK_CHARS:
-            return _hard_split_offsets(text, max_words)
+            clause_pieces = _split_by_clauses(text)
+            packed_clauses: List[Tuple[int, int]] = []
+            for cs, ce in clause_pieces:
+                ct = text[cs:ce]
+                if _word_count(ct) > max_words or len(ct) > MAX_CHUNK_CHARS:
+                    sub = _hard_split_offsets(ct, max_words)
+                    for ss, se in sub:
+                        packed_clauses.append((cs + ss, cs + se))
+                else:
+                    packed_clauses.append((cs, ce))
+            return packed_clauses if packed_clauses else [(0, len(text))]
         return [(0, len(text))]
 
     pieces: List[Tuple[int, int]] = []
@@ -100,9 +136,15 @@ def _split_oversized_unit(text: str, max_words: int) -> List[Tuple[int, int]]:
         if piece_words > max_words or len(piece_text) > MAX_CHUNK_CHARS:
             if current_end > current_start:
                 packed.append((current_start, current_end))
-            sub_splits = _hard_split_offsets(piece_text, max_words)
-            for (ss, se) in sub_splits:
-                packed.append((p_start + ss, p_start + se))
+            clause_pieces = _split_by_clauses(piece_text)
+            for c_start, c_end in clause_pieces:
+                c_text = piece_text[c_start:c_end]
+                if _word_count(c_text) > max_words or len(c_text) > MAX_CHUNK_CHARS:
+                    sub_splits = _hard_split_offsets(c_text, max_words)
+                    for (ss, se) in sub_splits:
+                        packed.append((p_start + c_start + ss, p_start + c_start + se))
+                else:
+                    packed.append((p_start + c_start, p_start + c_end))
             current_start = p_end
             current_end = p_end
             continue
@@ -478,6 +520,8 @@ def chunk_document(
         c_end = last_atom["end"]
         if c_start != previous_end:
             raise ValueError("Adaptive chunker produced a gap or overlap")
+        assert is_legal_cut(canonical_text, c_start), f"Illegal start cut at {c_start}"
+        assert is_legal_cut(canonical_text, c_end), f"Illegal end cut at {c_end}"
         raw_text = canonical_text[c_start:c_end]
         pages = _find_pages_for_span(c_start, c_end, spans)
         section_title = next(

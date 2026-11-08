@@ -46,6 +46,44 @@ const Set<String> _protectedMixedCaseWords = {
   'chatgpt',
   'playwright',
   'typescript',
+  'deepmind',
+  'covid19',
+  'area51',
+  'wifi',
+  'powerpoint',
+};
+
+const Set<String> _protectedCompoundWords = {
+  'schoolteacher',
+  'breakthrough',
+  'overthinking',
+  'withstanding',
+  'thanksgiving',
+  'housekeeping',
+  'afterthought',
+  'counterintuitive',
+  'neuroplasticity',
+  'socioeconomic',
+  'withholding',
+  'nevertheless',
+  'furthermore',
+  'notwithstanding',
+  'understatement',
+  'masterpiece',
+  'fingerprint',
+  'courtyard',
+  'foothold',
+  'watershed',
+  'heartbeat',
+  'backbone',
+  'blueprint',
+  'brainstorm',
+  'catchphrase',
+  'superconductivity',
+  'telecommunications',
+  'electromagnetism',
+  'thermodynamics',
+  'photosynthesis',
 };
 
 const Set<String> _commonWordPrefixes = {
@@ -59,6 +97,59 @@ const Set<String> _commonWordSuffixes = {
   'ity', 'ous', 'al', 'ic', 'ive', 'ism', 'ist', 'ful', 'less', 'ish',
   'ize', 'ise', 'ate', 'ance', 'ence', 'er', 'or', 'est',
 };
+
+/// Normalizes Unicode ligatures, removes soft hyphens and invisible markers,
+/// and normalizes non-breaking spaces.
+String normalizeUnicodeArtifacts(String text) {
+  if (text.isEmpty) return text;
+  var s = text;
+  // Unicode ligatures: \uFB00..\uFB06
+  s = s
+      .replaceAll('\uFB00', 'ff')
+      .replaceAll('\uFB01', 'fi')
+      .replaceAll('\uFB02', 'fl')
+      .replaceAll('\uFB03', 'ffi')
+      .replaceAll('\uFB04', 'ffl')
+      .replaceAll('\uFB05', 'ft')
+      .replaceAll('\uFB06', 'st');
+  // Invisible characters: \u00AD, \u200B..\u200D, \uFEFF, \u2060
+  s = s
+      .replaceAll('\u00AD', '')
+      .replaceAll('\u200B', '')
+      .replaceAll('\u200C', '')
+      .replaceAll('\u200D', '')
+      .replaceAll('\uFEFF', '')
+      .replaceAll('\u2060', '');
+  // Non-breaking spaces
+  s = s.replaceAll('\u00A0', ' ').replaceAll('\u202F', ' ');
+  return s;
+}
+
+/// Ledger tracking evidence-based repairs
+class RepairLedger {
+  final List<SpacingRepair> repairs = [];
+
+  void record({
+    required int start,
+    required int end,
+    required String original,
+    required String repaired,
+    required String reason,
+    double confidence = 1.0,
+  }) {
+    repairs.add(SpacingRepair(
+      startOffset: start,
+      endOffset: end,
+      originalText: original,
+      repairedText: repaired,
+      reason: reason,
+      confidence: confidence,
+    ));
+  }
+
+  bool get hasRepairs => repairs.isNotEmpty;
+  int get count => repairs.length;
+}
 
 /// Normalizes spacing in extracted PDF/EPUB prose.
 /// Repairs obvious lost spaces in extracted prose before chunking.
@@ -76,7 +167,7 @@ String sanitizeProseSpacing(String text) {
 SanitizationResult sanitizeProseSpacingWithAudit(String text) {
   if (text.isEmpty) return SanitizationResult(text: text, repairs: []);
 
-  var result = text;
+  var result = normalizeUnicodeArtifacts(text);
   final repairs = <SpacingRepair>[];
 
   // 1. Conditional punctuation spacing (protecting abbreviations, numbers, and URLs)
@@ -348,33 +439,33 @@ String _segmentFusedWordWithAudit(String rawWord, List<SpacingRepair> repairs) {
     return repaired;
   }
 
-  // SHORT TOKEN: Don't attempt to break very short tokens
-  if (end - start < 12) return rawWord;
+  // SHORT TOKEN: Don't attempt to break short tokens
+  if (end - start < 15) return rawWord;
 
   // PROTECT: Internal hyphens/slashes
   if (core.contains('-') || core.contains('/')) return rawWord;
 
-  // DICTIONARY DECOMPOSITION: Only with high confidence
+  // PROTECT: Legitimate compound words (FP-4)
+  if (_protectedCompoundWords.contains(lower)) {
+    return rawWord;
+  }
+
+  // DICTIONARY DECOMPOSITION: High-confidence decomposition on fused runs
   final segments = _wordBreakDP(lower);
   if (segments == null || segments.length <= 1) {
     return rawWord;
   }
 
-  // CONFIDENCE CHECK: Require high-confidence decomposition
-  // Average segment length should be reasonable (not many 1-2 char segments)
   final avgSegmentLength = lower.length / segments.length;
-  if (avgSegmentLength < 3.5) {
-    // Low confidence - too many tiny segments
+  if (avgSegmentLength < 3.0) {
     return rawWord;
   }
 
-  // Additional check: all segments should be in dictionary
   final allInDict = segments.every((s) => _fusedDictWords.contains(s));
   if (!allInDict) {
     return rawWord;
   }
 
-  // Preserve capitalization if first character was capitalized
   final isFirstUpper =
       core[0] == core[0].toUpperCase() && core[0] != core[0].toLowerCase();
   final resultWords = <String>[];
@@ -400,7 +491,16 @@ String _segmentFusedWordWithAudit(String rawWord, List<SpacingRepair> repairs) {
     sourceOffset += segments[i].length;
   }
 
-  return '$prefixPunct${resultWords.join(' ')}$suffixPunct';
+  final repaired = '$prefixPunct${resultWords.join(' ')}$suffixPunct';
+  repairs.add(SpacingRepair(
+    startOffset: 0,
+    endOffset: rawWord.length,
+    originalText: rawWord,
+    repairedText: repaired,
+    reason: 'fused_token',
+    confidence: 0.95,
+  ));
+  return repaired;
 }
 
 const Set<String> _scientificCompounds = {
@@ -1563,66 +1663,25 @@ List<String>? _wordBreakDP(String s) {
 /// Abbreviation-safe sentence splitter (§ F16).
 /// Splits text into complete sentences without breaking at common abbreviations or titles (Dr., Mr., etc.).
 class SentenceSplitter {
-  static const Set<String> abbreviations = {
-    'dr.',
-    'mr.',
-    'mrs.',
-    'ms.',
-    'prof.',
-    'st.',
-    'vol.',
-    'fig.',
-    'figs.',
-    'no.',
-    'pp.',
-    'p.',
-    'e.g.',
-    'i.e.',
-    'vs.',
-    'etc.',
-    'jr.',
-    'sr.',
-    'ca.',
-    'cf.',
-    'al.',
-    'inc.',
-    'ltd.',
-    'univ.',
-    'ed.',
-    'eds.',
-    'ch.',
-    'rev.',
-  };
+  static const Set<String> abbreviations = SegmentationPolicy.abbreviations;
 
-  /// Splits [text] into sentences while protecting abbreviations and normalizing inner whitespace.
+  /// Splits [text] into sentences using the Golden Rule sentence detector (FP-2).
   static List<String> split(String text) {
     if (text.isEmpty) return const [];
+    final boundaries = SegmentationPolicy.findSentenceBoundaries(text);
+    if (boundaries.isEmpty) return [text.trim()];
+
     final sentences = <String>[];
     int start = 0;
-
-    final boundaryRegex = RegExp(r'([.!?])(\s+)(?=[A-Z0-9"(]|\z)');
-    for (final match in boundaryRegex.allMatches(text)) {
-      final punctIndex = match.start;
-      final prePunctText = text.substring(0, punctIndex + 1);
-
-      // Check if word immediately before punct is an abbreviation
-      final wordMatch = RegExp(r'\b([A-Za-z]+)\.?$').firstMatch(prePunctText);
-      if (wordMatch != null) {
-        final lastWordWithDot = '${wordMatch.group(1)!.toLowerCase()}.';
-        final fullMatchLower = wordMatch.group(0)!.toLowerCase();
-        if (abbreviations.contains(lastWordWithDot) ||
-            abbreviations.contains(fullMatchLower)) {
-          continue; // Skip abbreviation dot
+    for (final b in boundaries) {
+      if (b > start && b <= text.length) {
+        final sentence = text.substring(start, b).trim();
+        if (sentence.isNotEmpty) {
+          sentences.add(sentence.replaceAll(RegExp(r'\s+'), ' '));
         }
+        start = b;
       }
-
-      final sentence = text.substring(start, match.start + 1).trim();
-      if (sentence.isNotEmpty) {
-        sentences.add(sentence.replaceAll(RegExp(r'\s+'), ' '));
-      }
-      start = match.end;
     }
-
     if (start < text.length) {
       final remaining = text.substring(start).trim();
       if (remaining.isNotEmpty) {
@@ -1738,47 +1797,6 @@ class LosslessChunker {
     'with',
     'would',
   };
-  static const Set<String> _abbreviations = {
-    'et al.',
-    'fig.',
-    'figs.',
-    'e.g.',
-    'i.e.',
-    'dr.',
-    'mr.',
-    'mrs.',
-    'ms.',
-    'prof.',
-    'vol.',
-    'no.',
-    'pp.',
-    'vs.',
-    'ca.',
-    'cf.',
-    'al.',
-    'inc.',
-    'ltd.',
-    'jr.',
-    'sr.',
-    'approx.',
-    'dept.',
-    'est.',
-    'min.',
-    'sec.',
-    'univ.',
-    'ed.',
-    'eds.',
-    'ref.',
-    'refs.',
-    'eq.',
-    'eqs.',
-    'p.',
-    'ch.',
-  };
-  static final RegExp _sentenceCandidate = RegExp(
-    r'([.!?])(\s+)(?=[A-Z0-9"(])',
-  );
-
   List<Map<String, Object?>> build({
     required String documentId,
     required String canonicalText,
@@ -1817,6 +1835,14 @@ class LosslessChunker {
       if (start != previousEnd) {
         throw StateError('Adaptive chunking produced non-contiguous offsets.');
       }
+      assert(
+        SegmentationPolicy.isLegalCut(canonicalText, start),
+        'Illegal start cut at offset $start (mid-word boundary)',
+      );
+      assert(
+        SegmentationPolicy.isLegalCut(canonicalText, end),
+        'Illegal end cut at offset $end (mid-word boundary)',
+      );
       final rawText = canonicalText.substring(start, end);
       final seq = initialSequence + i;
       result.add({
@@ -2134,7 +2160,7 @@ class LosslessChunker {
   }
 
   List<(int, int)> _splitByClauses(String text) {
-    final clausePattern = RegExp(r'([;:—–]|,\s+)');
+    final clausePattern = RegExp(r'(?:[;:,]\s+)|(?:\s[—–-]\s)|(?:\s—\s*)');
     final matches = clausePattern.allMatches(text).toList();
     if (matches.isEmpty) return [(0, text.length)];
 
@@ -2142,7 +2168,7 @@ class LosslessChunker {
     var start = 0;
     for (final m in matches) {
       final end = m.end;
-      if (end > start) {
+      if (end > start && SegmentationPolicy.isLegalCut(text, end)) {
         result.add((start, end));
         start = end;
       }
@@ -2150,7 +2176,7 @@ class LosslessChunker {
     if (start < text.length) {
       result.add((start, text.length));
     }
-    return result;
+    return result.isEmpty ? [(0, text.length)] : result;
   }
 
   List<(int, int)> _splitByWordsOrChars(String text) {
@@ -2162,37 +2188,8 @@ class LosslessChunker {
   }
 
   List<int> _safeBoundaries(String text) {
-    final result = <int>[];
-    for (final match in _sentenceCandidate.allMatches(text)) {
-      final punctIndex = match.start + 1;
-      final whitespaceEnd = match.end;
-      if (punctIndex > 0 &&
-          punctIndex + 1 < text.length &&
-          _isDigit(text.codeUnitAt(punctIndex - 1)) &&
-          _isDigit(text.codeUnitAt(punctIndex + 1))) {
-        continue;
-      }
-      var tokenStart = punctIndex - 1;
-      while (tokenStart > 0 && text[tokenStart - 1].trim().isNotEmpty) {
-        tokenStart--;
-      }
-      final token = text.substring(tokenStart, punctIndex).toLowerCase();
-      if (_abbreviations.contains(token)) {
-        continue;
-      }
-      if (token.length == 2 &&
-          _isLetter(token.codeUnitAt(0)) &&
-          token.endsWith('.')) {
-        continue;
-      }
-      result.add(whitespaceEnd);
-    }
-    return result;
+    return SegmentationPolicy.findSentenceBoundaries(text);
   }
-
-  bool _isDigit(int value) => value >= 48 && value <= 57;
-  bool _isLetter(int value) =>
-      (value >= 65 && value <= 90) || (value >= 97 && value <= 122);
 
   double _boundaryPenalty(String left, String right, bool sameParagraph) {
     if (right.trim().isEmpty) return 0;

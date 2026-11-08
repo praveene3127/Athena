@@ -211,7 +211,9 @@ class ContextCardWidget extends StatelessWidget {
             'url': url,
           };
         }
-      } catch (_) {}
+      } catch (e) {
+        debugPrint('[Athena ContextCard] Failed to parse sources: $e');
+      }
     }
     return null;
   }

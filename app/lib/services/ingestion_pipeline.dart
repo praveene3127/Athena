@@ -305,7 +305,9 @@ class DocumentIngestionPipeline {
     } finally {
       try {
         pdfDoc?.dispose();
-      } catch (_) {}
+      } catch (e) {
+        debugPrint('[Athena Ingestion] pdfDoc dispose error: $e');
+      }
     }
   }
 
@@ -399,7 +401,9 @@ class DocumentIngestionPipeline {
     } finally {
       try {
         pdfDoc?.dispose();
-      } catch (_) {}
+      } catch (e) {
+        debugPrint('[Athena Ingestion] pdfDoc dispose error: $e');
+      }
     }
   }
 
@@ -676,7 +680,7 @@ class DocumentIngestionPipeline {
         } else {
           // Flush previous row sorted left-to-right
           currentRow.sort((a, b) => a.left.compareTo(b.left));
-          final combinedText = currentRow.map((f) => f.text).join(' ');
+          final combinedText = _joinRowFragments(currentRow);
           final minTop = currentRow.map((f) => f.top).reduce(min);
           final maxBottom = currentRow.map((f) => f.bottom).reduce(max);
           final minLeft = currentRow.map((f) => f.left).reduce(min);
@@ -700,7 +704,7 @@ class DocumentIngestionPipeline {
 
       if (currentRow.isNotEmpty) {
         currentRow.sort((a, b) => a.left.compareTo(b.left));
-        final combinedText = currentRow.map((f) => f.text).join(' ');
+        final combinedText = _joinRowFragments(currentRow);
         final minTop = currentRow.map((f) => f.top).reduce(min);
         final maxBottom = currentRow.map((f) => f.bottom).reduce(max);
         final minLeft = currentRow.map((f) => f.left).reduce(min);
@@ -723,6 +727,23 @@ class DocumentIngestionPipeline {
     } catch (_) {
       return const [];
     }
+  }
+
+  static String _joinRowFragments(List<LineFragment> fragments) {
+    if (fragments.isEmpty) return '';
+    final buf = StringBuffer(fragments.first.text.trim());
+    for (int i = 1; i < fragments.length; i++) {
+      final prevText = fragments[i - 1].text.trim();
+      final currText = fragments[i].text.trim();
+      // Drop cap detection: single uppercase letter followed by lowercase token
+      if (RegExp(r'^[A-Z]$').hasMatch(prevText) && RegExp(r'^[a-z]').hasMatch(currText)) {
+        buf.write(currText);
+      } else {
+        buf.write(' ');
+        buf.write(currText);
+      }
+    }
+    return buf.toString();
   }
 
   // --- STAGE 2: Repeated Header / Footer & Page Number Detection (F04) ---
@@ -928,14 +949,29 @@ class DocumentIngestionPipeline {
     final avgFontSize = lines.map((l) => l.fontSize).reduce((a, b) => a + b) / lines.length;
 
     final currentPara = StringBuffer();
+    bool pendingHyphenJoin = false;
     if (carryOver != null && carryOver.isNotEmpty) {
-      currentPara.write(carryOver);
-      currentPara.write(' ');
+      final cTrim = carryOver.trim();
+      final hyphenMatch = RegExp(r'([A-Za-z]+)[-\u2010\u2011]$').firstMatch(cTrim);
+      if (hyphenMatch != null) {
+        final prefix = hyphenMatch.group(1)!;
+        if (!_isKnownCompoundPrefix(prefix.toLowerCase())) {
+          // Strip hyphen and join directly with next line
+          currentPara.write(cTrim.substring(0, hyphenMatch.start + prefix.length));
+          pendingHyphenJoin = true;
+        } else {
+          // Preserve compound hyphen and join directly with next line
+          currentPara.write(cTrim);
+          pendingHyphenJoin = true;
+        }
+      } else {
+        currentPara.write(cTrim);
+        currentPara.write(' ');
+      }
     }
 
     bool isCurrentHeading = false;
     String? currentSectionTitle = bookmarkTitle;
-    bool pendingHyphenJoin = false;
 
     for (int i = 0; i < lines.length; i++) {
       final line = lines[i];
@@ -961,16 +997,16 @@ class DocumentIngestionPipeline {
         currentSectionTitle = rawLine;
       }
 
-      // Check line-end hyphenation to join seamlessly with next line
-      if (rawLine.endsWith('-') && i + 1 < lines.length) {
+      // Check line-end hyphenation to join seamlessly with next line (FP-3)
+      if ((rawLine.endsWith('-') || rawLine.endsWith('\u2010') || rawLine.endsWith('\u2011')) && i + 1 < lines.length) {
         final nextLine = lines[i + 1].text.trim();
-        final match = RegExp(r'([A-Za-z]+)-$', caseSensitive: false).firstMatch(rawLine);
+        final match = RegExp(r'([A-Za-z]+)[-\u2010\u2011]$', caseSensitive: false).firstMatch(rawLine);
         final nextMatch = RegExp(r'^[A-Za-z]+', caseSensitive: false).firstMatch(nextLine);
         if (match != null && nextMatch != null) {
           final prefix = match.group(1)!;
           if (!_isKnownCompoundPrefix(prefix.toLowerCase())) {
             // Strip trailing hyphen so next line joins directly
-            rawLine = rawLine.substring(0, rawLine.length - 1);
+            rawLine = rawLine.substring(0, match.start + prefix.length);
             if (currentPara.isNotEmpty && !currentPara.toString().endsWith(' ') && !currentPara.toString().endsWith('-')) {
               currentPara.write(' ');
             }
@@ -978,6 +1014,19 @@ class DocumentIngestionPipeline {
             pendingHyphenJoin = true;
             continue; // Continue without trailing space
           }
+        }
+      }
+
+      // Check drop cap (FP-4)
+      if (RegExp(r'^[A-Z]$').hasMatch(rawLine) && i + 1 < lines.length) {
+        final nextLine = lines[i + 1].text.trim();
+        if (RegExp(r'^[a-z]').hasMatch(nextLine)) {
+          if (currentPara.isNotEmpty && !currentPara.toString().endsWith(' ')) {
+            currentPara.write(' ');
+          }
+          currentPara.write(rawLine);
+          pendingHyphenJoin = true;
+          continue;
         }
       }
 
@@ -1036,11 +1085,38 @@ class DocumentIngestionPipeline {
     );
   }
 
+  /// Active line-end de-hyphenation (FP-3)
+  /// Matches ASCII -, \u2010, \u2011 across lines, carryOver, and batch boundaries.
+  static String healLineEndHyphen(String left, String right) {
+    final lTrim = left.trimRight();
+    final rTrim = right.trimLeft();
+    if (lTrim.isEmpty) return rTrim;
+    if (rTrim.isEmpty) return lTrim;
+
+    final hyphenMatch = RegExp(r'([A-Za-z]+)[-\u2010\u2011]$').firstMatch(lTrim);
+    final nextWordMatch = RegExp(r'^([A-Za-z]+)(.*)$', dotAll: true).firstMatch(rTrim);
+
+    if (hyphenMatch != null && nextWordMatch != null) {
+      final prefix = hyphenMatch.group(1)!;
+      final suffixWord = nextWordMatch.group(1)!;
+      final rest = nextWordMatch.group(2) ?? '';
+      final beforeHyphen = lTrim.substring(0, hyphenMatch.start + prefix.length);
+
+      if (_isKnownCompoundPrefix(prefix.toLowerCase())) {
+        return '$beforeHyphen-$suffixWord$rest';
+      } else {
+        return '$beforeHyphen$suffixWord$rest';
+      }
+    }
+
+    return '$lTrim $rTrim';
+  }
+
   /// Fixes broken line-wrap hyphenation across line breaks (F04, Invariant 4).
   /// Preserves legitimate compound word prefixes ('self-esteem', 'anti-slop', 'co-author').
   static String dehyphenateLineWraps(String text) {
-    if (!text.contains('-')) return text;
-    return text.replaceAllMapped(RegExp(r'\b([A-Za-z]+)-\s+([a-z]+)\b'), (m) {
+    if (!text.contains('-') && !text.contains('\u2010') && !text.contains('\u2011')) return text;
+    return text.replaceAllMapped(RegExp(r'\b([A-Za-z]+)[-\u2010\u2011]\s+([a-z]+)\b'), (m) {
       final prefix = m.group(1)!;
       final suffix = m.group(2)!;
       if (_isKnownCompoundPrefix(prefix.toLowerCase())) {
@@ -1057,26 +1133,13 @@ class DocumentIngestionPipeline {
       'anti',
       'well',
       'cross',
-      'pre',
-      'post',
-      'multi',
-      'over',
-      'under',
-      'sub',
-      'co',
-      'meta',
-      'pseudo',
       'quasi',
+      'pseudo',
       'high',
       'low',
-      'counter',
-      'inter',
-      'super',
-      'ultra',
-      're',
-      'ex',
-      'all',
       'half',
+      'all',
+      'ex',
     };
     return prefixes.contains(prefix);
   }
@@ -1102,7 +1165,9 @@ class DocumentIngestionPipeline {
           }
         }
       }
-    } catch (_) {}
+    } catch (e) {
+      debugPrint('[Athena Ingestion] extract bookmarks error: $e');
+    }
     return bookmarks;
   }
 
@@ -1272,22 +1337,56 @@ class DocumentIngestionPipeline {
     return null;
   }
 
+  static String decodeHtmlForTest(String html) => _decodeEpubHtmlToProse(html);
+
   static String _decodeEpubHtmlToProse(String html) {
-    final clean = html
+    if (html.isEmpty) return '';
+
+    // 1. Strip script, style, and head blocks
+    final content = html
         .replaceAll(RegExp(r'<style[^>]*>[\s\S]*?</style>', caseSensitive: false), ' ')
         .replaceAll(RegExp(r'<script[^>]*>[\s\S]*?</script>', caseSensitive: false), ' ')
-        .replaceAll(
-            RegExp(r'</?(?:p|div|h[1-6]|br|hr|li|tr|blockquote|section|article)[^>]*>',
-                caseSensitive: false),
-            '\n\n')
-        .replaceAll(RegExp(r'<[^>]+>'), ' ');
+        .replaceAll(RegExp(r'<head[^>]*>[\s\S]*?</head>', caseSensitive: false), ' ');
 
-    final decoded = decodeHtmlEntities(clean);
+    final buf = StringBuffer();
+    final tagOrTextRegex = RegExp(r'(<[^>]+>)|([^<]+)');
+    const blockTags = {
+      'p', 'div', 'h1', 'h2', 'h3', 'h4', 'h5', 'h6', 'li',
+      'blockquote', 'hr', 'br', 'tr', 'section', 'article',
+      'header', 'footer', 'table', 'dl', 'dt', 'dd'
+    };
+
+    for (final match in tagOrTextRegex.allMatches(content)) {
+      final tag = match.group(1);
+      final text = match.group(2);
+
+      if (tag != null) {
+        final nameMatch = RegExp(r'^</?([a-zA-Z0-9]+)').firstMatch(tag);
+        if (nameMatch != null) {
+          final tagName = nameMatch.group(1)!.toLowerCase();
+          if (blockTags.contains(tagName)) {
+            final currentStr = buf.toString();
+            if (currentStr.isNotEmpty && !currentStr.endsWith('\n\n')) {
+              if (currentStr.endsWith('\n')) {
+                buf.write('\n');
+              } else {
+                buf.write('\n\n');
+              }
+            }
+          }
+          // Inline tags (span, em, i, a, b, strong, sub, sup, code, etc.) emit NOTHING
+        }
+      } else if (text != null) {
+        buf.write(decodeHtmlEntities(text));
+      }
+    }
+
+    final decoded = buf.toString();
     return sanitizeProseSpacing(decoded);
   }
 
   /// Full HTML entity decoder (F06, F34.6)
-  /// Decodes named HTML entities (&eacute;, &uuml;, &mdash;, etc.) and decimal/hex numeric entities.
+  /// Decodes named HTML entities (&eacute;, &uuml;, &mdash;, &shy;, etc.) and decimal/hex numeric entities.
   static String decodeHtmlEntities(String text) {
     const namedEntities = {
       'amp': '&',
@@ -1296,6 +1395,12 @@ class DocumentIngestionPipeline {
       'quot': '"',
       'apos': "'",
       'nbsp': ' ',
+      'shy': '', // soft hyphen -> deleted (FP-4)
+      'zwj': '', // zero-width joiner
+      'zwnj': '', // zero-width non-joiner
+      'thinsp': ' ',
+      'ensp': ' ',
+      'emsp': ' ',
       'mdash': '—',
       'ndash': '–',
       'hellip': '…',
@@ -1340,6 +1445,7 @@ class DocumentIngestionPipeline {
       'copy': '©',
       'reg': '®',
       'trade': '™',
+      'bull': '•',
     };
 
     return text.replaceAllMapped(
@@ -1361,7 +1467,9 @@ class DocumentIngestionPipeline {
             final code = int.parse(entity.substring(1));
             if (code >= 0 && code <= 0x10ffff) return String.fromCharCode(code);
           }
-        } catch (_) {}
+        } catch (e) {
+          debugPrint('[Athena Ingestion] numeric entity parse error: $e');
+        }
         return match[0]!;
       },
     );

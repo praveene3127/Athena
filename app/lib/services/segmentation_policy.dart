@@ -10,6 +10,9 @@
 
 library;
 
+import 'dart:convert';
+import 'package:crypto/crypto.dart';
+
 class SegmentationPolicy {
   // Core sizing parameters (v2) - aligned with Python config.py
   static const int minWords = 35;
@@ -24,8 +27,8 @@ class SegmentationPolicy {
 
   // Shortfall policies (must match across implementations)
   // Python fallback: max(MIN_CHUNK_WORDS, floor(target * 0.55)) where MIN_CHUNK_WORDS = 35
-  // Rust: 35.max(target * 0.70) - TO BE ALIGNED to match Python
-  // Dart: max(minWords, floor(target * 0.55)) - NOW ALIGNED
+  // Rust: 35.max(target * 0.55)
+  // Dart: max(minWords, floor(target * 0.55)) - ALIGNED
   static double get minWordsRatio => 0.55;
   static int get absoluteMinWords => 35;
 
@@ -63,6 +66,21 @@ class SegmentationPolicy {
   static const String version = 'segmentation-v2';
   static const String offsetProtocol = 'utf8-byte-v2';
 
+  /// Standard sentence candidate regex conforming to the Golden Rule
+  static final RegExp sentenceRegex = RegExp(
+    r'([.!?…]+|\.\s?\.\s?\.)([”"’\x27)\]»]*)(\s+)(?=[“"‘\x27(\[«]*[A-Z0-9¿¡])',
+  );
+
+  /// Extended abbreviations list preventing spurious sentence cuts
+  static const Set<String> abbreviations = {
+    'mr.', 'mrs.', 'ms.', 'dr.', 'prof.', 'st.', 'inc.', 'ltd.', 'co.',
+    'vs.', 'etc.', 'e.g.', 'i.e.', 'cf.', 'al.', 'vol.', 'no.', 'ed.',
+    'eds.', 'pp.', 'p.', 'rev.', 'gen.', 'sen.', 'rep.', 'gov.', 'pres.',
+    'sec.', 'dept.', 'univ.', 'assn.', 'corp.', 'jan.', 'feb.', 'mar.',
+    'apr.', 'jun.', 'jul.', 'aug.', 'sep.', 'sept.', 'oct.', 'nov.', 'dec.',
+    'ca.', 'jr.', 'sr.', 'fig.', 'figs.', 'ch.', 'ref.', 'refs.', 'eq.', 'eqs.'
+  };
+
   /// Computes the effective minimum words for a given target
   /// Matches Python fallback: max(minWords, floor(target * 0.55))
   static int effectiveMinWords(int targetWords) {
@@ -70,54 +88,112 @@ class SegmentationPolicy {
     return ratioMin > minWords ? ratioMin : minWords;
   }
 
-  /// Computes the effective minimum words per Rust formula (for reference)
-  /// Rust: 35.max(target * 0.70)
+  /// Computes the effective minimum words per Rust formula
   static int rustEffectiveMinWords(int targetWords) {
-    final ratioMin = (targetWords * 0.70).floor();
+    final ratioMin = (targetWords * 0.55).floor();
     return ratioMin > absoluteMinWords ? ratioMin : absoluteMinWords;
   }
 
-  /// Validates that a cut position is at a legal boundary
-  /// Returns true if the cut is safe (not inside grapheme/protected token)
-  static bool isLegalCut(String text, int cutPosition) {
-    // TODO: Implement full UAX #29 grapheme boundary check
-    // For now, basic checks:
-    if (cutPosition <= 0 || cutPosition >= text.length) return false;
+  /// Validates that a cut position is at a legal boundary (Zero Mid-Word Cuts, FP-1)
+  /// Returns true if cut is safe (at boundary or adjacent to whitespace, not in surrogate pair)
+  static bool isLegalCut(String text, int b) {
+    if (b <= 0 || b >= text.length) return true;
 
-    // Check if we're in the middle of a surrogate pair
-    final codeUnit = text.codeUnitAt(cutPosition);
-    if (codeUnit >= 0xDC00 && codeUnit <= 0xDFFF) {
-      // Low surrogate - check previous
-      if (cutPosition > 0) {
-        final prev = text.codeUnitAt(cutPosition - 1);
-        if (prev >= 0xD800 && prev <= 0xDBFF) return false; // Split surrogate pair
+    // Check surrogate pairs
+    final c = text.codeUnitAt(b);
+    if (c >= 0xDC00 && c <= 0xDFFF) {
+      final prev = text.codeUnitAt(b - 1);
+      if (prev >= 0xD800 && prev <= 0xDBFF) return false;
+    }
+    if (b > 0) {
+      final prev = text.codeUnitAt(b - 1);
+      if (prev >= 0xD800 && prev <= 0xDBFF) {
+        if (c >= 0xDC00 && c <= 0xDFFF) return false;
       }
     }
 
-    // Check if previous is high surrogate
-    if (cutPosition > 0) {
-      final prev = text.codeUnitAt(cutPosition - 1);
-      if (prev >= 0xD800 && prev <= 0xDBFF) {
-        // High surrogate - check next
-        if (cutPosition < text.length) {
-          final next = text.codeUnitAt(cutPosition);
-          if (next >= 0xDC00 && next <= 0xDFFF) return false; // Split surrogate pair
+    return _isWs(text.codeUnitAt(b - 1)) || _isWs(text.codeUnitAt(b));
+  }
+
+  static bool _isWs(int c) =>
+      c == 0x20 || (c >= 0x09 && c <= 0x0D) || c == 0x85 || c == 0xA0 ||
+      c == 0x1680 || (c >= 0x2000 && c <= 0x200A) || c == 0x2028 ||
+      c == 0x2029 || c == 0x202F || c == 0x205F || c == 0x3000;
+
+  /// Finds sentence boundaries matching the golden rule splitter (FP-2).
+  /// Slices at end of trailing whitespace so each sentence maintains contiguous invariant.
+  static List<int> findSentenceBoundaries(String text) {
+    if (text.isEmpty) return const [];
+    final boundaries = <int>[];
+    for (final match in sentenceRegex.allMatches(text)) {
+      final punctGroup = match.group(1)!;
+      final punctEnd = match.start + punctGroup.length;
+      final whitespaceEnd = match.end;
+
+      // Decimal guard: e.g. 3.14 or 2.0
+      if (punctEnd > 0 && punctEnd < text.length) {
+        final prevChar = text.codeUnitAt(punctEnd - 1);
+        final nextChar = text.codeUnitAt(punctEnd);
+        if (prevChar >= 48 && prevChar <= 57 && nextChar >= 48 && nextChar <= 57) {
+          continue;
         }
       }
-    }
 
-    return true;
+      // Check preceding token for abbreviation or initial
+      var tokenStart = match.start;
+      while (tokenStart > 0 && !_isWs(text.codeUnitAt(tokenStart - 1))) {
+        tokenStart--;
+      }
+      final token = text.substring(tokenStart, punctEnd).toLowerCase();
+      if (abbreviations.contains(token)) {
+        continue;
+      }
+      // Single letter initial guard e.g. "J." in "J. K. Rowling"
+      if (token.length == 2 &&
+          ((token.codeUnitAt(0) >= 97 && token.codeUnitAt(0) <= 122) ||
+           (token.codeUnitAt(0) >= 65 && token.codeUnitAt(0) <= 90)) &&
+          token.endsWith('.')) {
+        continue;
+      }
+
+      boundaries.add(whitespaceEnd);
+    }
+    return boundaries;
+  }
+
+  /// Builds a byte-offset translation table from UTF-8 to UTF-16 code units (FP-1).
+  static List<int> buildUtf8ToUtf16Map(String text) {
+    final utf8Bytes = utf8.encode(text);
+    final map = List<int>.filled(utf8Bytes.length + 1, 0);
+    int u16Offset = 0;
+    int u8Offset = 0;
+    for (final rune in text.runes) {
+      final charLenU16 = rune > 0xFFFF ? 2 : 1;
+      final charLenU8 = rune <= 0x7F
+          ? 1
+          : (rune <= 0x7FF
+              ? 2
+              : (rune <= 0xFFFF ? 3 : 4));
+      for (int i = 0; i < charLenU8; i++) {
+        map[u8Offset + i] = u16Offset;
+      }
+      u8Offset += charLenU8;
+      u16Offset += charLenU16;
+    }
+    map[utf8Bytes.length] = text.length;
+    return map;
   }
 
   /// Finds the nearest legal cut position at or before the given position
   static int findLegalCut(String text, int preferredPosition) {
-    // Search backward from preferred position for a legal boundary
+    if (preferredPosition <= 0) return 0;
+    if (preferredPosition >= text.length) return text.length;
     for (int i = preferredPosition; i >= 0; i--) {
       if (isLegalCut(text, i)) {
         return i;
       }
     }
-    return preferredPosition; // Fallback (should not happen with valid input)
+    return preferredPosition;
   }
 }
 
@@ -142,8 +218,7 @@ class SegmentationResult {
   }
 
   String _sha256(String text) {
-    // Import crypto at usage point to avoid circular deps
-    return ''; // Placeholder
+    return sha256.convert(utf8.encode(text)).toString();
   }
 }
 
@@ -185,7 +260,6 @@ class SegmentationNote {
 /// Uses Unicode whitespace for cross-platform consistency
 int countWords(String text) {
   if (text.trim().isEmpty) return 0;
-  // Match Unicode whitespace: \u0009-\u000D,  , \u0085,  ,  ,  - ,  ,  ,  ,  ,
   final wordPattern = RegExp(r'[^\u0009-\u000D \u0085   -     　]+', unicode: true);
   return wordPattern.allMatches(text).length;
 }

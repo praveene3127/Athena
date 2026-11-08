@@ -11,44 +11,54 @@ from typing import Any, Dict, List, Set, Tuple
 
 from app.services.edge_ai import self_heal_prose_text, COMPOUND_PREFIXES
 
-# Known abbreviations that must NEVER trigger sentence cuts
+# Known abbreviations that must NEVER trigger sentence cuts (Golden Rule, FP-2)
 ABBREVIATIONS: Set[str] = {
-    "et al.", "fig.", "figs.", "e.g.", "i.e.", "dr.", "mr.", "mrs.", "ms.",
-    "prof.", "vol.", "no.", "pp.", "vs.", "ca.", "cf.", "al.", "inc.", "ltd.",
-    "jr.", "sr.", "approx.", "dept.", "est.", "min.", "sec.", "univ.", "ed.",
-    "eds.", "ref.", "refs.", "eq.", "eqs.", "p.", "ch.", "sec."
+    "mr.", "mrs.", "ms.", "dr.", "prof.", "st.", "inc.", "ltd.", "co.",
+    "vs.", "etc.", "e.g.", "i.e.", "cf.", "al.", "vol.", "no.", "ed.",
+    "eds.", "pp.", "p.", "rev.", "gen.", "sen.", "rep.", "gov.", "pres.",
+    "sec.", "dept.", "univ.", "assn.", "corp.", "jan.", "feb.", "mar.",
+    "apr.", "jun.", "jul.", "aug.", "sep.", "sept.", "oct.", "nov.", "dec.",
+    "ca.", "jr.", "sr.", "fig.", "figs.", "ch.", "ref.", "refs.", "eq.", "eqs.",
+    "et al.", "approx.", "est.", "min."
 }
 
-# Regex to detect sentence ending punctuation followed by whitespace and uppercase/digit/quote
-RE_SENTENCE_CANDIDATE = re.compile(r"([.!?])(\s+)(?=[A-Z0-9\"'\(])")
+# Regex matching the Golden Rule sentence boundary detector (FP-2):
+# ([.!?…]+|\.\s?\.\s?\.)([”"’\x27)\]»]*)(\s+)(?=[“"‘\x27(\[«]*[A-Z0-9¿¡])
+RE_SENTENCE_CANDIDATE = re.compile(
+    r"([.!?…]+|\.\s?\.\s?\.)([”\"’\'\)\]»]*)(\s+)(?=[“\"‘\'\(\[«]*[A-Z0-9¿¡])"
+)
 
 
 def find_safe_sentence_boundaries(text: str) -> List[int]:
     """
-    Finds cut offsets in text after sentence terminal punctuation,
+    Finds cut offsets in text after sentence terminal punctuation (Golden Rule, FP-2),
     guarding strictly against abbreviations, decimals (3.14), initials (J. K.),
-    and lowercase continuations.
+    and times/versions.
     
     Returns offsets at the end of whitespace so trailing whitespace stays with previous sentence.
     """
     boundaries: List[int] = []
 
     for m in RE_SENTENCE_CANDIDATE.finditer(text):
+        punct_text = m.group(1)
         punct_idx = m.start(1)
-        ws_end = m.end(2)
+        punct_end = punct_idx + len(punct_text)
+        ws_end = m.end(3)
 
-        # Guard 1: Decimal numbers like 3.14 or 0.5
-        if punct_idx > 0 and punct_idx + 1 < len(text):
-            if text[punct_idx - 1].isdigit() and text[punct_idx + 1].isdigit():
+        # Guard 1: Decimal numbers like 3.14 or 2.0
+        if punct_end > 0 and punct_end < len(text):
+            if text[punct_end - 1].isdigit() and text[punct_end].isdigit():
                 continue
 
-        # Guard 2: Preceding token is an abbreviation
-        preceding = text[:punct_idx + 1].split()
+        # Guard 2: Preceding token is an abbreviation or initial
+        preceding = text[:punct_idx].split()
         if preceding:
             last_word = preceding[-1].lower()
-            if last_word in ABBREVIATIONS:
+            if last_word in ABBREVIATIONS or f"{last_word}." in ABBREVIATIONS:
                 continue
-            # Single capital letter with period (initials like 'E. Coli' or 'J. Doe')
+            # Single capital letter with period (initials like 'E.' or 'J.')
+            if len(last_word) == 1 and last_word.isalpha():
+                continue
             if len(last_word) == 2 and last_word[0].isalpha() and last_word[1] == ".":
                 continue
 
