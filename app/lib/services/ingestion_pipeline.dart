@@ -9,6 +9,7 @@ import 'package:syncfusion_flutter_pdf/pdf.dart';
 import 'package:xml/xml.dart';
 import 'package:cross_file/cross_file.dart';
 import 'package:athena/services/lossless_chunker.dart';
+import 'package:athena/models/section_role.dart';
 
 class IngestionResult {
   final String canonicalText;
@@ -226,82 +227,45 @@ class DocumentIngestionPipeline {
       final extractor = PdfTextExtractor(pdfDoc);
       final bookmarks = _extractPdfBookmarks(pdfDoc);
 
-      final allChunks = <Map<String, Object?>>[];
-      final fullCanonical = StringBuffer();
-      int chunkSequence = 1;
-      int offsetDelta = 0;
-      String? trailingUnfinishedParagraph;
+      final pageLinesMap = <int, List<LineFragment>>{};
+      final pageRawTextMap = <int, String>{};
 
       const int windowSize = 25;
       for (int startPage = 0; startPage < totalPages; startPage += windowSize) {
         final endPage = (startPage + windowSize - 1).clamp(0, totalPages - 1);
-        final isFinalBatch = (endPage == totalPages - 1);
-
-        final progressFraction = 0.05 + 0.65 * ((endPage + 1) / totalPages);
+        final progressFraction = 0.05 + 0.55 * ((endPage + 1) / totalPages);
         final pctInt = (progressFraction * 100).toInt();
         final stageMsg =
             'Extracting pages ${startPage + 1}–${endPage + 1} of $totalPages ($pctInt%)...';
         onProgress?.call(progressFraction, stageMsg);
 
-        final batchResult = _processPageRange(
-          extractor: extractor,
-          startPage: startPage,
-          endPage: endPage,
-          totalPages: totalPages,
-          bookmarks: bookmarks,
-          leadingUnfinishedParagraph: trailingUnfinishedParagraph,
-        );
-
-        trailingUnfinishedParagraph = batchResult.trailingUnfinishedParagraph;
-
-        if (batchResult.canonicalText.isNotEmpty) {
-          if (fullCanonical.isNotEmpty) {
-            fullCanonical.write('\n\n');
-            offsetDelta = fullCanonical.length;
-          }
-          fullCanonical.write(batchResult.canonicalText);
-
-          final batchChunks = LosslessChunker().build(
-            documentId: docId,
-            canonicalText: batchResult.canonicalText,
-            spans: batchResult.spans,
-            initialSequence: chunkSequence,
-            offsetDelta: offsetDelta,
-          );
-
-          if (batchChunks.isNotEmpty) {
-            allChunks.addAll(batchChunks);
-            chunkSequence += batchChunks.length;
-
-            if (onBatch != null) {
-              await onBatch(
-                batchChunks,
-                endPage + 1,
-                totalPages,
-                isFinalBatch,
-              );
-            }
-          }
+        for (int p = startPage; p <= endPage; p++) {
+          final lines = _extractHorizontalGroupedLines(extractor, p);
+          pageLinesMap[p + 1] = lines;
+          pageRawTextMap[p + 1] = lines.map((l) => l.text).join('\n');
         }
       }
 
-      final canonicalStr = fullCanonical.toString().trim();
-      final canonicalSha256 = sha256.convert(utf8.encode(canonicalStr)).toString();
-
-      final reconstructedText = allChunks
-          .map((c) => (c['raw_text'] ?? '').toString())
-          .join('');
-      final reconstructedSha256 =
-          sha256.convert(utf8.encode(reconstructedText)).toString();
-      final bool integrityVerified = (canonicalSha256 == reconstructedSha256);
-
-      return IngestionResult(
-        canonicalText: canonicalStr,
-        canonicalSha256: canonicalSha256,
-        pageCount: totalPages,
-        chunks: allChunks,
-        integrityVerified: integrityVerified,
+      onProgress?.call(0.65, 'Analyzing document layout and structure...');
+      final processedResult = _processWholeDocument(
+        docId: docId,
+        totalPages: totalPages,
+        pageLinesMap: pageLinesMap,
+        pageRawTextMap: pageRawTextMap,
+        bookmarks: bookmarks,
       );
+
+      if (onBatch != null && processedResult.chunks.isNotEmpty) {
+        await onBatch(
+          processedResult.chunks,
+          totalPages,
+          totalPages,
+          true,
+        );
+      }
+
+      onProgress?.call(1.0, 'Ready to read');
+      return processedResult;
     } finally {
       try {
         pdfDoc?.dispose();
@@ -328,17 +292,13 @@ class DocumentIngestionPipeline {
       final extractor = PdfTextExtractor(pdfDoc);
       final bookmarks = _extractPdfBookmarks(pdfDoc);
 
-      final fullCanonical = StringBuffer();
-      int chunkSequence = 1;
-      int offsetDelta = 0;
-      String? trailingUnfinishedParagraph;
+      final pageLinesMap = <int, List<LineFragment>>{};
+      final pageRawTextMap = <int, String>{};
 
       const int windowSize = 25;
       for (int startPage = 0; startPage < totalPages; startPage += windowSize) {
         final endPage = (startPage + windowSize - 1).clamp(0, totalPages - 1);
-        final isFinalBatch = (endPage == totalPages - 1);
-
-        final progressFraction = 0.05 + 0.65 * ((endPage + 1) / totalPages);
+        final progressFraction = 0.05 + 0.55 * ((endPage + 1) / totalPages);
         final pctInt = (progressFraction * 100).toInt();
         final stageMsg =
             'Extracting pages ${startPage + 1}–${endPage + 1} of $totalPages ($pctInt%)...';
@@ -348,50 +308,37 @@ class DocumentIngestionPipeline {
           stageLabel: stageMsg,
         ));
 
-        final batchResult = _processPageRange(
-          extractor: extractor,
-          startPage: startPage,
-          endPage: endPage,
-          totalPages: totalPages,
-          bookmarks: bookmarks,
-          leadingUnfinishedParagraph: trailingUnfinishedParagraph,
-        );
-
-        trailingUnfinishedParagraph = batchResult.trailingUnfinishedParagraph;
-
-        List<Map<String, Object?>> batchChunks = [];
-        if (batchResult.canonicalText.isNotEmpty) {
-          if (fullCanonical.isNotEmpty) {
-            fullCanonical.write('\n\n');
-            offsetDelta = fullCanonical.length;
-          }
-          fullCanonical.write(batchResult.canonicalText);
-
-          batchChunks = LosslessChunker().build(
-            documentId: params.docId,
-            canonicalText: batchResult.canonicalText,
-            spans: batchResult.spans,
-            initialSequence: chunkSequence,
-            offsetDelta: offsetDelta,
-          );
-          chunkSequence += batchChunks.length;
+        for (int p = startPage; p <= endPage; p++) {
+          final lines = _extractHorizontalGroupedLines(extractor, p);
+          pageLinesMap[p + 1] = lines;
+          pageRawTextMap[p + 1] = lines.map((l) => l.text).join('\n');
         }
-
-        params.sendPort.send(_WorkerBatchEvent(
-          batchChunks: batchChunks,
-          batchCanonicalText: batchResult.canonicalText,
-          processedPages: endPage + 1,
-          totalPages: totalPages,
-          isFinalBatch: isFinalBatch,
-        ));
       }
 
-      final canonicalStr = fullCanonical.toString().trim();
-      final canonicalSha256 = sha256.convert(utf8.encode(canonicalStr)).toString();
+      params.sendPort.send(const _WorkerProgressEvent(
+        progress: 0.65,
+        stageLabel: 'Analyzing document layout and structure...',
+      ));
+
+      final processedResult = _processWholeDocument(
+        docId: params.docId,
+        totalPages: totalPages,
+        pageLinesMap: pageLinesMap,
+        pageRawTextMap: pageRawTextMap,
+        bookmarks: bookmarks,
+      );
+
+      params.sendPort.send(_WorkerBatchEvent(
+        batchChunks: processedResult.chunks,
+        batchCanonicalText: processedResult.canonicalText,
+        processedPages: totalPages,
+        totalPages: totalPages,
+        isFinalBatch: true,
+      ));
 
       params.sendPort.send(_WorkerDoneEvent(
-        canonicalText: canonicalStr,
-        canonicalSha256: canonicalSha256,
+        canonicalText: processedResult.canonicalText,
+        canonicalSha256: processedResult.canonicalSha256,
         pageCount: totalPages,
       ));
     } catch (e, stack) {
@@ -500,79 +447,243 @@ class DocumentIngestionPipeline {
     );
   }
 
-  // --- STAGE-BY-STAGE GEOMETRIC & STATISTICAL PAGE PIPELINE (F01–F06) ---
+  // --- PASS 2: Structure Resolver, LayoutProfile & TocDetector (FP-5 to FP-10) ---
 
-  static _PageRangeResult _processPageRange({
-    required PdfTextExtractor extractor,
-    required int startPage,
-    required int endPage,
-    required int totalPages,
-    required Map<int, String> bookmarks,
-    String? leadingUnfinishedParagraph,
+  static bool continuesParagraph({
+    required LineFragment a,
+    required LineFragment b,
+    required LayoutProfile profile,
+    required bool isHeadingA,
   }) {
-    final buffer = StringBuffer();
-    final spans = <Map<String, dynamic>>[];
-    String? currentCarryOver = leadingUnfinishedParagraph;
+    final h = profile.bodyFontSize;
+    final pitch = profile.linePitch;
 
-    // First collect all raw lines for the batch to detect repeated headers/footers (F04)
-    final Map<int, List<LineFragment>> pageLinesMap = {};
-    for (int p = startPage; p <= endPage; p++) {
-      pageLinesMap[p] = _extractHorizontalGroupedLines(extractor, p);
+    // 1) 0.5 * h < (b.top - a.top) <= 1.8 * linePitch
+    final verticalDiff = b.top - a.top;
+    if (verticalDiff <= 0.5 * h || verticalDiff > 1.8 * pitch) {
+      return false;
     }
 
-    // Stage 2: Repeated Header/Footer identification across batch (>= 30% pages)
-    final repeatedHeadersFooters = _findRepeatedHeadersFooters(pageLinesMap);
+    // 2) |a.fontSize - b.fontSize| <= 0.3 * h
+    if ((a.fontSize - b.fontSize).abs() > 0.3 * h) {
+      return false;
+    }
 
-    for (int p = startPage; p <= endPage; p++) {
-      final pageNum = p + 1;
-      var lines = pageLinesMap[p] ?? [];
-      if (lines.isEmpty) continue;
+    // 3) a and b overlap horizontally in the same column band
+    final horizontalOverlap = min(a.right, b.right) - max(a.left, b.left);
+    if (horizontalOverlap <= 0) {
+      return false;
+    }
 
-      // Filter Stage 2: remove repeated headers/footers and lone page numbers
+    // 4) a.right >= 0.90 * bodyRight OR a ends with hyphen (or !endsWithSentenceTerminalPunctuation)
+    final aTrim = a.text.trim();
+    final reachesRight = a.right >= 0.90 * profile.bodyRight;
+    final endsHyphen = aTrim.endsWith('-') ||
+        aTrim.endsWith('\u2010') ||
+        aTrim.endsWith('\u2011');
+    final endsTerminal = RegExp(r'[.!?…”"’]\s*$').hasMatch(aTrim);
+    if (!reachesRight && !endsHyphen && endsTerminal) {
+      return false;
+    }
+
+    // 5) b does not start with a bullet, numbered list marker, or opening dialogue quote when a ended a sentence
+    final bTrim = b.text.trim();
+    final bStartsList =
+        RegExp(r'^(?:[•*\-–—▪▫◦]|\d+[.)]|\([a-zA-Z0-9]+\))\s+').hasMatch(bTrim);
+    final bStartsQuote = RegExp(r'^["“‘\x27]').hasMatch(bTrim);
+    if (endsTerminal && (bStartsList || bStartsQuote)) {
+      return false;
+    }
+
+    // 6) b is NOT first-line indented ((b.left - bodyLeft) < 0.5 * h when document uses paragraph indents)
+    if (profile.usesIndent) {
+      final indentDiff = b.left - profile.bodyLeft;
+      if (indentDiff >= 0.5 * h) {
+        return false;
+      }
+    }
+
+    // 7) Neither a nor b has an internal tabular column gap >= 3 * h
+    if (RegExp(r'\s{4,}').hasMatch(a.text) ||
+        RegExp(r'\s{4,}').hasMatch(b.text)) {
+      return false;
+    }
+
+    // 8) a is not a heading
+    if (isHeadingA) {
+      return false;
+    }
+
+    return true;
+  }
+
+  static bool isStrictHeading({
+    required LineFragment line,
+    required LayoutProfile profile,
+    String? bookmarkTitle,
+    Set<String>? tocTitles,
+  }) {
+    final text = line.text.trim();
+    if (text.isEmpty) return false;
+    final words =
+        text.split(RegExp(r'\s+')).where((w) => w.isNotEmpty).toList();
+
+    // 1. (fontSize >= 1.15 * bodyFontSize AND words <= 14)
+    if (line.fontSize >= 1.15 * profile.bodyFontSize && words.length <= 14) {
+      return true;
+    }
+
+    // 2. Matches bookmark title
+    if (bookmarkTitle != null &&
+        bookmarkTitle.isNotEmpty &&
+        text.toLowerCase().contains(bookmarkTitle.toLowerCase())) {
+      return true;
+    }
+
+    // 3. Matches TOC title
+    if (tocTitles != null && tocTitles.contains(text.toLowerCase())) {
+      return true;
+    }
+
+    // 4. Explicit section pattern
+    final explicitSec = RegExp(
+      r'^(?:chapter|part|book|section|preface|foreword|introduction|prologue|epilogue|afterword|appendix)\b',
+      caseSensitive: false,
+    );
+    if (explicitSec.hasMatch(text) && words.length <= 14) {
+      return true;
+    }
+
+    return false;
+  }
+
+  static IngestionResult _processWholeDocument({
+    required String docId,
+    required int totalPages,
+    required Map<int, List<LineFragment>> pageLinesMap,
+    required Map<int, String> pageRawTextMap,
+    required Map<int, String> bookmarks,
+  }) {
+    if (pageLinesMap.isEmpty) {
+      return IngestionResult(
+        canonicalText: '',
+        canonicalSha256: sha256.convert(utf8.encode('')).toString(),
+        pageCount: totalPages,
+        chunks: const [],
+        integrityVerified: true,
+      );
+    }
+
+    // 1. Whole-book furniture removal (FP-6)
+    final repeatedHeadersFooters = detectFurniture(pageLinesMap);
+    final cleanLinesMap = <int, List<LineFragment>>{};
+    for (int p = 1; p <= totalPages; p++) {
+      var lines = pageLinesMap[p] ?? const [];
       lines = lines.where((line) {
-        final norm = _normalizeLineForComparison(line.text);
-        if (repeatedHeadersFooters.contains(norm)) return false;
+        final key = _furnitureKey(line.text);
+        if (repeatedHeadersFooters.contains(key)) return false;
         if (_isLonePageNumber(line.text)) return false;
         return true;
       }).toList();
+      cleanLinesMap[p] = lines;
+    }
 
-      if (lines.isEmpty) continue;
+    // 2. Compute LayoutProfile (FP-6)
+    final profile = LayoutProfile.compute(cleanLinesMap);
 
-      final rawPageText = lines.map((l) => l.text).join('\n');
+    // 3. TocDetector & Heading discovery (FP-8, FP-9)
+    final tocPages = <int>{};
+    final tocTitles = <String>{};
+    final explicitHeadingMap = <int, String>{};
 
-      // Stage 3: Page Quality & OCR Corruption Gate (F02)
-      final quality = computePageQuality(rawPageText);
-      if (!quality.isAcceptable) {
-        // Filter out noisy corrupted lines; skip page if too corrupted
-        lines = lines.where((l) => computePageQuality(l.text).isAcceptable).toList();
-        if (lines.isEmpty) continue;
-      }
-
-      // Stage 4: Scoring Front-Matter & Back-Matter Classifier (F01)
-      final frontMatterCutoff = (totalPages * 0.15).ceil().clamp(1, 15);
-      final backMatterCutoff = (totalPages * 0.85).floor();
-      final isEdgePage = (p < frontMatterCutoff || p >= backMatterCutoff);
-
-      if (isEdgePage) {
-        final frontScore = scoreFrontOrBackMatter(lines, rawPageText);
-        if (frontScore >= 40) {
-          continue; // Exclude publishing/copyright/blank front-matter
+    for (int p = 1; p <= totalPages; p++) {
+      final lines = cleanLinesMap[p] ?? const [];
+      final rawText = pageRawTextMap[p] ?? '';
+      final tocRes = TocDetector.analyzePage(
+        lines: lines,
+        bodyRight: profile.bodyRight,
+        rawPageText: rawText,
+      );
+      if (tocRes.isToc) {
+        tocPages.add(p);
+        for (final entry in tocRes.entries) {
+          tocTitles.add(entry.title.toLowerCase());
         }
       }
+      for (final l in lines) {
+        if (isStrictHeading(
+          line: l,
+          profile: profile,
+          bookmarkTitle: bookmarks[p],
+          tocTitles: tocTitles,
+        )) {
+          explicitHeadingMap[p] = l.text.trim();
+          break;
+        }
+      }
+    }
 
-      // Stage 5 & 6: De-Hyphenation, Geometric Paragraph Reflow, and Heading Detection
+    // 4. StructureResolver: 5-state monotonic Viterbi smoothing (FP-9, FP-10)
+    final roles = StructureResolver.smoothRoles(
+      totalPages: totalPages,
+      pageLinesMap: cleanLinesMap,
+      pageRawTextMap: pageRawTextMap,
+      bookmarks: bookmarks,
+      tocPages: tocPages,
+      explicitHeadingMap: explicitHeadingMap,
+    );
+
+    // 5. Paragraph reflow across the entire book
+    final buffer = StringBuffer();
+    final spans = <Map<String, dynamic>>[];
+    String? currentCarryOver;
+
+    for (int p = 1; p <= totalPages; p++) {
+      final role =
+          (p - 1 < roles.length) ? roles[p - 1] : SectionRole.chapter;
+      // Exclude non-reading matter (TOC, copyright, index, etc.)
+      if (role.isMatter) {
+        continue;
+      }
+
+      var lines = cleanLinesMap[p] ?? const [];
+      if (lines.isEmpty) continue;
+
+      // 2-Column XY-cut ordering if applicable (FP-6)
+      if (profile.hasTwoColumns && profile.columnGutterLeft > 0) {
+        final col1 = lines
+            .where((l) => l.right <= profile.columnGutterRight)
+            .toList()
+          ..sort((a, b) => a.top.compareTo(b.top));
+        final col2 = lines
+            .where((l) => l.left >= profile.columnGutterLeft)
+            .toList()
+          ..sort((a, b) => a.top.compareTo(b.top));
+        final other = lines
+            .where((l) =>
+                l.right > profile.columnGutterRight &&
+                l.left < profile.columnGutterLeft)
+            .toList()
+          ..sort((a, b) => a.top.compareTo(b.top));
+        lines = [...col1, ...col2, ...other];
+      }
+
+      final pageHeading = explicitHeadingMap[p] ??
+          bookmarks[p] ??
+          (role != SectionRole.chapter ? role.displayLabel : null);
+
       final reflowResult = reflowLinesIntoParagraphs(
         lines: lines,
-        pageNum: pageNum,
-        bookmarkTitle: bookmarks[pageNum],
+        pageNum: p,
+        bookmarkTitle: pageHeading,
         carryOver: currentCarryOver,
+        layoutProfile: profile,
       );
 
       currentCarryOver = reflowResult.carryOver;
 
       for (final para in reflowResult.paragraphs) {
         if (para.text.isEmpty) continue;
-
         if (buffer.isNotEmpty) {
           buffer.write('\n\n');
         }
@@ -583,10 +694,15 @@ class DocumentIngestionPipeline {
         spans.add({
           'start': start,
           'end': end,
-          'page_start': pageNum,
-          'page_end': pageNum,
+          'page_start': p,
+          'page_end': p,
           'type': para.isHeading ? 'heading' : 'paragraph',
-          if (para.sectionTitle != null) 'section_title': para.sectionTitle,
+          'section_title': para.sectionTitle ??
+              pageHeading ??
+              (role != SectionRole.chapter
+                  ? role.displayLabel
+                  : 'Chapter Passage'),
+          'section_role': role.name,
         });
       }
     }
@@ -600,19 +716,42 @@ class DocumentIngestionPipeline {
       spans.add({
         'start': start,
         'end': end,
-        'page_start': endPage + 1,
-        'page_end': endPage + 1,
+        'page_start': totalPages,
+        'page_end': totalPages,
         'type': 'paragraph',
+        'section_title': 'Chapter Passage',
+        'section_role': 'chapter',
       });
       currentCarryOver = null;
     }
 
-    return _PageRangeResult(
-      canonicalText: buffer.toString().trim(),
+    final canonicalStr = buffer.toString().trim();
+    final canonicalSha256 =
+        sha256.convert(utf8.encode(canonicalStr)).toString();
+
+    // 6. Adaptive section chunking across the whole document (FP-5, FP-7)
+    final chunks = LosslessChunker().build(
+      documentId: docId,
+      canonicalText: canonicalStr,
       spans: spans,
-      trailingUnfinishedParagraph: currentCarryOver,
+    );
+
+    final reconstructedText =
+        chunks.map((c) => (c['raw_text'] ?? '').toString()).join('');
+    final reconstructedSha256 =
+        sha256.convert(utf8.encode(reconstructedText)).toString();
+    final bool integrityVerified = (canonicalSha256 == reconstructedSha256);
+
+    return IngestionResult(
+      canonicalText: canonicalStr,
+      canonicalSha256: canonicalSha256,
+      pageCount: totalPages,
+      chunks: chunks,
+      integrityVerified: integrityVerified,
     );
   }
+
+
 
   // --- STAGE 1: Extract Lines with Visual Row Grouping (F03) ---
 
@@ -746,7 +885,10 @@ class DocumentIngestionPipeline {
     return buf.toString();
   }
 
-  // --- STAGE 2: Repeated Header / Footer & Page Number Detection (F04) ---
+  // --- STAGE 2: Repeated Header / Footer & Page Number Detection (F04, FP-6) ---
+
+  static Set<String> detectFurniture(Map<int, List<LineFragment>> pageLinesMap) =>
+      _findRepeatedHeadersFooters(pageLinesMap);
 
   static Set<String> _findRepeatedHeadersFooters(
       Map<int, List<LineFragment>> pageLinesMap) {
@@ -760,44 +902,42 @@ class DocumentIngestionPipeline {
       final topThreshold = maxBottom * 0.10;
       final bottomThreshold = maxBottom * 0.90;
 
-      final headerFooterLines = lines.where(
-          (l) => l.top <= topThreshold || l.bottom >= bottomThreshold);
+      final headerFooterLines = lines.where((l) =>
+          (l.top <= topThreshold || l.bottom >= bottomThreshold) &&
+          l.text.trim().length <= 80);
       final seenOnThisPage = <String>{};
 
       for (final l in headerFooterLines) {
-        final norm = _normalizeLineForComparison(l.text);
-        if (norm.length >= 4 && seenOnThisPage.add(norm)) {
-          occurrenceCount[norm] = (occurrenceCount[norm] ?? 0) + 1;
+        final key = _furnitureKey(l.text);
+        if (key.length >= 3 && seenOnThisPage.add(key)) {
+          occurrenceCount[key] = (occurrenceCount[key] ?? 0) + 1;
         }
       }
     }
 
     final repeated = <String>{};
     for (final entry in occurrenceCount.entries) {
-      if (entry.value / totalPages >= 0.30) {
+      // Short line appearing on >= 3 pages and >= 15% of pages (FP-6)
+      if (entry.value >= 3 && (entry.value / totalPages) >= 0.15) {
         repeated.add(entry.key);
       }
     }
     return repeated;
   }
 
-  static String _normalizeLineForComparison(String text) {
+  static String _furnitureKey(String text) {
     return text
         .toLowerCase()
         .replaceAll(RegExp(r'\d+'), '#')
-        .replaceAll(RegExp(r'[^\w#]'), '')
+        .replaceAll(RegExp(r'\s+'), ' ')
         .trim();
   }
 
   static bool _isLonePageNumber(String text) {
     final t = text.trim();
-    if (RegExp(r'^\s*\d+\s*$').hasMatch(t)) return true;
-    if (RegExp(r'^\s*[ivxlcdmIVXLCDM]+\s*$').hasMatch(t)) return true;
-    if (RegExp(r'^\s*(?:Page|-|—)?\s*\d+\s*(?:-|—)?\s*$', caseSensitive: false)
-        .hasMatch(t)) {
-      return true;
-    }
-    return false;
+    return RegExp(r'^\s*(?:page\s+)?(\d{1,4}|[ivxlcdm]{1,7})\s*$',
+            caseSensitive: false)
+        .hasMatch(t);
   }
 
   // --- STAGE 3: Page Quality & OCR Corruption Gate (F02) ---
@@ -937,6 +1077,7 @@ class DocumentIngestionPipeline {
     required int pageNum,
     String? bookmarkTitle,
     String? carryOver,
+    LayoutProfile? layoutProfile,
   }) {
     final paragraphs = <ParagraphInfo>[];
     if (lines.isEmpty) {
@@ -1042,12 +1183,24 @@ class DocumentIngestionPipeline {
       bool isParagraphEnd = false;
       if (i + 1 < lines.length) {
         final nextLine = lines[i + 1];
-        final verticalGap = nextLine.top - line.bottom;
-        final endsWithPunct = RegExp(r'[.!?…”"’]\s*$').hasMatch(rawLine);
-        final isShortLine = line.width < (0.75 * maxLineWidth);
+        if (layoutProfile != null) {
+          final continues = continuesParagraph(
+            a: line,
+            b: nextLine,
+            profile: layoutProfile,
+            isHeadingA: isCurrentHeading,
+          );
+          if (!continues) {
+            isParagraphEnd = true;
+          }
+        } else {
+          final verticalGap = nextLine.top - line.bottom;
+          final endsWithPunct = RegExp(r'[.!?…”"’]\s*$').hasMatch(rawLine);
+          final isShortLine = line.width < (0.75 * maxLineWidth);
 
-        if (verticalGap > (1.35 * avgHeight) || (endsWithPunct && isShortLine)) {
-          isParagraphEnd = true;
+          if (verticalGap > (1.35 * avgHeight) || (endsWithPunct && isShortLine)) {
+            isParagraphEnd = true;
+          }
         }
       }
 
@@ -1155,15 +1308,7 @@ class DocumentIngestionPipeline {
     try {
       final bms = doc.bookmarks;
       for (int i = 0; i < bms.count; i++) {
-        final bm = bms[i];
-        final dest = bm.destination;
-        if (dest != null) {
-          final page = dest.page;
-          final pageIndex = doc.pages.indexOf(page);
-          if (pageIndex >= 0 && bm.title.trim().isNotEmpty) {
-            bookmarks[pageIndex + 1] = bm.title.trim();
-          }
-        }
+        _walkBookmarks(doc, bms[i], bookmarks);
       }
     } catch (e) {
       debugPrint('[Athena Ingestion] extract bookmarks error: $e');
@@ -1171,7 +1316,177 @@ class DocumentIngestionPipeline {
     return bookmarks;
   }
 
+  static void _walkBookmarks(
+      PdfDocument doc, PdfBookmark bm, Map<int, String> bookmarks) {
+    try {
+      final dest = bm.destination;
+      if (dest != null) {
+        final pageIndex = doc.pages.indexOf(dest.page);
+        if (pageIndex >= 0 && bm.title.trim().isNotEmpty) {
+          bookmarks[pageIndex + 1] = bm.title.trim();
+        }
+      }
+      for (int i = 0; i < bm.count; i++) {
+        _walkBookmarks(doc, bm[i], bookmarks);
+      }
+    } catch (e) {
+      debugPrint('[Athena Ingestion] child bookmark error: $e');
+    }
+  }
+
   // --- EPUB PIPELINE WITH COMPREHENSIVE HTML ENTITIES & CHAPTER NAVIGATION (F06, F34.6) ---
+
+  static SectionRole _resolveEpubSectionRole({
+    required String href,
+    required String properties,
+    String? htmlContent,
+    String? sectionTitle,
+  }) {
+    final lowerHref = href.toLowerCase();
+    final fileName = lowerHref.split('/').last;
+
+    // 1. Check properties / epub:type in manifest or HTML
+    final lowerProps = properties.toLowerCase();
+    if (lowerProps.contains('nav') || lowerProps.contains('toc')) {
+      return SectionRole.toc;
+    }
+    if (lowerProps.contains('cover')) {
+      return SectionRole.cover;
+    }
+
+    // 2. Check HTML attributes epub:type / role="doc-*"
+    if (htmlContent != null && htmlContent.isNotEmpty) {
+      final epubTypeMatch = RegExp(r'epub:type\s*=\s*["'']([^"'']+)["'']', caseSensitive: false).firstMatch(htmlContent);
+      if (epubTypeMatch != null) {
+        final epubType = epubTypeMatch.group(1)!.toLowerCase();
+        final role = _roleFromTypeString(epubType);
+        if (role != SectionRole.unknown) return role;
+      }
+      final docRoleMatch = RegExp(r'role\s*=\s*["'']doc-([^"'']+)["'']', caseSensitive: false).firstMatch(htmlContent);
+      if (docRoleMatch != null) {
+        final docRole = docRoleMatch.group(1)!.toLowerCase();
+        final role = _roleFromTypeString(docRole);
+        if (role != SectionRole.unknown) return role;
+      }
+    }
+
+    // 3. Filename patterns
+    if (RegExp(r'(?:^|[-_.])(?:toc|ncx|contents)(?:[-_.]|$)', caseSensitive: false).hasMatch(fileName)) {
+      return SectionRole.toc;
+    }
+    if (RegExp(r'(?:^|[-_.])(?:cover)(?:[-_.]|$)', caseSensitive: false).hasMatch(fileName)) {
+      return SectionRole.cover;
+    }
+    if (RegExp(r'(?:^|[-_.])(?:titlepage|title[-_]page)(?:[-_.]|$)', caseSensitive: false).hasMatch(fileName)) {
+      return SectionRole.titlePage;
+    }
+    if (RegExp(r'(?:^|[-_.])(?:halftitle|half[-_]title)(?:[-_.]|$)', caseSensitive: false).hasMatch(fileName)) {
+      return SectionRole.halfTitle;
+    }
+    if (RegExp(r'(?:^|[-_.])(?:copyright|colophon|imprint)(?:[-_.]|$)', caseSensitive: false).hasMatch(fileName)) {
+      return SectionRole.copyright;
+    }
+    if (RegExp(r'(?:^|[-_.])(?:dedication)(?:[-_.]|$)', caseSensitive: false).hasMatch(fileName)) {
+      return SectionRole.dedication;
+    }
+    if (RegExp(r'(?:^|[-_.])(?:epigraph)(?:[-_.]|$)', caseSensitive: false).hasMatch(fileName)) {
+      return SectionRole.epigraph;
+    }
+    if (RegExp(r'(?:^|[-_.])(?:praise)(?:[-_.]|$)', caseSensitive: false).hasMatch(fileName)) {
+      return SectionRole.praise;
+    }
+    if (RegExp(r'(?:^|[-_.])(?:alsoby|otherbooks)(?:[-_.]|$)', caseSensitive: false).hasMatch(fileName)) {
+      return SectionRole.alsoBy;
+    }
+    if (RegExp(r'(?:^|[-_.])(?:loi|lot|figures|tables)(?:[-_.]|$)', caseSensitive: false).hasMatch(fileName)) {
+      return SectionRole.listOfFigures;
+    }
+    if (RegExp(r'(?:^|[-_.])(?:preface)(?:[-_.]|$)', caseSensitive: false).hasMatch(fileName)) {
+      return SectionRole.preface;
+    }
+    if (RegExp(r'(?:^|[-_.])(?:foreword)(?:[-_.]|$)', caseSensitive: false).hasMatch(fileName)) {
+      return SectionRole.foreword;
+    }
+    if (RegExp(r'(?:^|[-_.])(?:intro|introduction)(?:[-_.]|$)', caseSensitive: false).hasMatch(fileName)) {
+      return SectionRole.introduction;
+    }
+    if (RegExp(r'(?:^|[-_.])(?:prologue)(?:[-_.]|$)', caseSensitive: false).hasMatch(fileName)) {
+      return SectionRole.prologue;
+    }
+    if (RegExp(r'(?:^|[-_.])(?:ack|acknowledg)(?:[-_.]|$)', caseSensitive: false).hasMatch(fileName)) {
+      return SectionRole.acknowledgments;
+    }
+    if (RegExp(r'(?:^|[-_.])(?:notes|endnotes|rearnotes|footnotes)(?:[-_.]|$)', caseSensitive: false).hasMatch(fileName)) {
+      return SectionRole.notes;
+    }
+    if (RegExp(r'(?:^|[-_.])(?:biblio|references)(?:[-_.]|$)', caseSensitive: false).hasMatch(fileName)) {
+      return SectionRole.bibliography;
+    }
+    if (RegExp(r'(?:^|[-_.])(?:index)(?:[-_.]|$)', caseSensitive: false).hasMatch(fileName)) {
+      return SectionRole.bookIndex;
+    }
+    if (RegExp(r'(?:^|[-_.])(?:glossary)(?:[-_.]|$)', caseSensitive: false).hasMatch(fileName)) {
+      return SectionRole.glossary;
+    }
+    if (RegExp(r'(?:^|[-_.])(?:about|biography|author)(?:[-_.]|$)', caseSensitive: false).hasMatch(fileName)) {
+      return SectionRole.aboutAuthor;
+    }
+    if (RegExp(r'(?:^|[-_.])(?:adcard|advertisement)(?:[-_.]|$)', caseSensitive: false).hasMatch(fileName)) {
+      return SectionRole.adCard;
+    }
+    if (RegExp(r'(?:^|[-_.])(?:epilogue)(?:[-_.]|$)', caseSensitive: false).hasMatch(fileName)) {
+      return SectionRole.epilogue;
+    }
+    if (RegExp(r'(?:^|[-_.])(?:afterword)(?:[-_.]|$)', caseSensitive: false).hasMatch(fileName)) {
+      return SectionRole.afterword;
+    }
+    if (RegExp(r'(?:^|[-_.])(?:appendix)(?:[-_.]|$)', caseSensitive: false).hasMatch(fileName)) {
+      return SectionRole.appendix;
+    }
+    if (RegExp(r'(?:^|[-_.])(?:fm\d|frontmatter)(?:[-_.]|$)', caseSensitive: false).hasMatch(fileName)) {
+      return SectionRole.titlePage;
+    }
+    if (RegExp(r'(?:^|[-_.])(?:bm\d|backmatter)(?:[-_.]|$)', caseSensitive: false).hasMatch(fileName)) {
+      return SectionRole.notes;
+    }
+
+    // 4. Check section title if available
+    if (sectionTitle != null && sectionTitle.isNotEmpty) {
+      final roleFromTitle = SectionRole.fromString(sectionTitle);
+      if (roleFromTitle != SectionRole.unknown) {
+        return roleFromTitle;
+      }
+    }
+
+    return SectionRole.chapter;
+  }
+
+  static SectionRole _roleFromTypeString(String type) {
+    final t = type.toLowerCase();
+    if (t.contains('toc')) return SectionRole.toc;
+    if (t.contains('cover')) return SectionRole.cover;
+    if (t.contains('titlepage')) return SectionRole.titlePage;
+    if (t.contains('halftitle')) return SectionRole.halfTitle;
+    if (t.contains('copyright') || t.contains('colophon')) return SectionRole.copyright;
+    if (t.contains('dedication')) return SectionRole.dedication;
+    if (t.contains('epigraph')) return SectionRole.epigraph;
+    if (t.contains('praise')) return SectionRole.praise;
+    if (t.contains('preface')) return SectionRole.preface;
+    if (t.contains('foreword')) return SectionRole.foreword;
+    if (t.contains('intro')) return SectionRole.introduction;
+    if (t.contains('prologue')) return SectionRole.prologue;
+    if (t.contains('ack')) return SectionRole.acknowledgments;
+    if (t.contains('part')) return SectionRole.part;
+    if (t.contains('chapter')) return SectionRole.chapter;
+    if (t.contains('epilogue')) return SectionRole.epilogue;
+    if (t.contains('afterword')) return SectionRole.afterword;
+    if (t.contains('appendix')) return SectionRole.appendix;
+    if (t.contains('note') || t.contains('endnote')) return SectionRole.notes;
+    if (t.contains('biblio')) return SectionRole.bibliography;
+    if (t.contains('index')) return SectionRole.bookIndex;
+    if (t.contains('glossary')) return SectionRole.glossary;
+    return SectionRole.unknown;
+  }
 
   static Future<IngestionResult> _ingestEpub({
     required String docId,
@@ -1228,9 +1543,7 @@ class DocumentIngestionPipeline {
 
     final buffer = StringBuffer();
     final spans = <Map<String, dynamic>>[];
-    final allChunks = <Map<String, Object?>>[];
-    int chunkSequence = 1;
-    int offsetDelta = 0;
+    int readableSectionCount = 0;
 
     for (int idx = 0; idx < totalSections; idx++) {
       final itemRef = itemRefs[idx];
@@ -1240,77 +1553,72 @@ class DocumentIngestionPipeline {
       if (item == null) continue;
 
       final href = item.href;
-      final fileNameOnly = href.split('/').last.toLowerCase();
-      final isNavDoc = item.properties.contains('nav') || RegExp(r'^(toc|ncx)(?:[-_.]|$)', caseSensitive: false).hasMatch(fileNameOnly);
-      final isPureCoverOrCopyright = RegExp(r'^(cover|titlepage|copyright)(?:[-_.]|$)', caseSensitive: false).hasMatch(fileNameOnly);
-      final isSubstantiveProse = RegExp(r'(preface|foreword|prologue|intro)', caseSensitive: false).hasMatch(fileNameOnly);
-
-      if ((isNavDoc || isPureCoverOrCopyright) && !isSubstantiveProse) continue;
-
       final resolvedPath = _resolveEpubHref(opfPath, href);
       final contentBytes = files[resolvedPath]?.content;
       if (contentBytes is! List<int>) continue;
 
       final htmlContent = utf8.decode(contentBytes, allowMalformed: true);
       final sectionTitle = _extractEpubHeading(htmlContent);
+      final role = _resolveEpubSectionRole(
+        href: href,
+        properties: item.properties,
+        htmlContent: htmlContent,
+        sectionTitle: sectionTitle,
+      );
+
+      // Exclude non-reading matter (TOC, copyright, cover, notes, bibliography, index, etc.)
+      if (role.isMatter) {
+        continue;
+      }
+
       final text = _decodeEpubHtmlToProse(htmlContent);
       if (text.isEmpty) continue;
 
+      readableSectionCount++;
       final progress = 0.1 + 0.6 * ((idx + 1) / totalSections);
-      onProgress?.call(progress, 'Extracting chapter ${idx + 1} of $totalSections...');
+      onProgress?.call(progress, 'Extracting section $readableSectionCount of $totalSections...');
 
-      final sectionStart = buffer.length;
       if (buffer.isNotEmpty) {
         buffer.write('\n\n');
-        offsetDelta = buffer.length;
       }
+      final sectionStart = buffer.length;
       buffer.write(text);
       final sectionEnd = buffer.length;
-
-      final sectionSpans = [
-        {
-          'start': 0,
-          'end': text.length,
-          'page_start': idx + 1,
-          'page_end': idx + 1,
-          'type': 'paragraph',
-          if (sectionTitle != null) 'section_title': sectionTitle,
-        }
-      ];
 
       spans.add({
         'start': sectionStart,
         'end': sectionEnd,
-        'page_start': idx + 1,
-        'page_end': idx + 1,
+        'page_start': readableSectionCount,
+        'page_end': readableSectionCount,
         'type': 'paragraph',
-        if (sectionTitle != null) 'section_title': sectionTitle,
+        if (sectionTitle != null && sectionTitle.isNotEmpty)
+          'section_title': sectionTitle
+        else if (role != SectionRole.chapter)
+          'section_title': role.displayLabel
+        else
+          'section_title': 'Chapter $readableSectionCount',
+        'section_role': role.name,
       });
-
-      final batchChunks = LosslessChunker().build(
-        documentId: docId,
-        canonicalText: text,
-        spans: sectionSpans,
-        initialSequence: chunkSequence,
-        offsetDelta: offsetDelta,
-      );
-
-      if (batchChunks.isNotEmpty) {
-        allChunks.addAll(batchChunks);
-        chunkSequence += batchChunks.length;
-        if (onBatch != null) {
-          await onBatch(
-            batchChunks,
-            idx + 1,
-            totalSections,
-            idx == totalSections - 1,
-          );
-        }
-      }
     }
 
-    final canonicalStr = buffer.toString().trim();
+    final canonicalStr = buffer.toString();
     final canonicalSha256 = sha256.convert(utf8.encode(canonicalStr)).toString();
+
+    // Run LosslessChunker().build across the whole reconstructed book
+    final allChunks = LosslessChunker().build(
+      documentId: docId,
+      canonicalText: canonicalStr,
+      spans: spans,
+    );
+
+    if (onBatch != null && allChunks.isNotEmpty) {
+      await onBatch(
+        allChunks,
+        readableSectionCount,
+        readableSectionCount,
+        true,
+      );
+    }
 
     final reconstructedText =
         allChunks.map((c) => (c['raw_text'] ?? '').toString()).join('');
@@ -1558,17 +1866,7 @@ class _WorkerErrorEvent {
   const _WorkerErrorEvent({required this.error});
 }
 
-class _PageRangeResult {
-  final String canonicalText;
-  final List<Map<String, dynamic>> spans;
-  final String? trailingUnfinishedParagraph;
 
-  const _PageRangeResult({
-    required this.canonicalText,
-    required this.spans,
-    this.trailingUnfinishedParagraph,
-  });
-}
 
 class ParagraphInfo {
   final String text;
@@ -1604,4 +1902,513 @@ class ReflowResult {
     required this.paragraphs,
     this.carryOver,
   });
+}
+
+class TocEntry {
+  final String title;
+  final int pageNumber;
+  const TocEntry({required this.title, required this.pageNumber});
+}
+
+class TocDetectionResult {
+  final bool isToc;
+  final List<TocEntry> entries;
+  const TocDetectionResult({required this.isToc, required this.entries});
+}
+
+class TocDetector {
+  static final dotLeaderRe = RegExp(
+    r'^(.+?\S)[.…](?:[.…\s]){2,}(\d{1,4}|[ivxlcdm]{1,6})$',
+    caseSensitive: false,
+  );
+  static final trailingNumRe =
+      RegExp(r'(\d{1,4}|[ivxlcdm]{1,6})\s*$', caseSensitive: false);
+  static final contentsHeaderRe =
+      RegExp(r'^(?:table\s+of\s+)?contents\b', caseSensitive: false);
+
+  static int? parseRoman(String s) {
+    final clean = s.trim().toLowerCase();
+    if (!RegExp(r'^[ivxlcdm]+$').hasMatch(clean)) return null;
+    const values = {
+      'i': 1,
+      'v': 5,
+      'x': 10,
+      'l': 50,
+      'c': 100,
+      'd': 500,
+      'm': 1000
+    };
+    int total = 0;
+    int prev = 0;
+    for (int i = clean.length - 1; i >= 0; i--) {
+      final curr = values[clean[i]] ?? 0;
+      if (curr < prev) {
+        total -= curr;
+      } else {
+        total += curr;
+        prev = curr;
+      }
+    }
+    return total > 0 ? total : null;
+  }
+
+  static TocDetectionResult analyzePage({
+    required List<LineFragment> lines,
+    required double bodyRight,
+    required String rawPageText,
+  }) {
+    final entries = <TocEntry>[];
+    bool hasContentsHeader = false;
+    for (int i = 0; i < lines.length && i < 4; i++) {
+      if (contentsHeaderRe.hasMatch(lines[i].text.trim())) {
+        hasContentsHeader = true;
+        break;
+      }
+    }
+    if (!hasContentsHeader) {
+      final firstLines =
+          rawPageText.toLowerCase().split('\n').take(4).join(' ');
+      if (contentsHeaderRe.hasMatch(firstLines.trim())) {
+        hasContentsHeader = true;
+      }
+    }
+
+    final candidatePages = <int>[];
+    for (final line in lines) {
+      final t = line.text.trim();
+      final dotMatch = dotLeaderRe.firstMatch(t);
+      if (dotMatch != null) {
+        final title = dotMatch.group(1)!.trim();
+        final pgStr = dotMatch.group(2)!.trim();
+        final pgNum = int.tryParse(pgStr) ?? parseRoman(pgStr);
+        if (pgNum != null) {
+          entries.add(TocEntry(title: title, pageNumber: pgNum));
+          candidatePages.add(pgNum);
+          continue;
+        }
+      }
+
+      if (bodyRight > 0 && line.right >= 0.88 * bodyRight) {
+        final numMatch = trailingNumRe.firstMatch(t);
+        if (numMatch != null) {
+          final pgStr = numMatch.group(1)!.trim();
+          final pgNum = int.tryParse(pgStr) ?? parseRoman(pgStr);
+          final title = t
+              .substring(0, numMatch.start)
+              .trim()
+              .replaceAll(RegExp(r'[\.…\-_]+$'), '')
+              .trim();
+          if (pgNum != null && title.isNotEmpty) {
+            entries.add(TocEntry(title: title, pageNumber: pgNum));
+            candidatePages.add(pgNum);
+          }
+        }
+      }
+    }
+
+    bool isNonDecreasing = false;
+    if (candidatePages.length >= 2) {
+      int nonDecreasingSteps = 0;
+      for (int i = 0; i < candidatePages.length - 1; i++) {
+        if (candidatePages[i + 1] >= candidatePages[i]) {
+          nonDecreasingSteps++;
+        }
+      }
+      final ratio = nonDecreasingSteps / (candidatePages.length - 1);
+      if (ratio >= 0.60) {
+        isNonDecreasing = true;
+      }
+    }
+
+    final isToc = (entries.length >= 4 &&
+            (candidatePages.length < 2 || isNonDecreasing)) ||
+        (hasContentsHeader && entries.length >= 2);
+
+    return TocDetectionResult(isToc: isToc, entries: entries);
+  }
+}
+
+class LayoutProfile {
+  final double bodyFontSize;
+  final double linePitch;
+  final double bodyLeft;
+  final double bodyRight;
+  final double indent;
+  final bool usesIndent;
+  final bool hasTwoColumns;
+  final double columnGutterLeft;
+  final double columnGutterRight;
+
+  const LayoutProfile({
+    required this.bodyFontSize,
+    required this.linePitch,
+    required this.bodyLeft,
+    required this.bodyRight,
+    required this.indent,
+    required this.usesIndent,
+    this.hasTwoColumns = false,
+    this.columnGutterLeft = 0.0,
+    this.columnGutterRight = 0.0,
+  });
+
+  factory LayoutProfile.compute(Map<int, List<LineFragment>> pageLinesMap) {
+    final allLines = <LineFragment>[];
+    for (final lines in pageLinesMap.values) {
+      allLines.addAll(lines);
+    }
+    if (allLines.isEmpty) {
+      return const LayoutProfile(
+        bodyFontSize: 12.0,
+        linePitch: 14.0,
+        bodyLeft: 54.0,
+        bodyRight: 550.0,
+        indent: 0.0,
+        usesIndent: false,
+      );
+    }
+
+    // 1. bodyFontSize: mode of fontSize across all lines (bucketed to 0.5pt)
+    final fontCounts = <double, int>{};
+    for (final l in allLines) {
+      if (l.fontSize <= 0) continue;
+      final bucket = (l.fontSize * 2).round() / 2.0;
+      fontCounts[bucket] = (fontCounts[bucket] ?? 0) + 1;
+    }
+    double bodyFontSize = 12.0;
+    int maxFontCount = 0;
+    for (final e in fontCounts.entries) {
+      if (e.value > maxFontCount) {
+        maxFontCount = e.value;
+        bodyFontSize = e.key;
+      }
+    }
+
+    // 2. linePitch: median of (next.top - curr.top) for consecutive body-sized lines
+    final pitches = <double>[];
+    for (final lines in pageLinesMap.values) {
+      for (int i = 0; i < lines.length - 1; i++) {
+        final curr = lines[i];
+        final next = lines[i + 1];
+        if ((curr.fontSize - bodyFontSize).abs() <= 0.5 &&
+            (next.fontSize - bodyFontSize).abs() <= 0.5) {
+          final diff = next.top - curr.top;
+          if (diff > 0.5 * bodyFontSize && diff <= 3.0 * bodyFontSize) {
+            pitches.add(diff);
+          }
+        }
+      }
+    }
+    pitches.sort();
+    final double linePitch = pitches.isNotEmpty
+        ? pitches[pitches.length ~/ 2]
+        : bodyFontSize * 1.25;
+
+    // 3. Two-Column XY-Cut Detection:
+    bool hasTwoCols = false;
+    double gutterLeft = 0.0;
+    double gutterRight = 0.0;
+    if (allLines.length >= 20) {
+      final minLeft = allLines.map((l) => l.left).reduce(min);
+      final maxRight = allLines.map((l) => l.right).reduce(max);
+      final pageWidthEst = maxRight - minLeft;
+      if (pageWidthEst > 200) {
+        final mid = minLeft + pageWidthEst * 0.5;
+        final col1Lines =
+            allLines.where((l) => l.right <= mid + bodyFontSize).length;
+        final col2Lines =
+            allLines.where((l) => l.left >= mid - bodyFontSize).length;
+        if (col1Lines / allLines.length >= 0.35 &&
+            col2Lines / allLines.length >= 0.35) {
+          hasTwoCols = true;
+          gutterLeft = mid - bodyFontSize;
+          gutterRight = mid + bodyFontSize;
+        }
+      }
+    }
+
+    // 4. bodyLeft & bodyRight: mode of line.left and 95th percentile of line.right
+    final leftCounts = <double, int>{};
+    final rights = <double>[];
+    for (final l in allLines) {
+      if ((l.fontSize - bodyFontSize).abs() <= 1.0) {
+        final bLeft = (l.left).roundToDouble();
+        leftCounts[bLeft] = (leftCounts[bLeft] ?? 0) + 1;
+        rights.add(l.right);
+      }
+    }
+    double bodyLeft = 54.0;
+    int maxLeftCount = 0;
+    for (final e in leftCounts.entries) {
+      if (e.value > maxLeftCount) {
+        maxLeftCount = e.value;
+        bodyLeft = e.key;
+      }
+    }
+    rights.sort();
+    final double bodyRight = rights.isNotEmpty
+        ? rights[(rights.length * 0.95).floor().clamp(0, rights.length - 1)]
+        : 550.0;
+
+    // 5. indent: mode of (line.left - bodyLeft) among lines indented by 1em..4em
+    final indentedDiffs = <double, int>{};
+    int indentedLinesCount = 0;
+    for (final l in allLines) {
+      final diff = l.left - bodyLeft;
+      if (diff >= bodyFontSize && diff <= 4.0 * bodyFontSize) {
+        indentedLinesCount++;
+        final bDiff = (diff).roundToDouble();
+        indentedDiffs[bDiff] = (indentedDiffs[bDiff] ?? 0) + 1;
+      }
+    }
+    final bool usesIndent = allLines.isNotEmpty &&
+        (indentedLinesCount / allLines.length >= 0.08);
+    double indent = 0.0;
+    if (usesIndent && indentedDiffs.isNotEmpty) {
+      int maxIndCount = 0;
+      for (final e in indentedDiffs.entries) {
+        if (e.value > maxIndCount) {
+          maxIndCount = e.value;
+          indent = e.key;
+        }
+      }
+    }
+
+    return LayoutProfile(
+      bodyFontSize: bodyFontSize,
+      linePitch: linePitch,
+      bodyLeft: bodyLeft,
+      bodyRight: bodyRight,
+      indent: indent,
+      usesIndent: usesIndent,
+      hasTwoColumns: hasTwoCols,
+      columnGutterLeft: gutterLeft,
+      columnGutterRight: gutterRight,
+    );
+  }
+}
+
+class StructureResolver {
+  static List<SectionRole> smoothRoles({
+    required int totalPages,
+    required Map<int, List<LineFragment>> pageLinesMap,
+    required Map<int, String> pageRawTextMap,
+    required Map<int, String> bookmarks,
+    required Set<int> tocPages,
+    required Map<int, String> explicitHeadingMap,
+  }) {
+    if (totalPages <= 0) return const [];
+    const numStates = 5;
+
+    // Emissions: E[p][s]
+    final emissions = List.generate(totalPages, (p) {
+      final pageNum = p + 1;
+      final lines = pageLinesMap[pageNum] ?? const [];
+      final rawText = (pageRawTextMap[pageNum] ?? '').toLowerCase();
+      final words =
+          rawText.split(RegExp(r'\s+')).where((w) => w.isNotEmpty).length;
+      final heading = explicitHeadingMap[pageNum]?.toLowerCase() ??
+          bookmarks[pageNum]?.toLowerCase() ??
+          '';
+
+      final isToc = tocPages.contains(pageNum);
+      final hasFrontMarkers = RegExp(
+              r'(?:copyright|©|all rights reserved|isbn|library of congress|cataloging|printed in|published by)\b')
+          .hasMatch(rawText);
+      final hasBackMarkers = RegExp(
+              r'^(?:notes?|endnotes|index|bibliography|references|works cited|glossary|about the author|also by)\b',
+              multiLine: true)
+          .hasMatch(rawText);
+      final hasReadableFrontHeader = RegExp(
+                  r'\b(preface|foreword|introduction|prologue|acknowledgments)\b')
+              .hasMatch(heading) ||
+          RegExp(r'^(?:preface|foreword|introduction|prologue|acknowledgments)\b',
+                  multiLine: true)
+              .hasMatch(rawText);
+      final hasChapterHeader = RegExp(
+                  r'^(?:chapter|part|book)\s+(?:\d+|[ivxlcdm]+|[a-z]+)\b',
+                  multiLine: true)
+              .hasMatch(rawText) ||
+          RegExp(r'\b(?:chapter|part)\s+\d+').hasMatch(heading);
+
+      int indexEntryCount = 0;
+      for (final l in lines) {
+        if (RegExp(r'^[A-Za-z][^,]{1,40},\s\d').hasMatch(l.text.trim())) {
+          indexEntryCount++;
+        }
+      }
+      final bool isIndexDense =
+          lines.length >= 8 && (indexEntryCount / lines.length >= 0.40);
+
+      final e = List<double>.filled(numStates, 0.0);
+
+      if (hasFrontMarkers) {
+        e[0] = 0.0;
+        e[1] = 40.0;
+        e[2] = 40.0;
+        e[3] = 60.0;
+        e[4] = 80.0;
+      } else if (isToc) {
+        e[1] = 0.0;
+        e[0] = 50.0;
+        e[2] = 50.0;
+        e[3] = 60.0;
+        e[4] = 70.0;
+      } else if (hasBackMarkers || isIndexDense) {
+        e[4] = 0.0;
+        e[0] = 70.0;
+        e[1] = 70.0;
+        e[2] = 60.0;
+        e[3] = 50.0;
+      } else if (hasReadableFrontHeader) {
+        e[2] = 0.0;
+        e[0] = 30.0;
+        e[1] = 40.0;
+        e[3] = 20.0;
+        e[4] = 50.0;
+      } else if (hasChapterHeader) {
+        e[3] = 0.0;
+        e[0] = 50.0;
+        e[1] = 50.0;
+        e[2] = 30.0;
+        e[4] = 40.0;
+      } else {
+        if (words >= 80) {
+          e[0] = 25.0;
+          e[1] = 30.0;
+          e[2] = 5.0;
+          e[3] = 2.0;
+          e[4] = 8.0;
+        } else {
+          e[0] = 2.0;
+          e[1] = 10.0;
+          e[2] = 8.0;
+          e[3] = 10.0;
+          e[4] = 6.0;
+        }
+      }
+      return e;
+    });
+
+    final v = List.generate(
+        totalPages, (_) => List<double>.filled(numStates, double.infinity));
+    final bp = List.generate(
+        totalPages, (_) => List<int>.filled(numStates, 0));
+
+    const initCost = [0.0, 2.0, 6.0, 15.0, 40.0];
+    for (int s = 0; s < numStates; s++) {
+      v[0][s] = initCost[s] + emissions[0][s];
+    }
+
+    for (int p = 1; p < totalPages; p++) {
+      for (int curr = 0; curr < numStates; curr++) {
+        double minPrevCost = double.infinity;
+        int bestPrev = 0;
+        for (int prev = 0; prev <= curr; prev++) {
+          final transCost = (prev == curr) ? 0.0 : 1.0;
+          final total = v[p - 1][prev] + transCost;
+          if (total < minPrevCost) {
+            minPrevCost = total;
+            bestPrev = prev;
+          }
+        }
+        v[p][curr] = minPrevCost + emissions[p][curr];
+        bp[p][curr] = bestPrev;
+      }
+    }
+
+    final statePath = List<int>.filled(totalPages, 3);
+    double minFinal = double.infinity;
+    int bestFinal = 3;
+    for (int s = 0; s < numStates; s++) {
+      if (v[totalPages - 1][s] < minFinal) {
+        minFinal = v[totalPages - 1][s];
+        bestFinal = s;
+      }
+    }
+    statePath[totalPages - 1] = bestFinal;
+    for (int p = totalPages - 1; p > 0; p--) {
+      statePath[p - 1] = bp[p][statePath[p]];
+    }
+
+    SectionRole activeReadableRole = SectionRole.preface;
+    final result = <SectionRole>[];
+
+    for (int p = 0; p < totalPages; p++) {
+      final pageNum = p + 1;
+      final macro = statePath[p];
+      final rawText = (pageRawTextMap[pageNum] ?? '').toLowerCase();
+      final heading = explicitHeadingMap[pageNum]?.toLowerCase() ??
+          bookmarks[pageNum]?.toLowerCase() ??
+          '';
+
+      if (macro == 0) {
+        if (rawText.contains('copyright') ||
+            rawText.contains('©') ||
+            rawText.contains('isbn')) {
+          result.add(SectionRole.copyright);
+        } else if (rawText.contains('dedicat')) {
+          result.add(SectionRole.dedication);
+        } else if (rawText.contains('praise')) {
+          result.add(SectionRole.praise);
+        } else if (p == 0) {
+          result.add(SectionRole.cover);
+        } else {
+          result.add(SectionRole.titlePage);
+        }
+      } else if (macro == 1) {
+        result.add(SectionRole.toc);
+      } else if (macro == 2) {
+        if (heading.contains('preface') || rawText.startsWith('preface')) {
+          activeReadableRole = SectionRole.preface;
+        } else if (heading.contains('foreword') ||
+            rawText.startsWith('foreword')) {
+          activeReadableRole = SectionRole.foreword;
+        } else if (heading.contains('intro') ||
+            rawText.startsWith('introduction')) {
+          activeReadableRole = SectionRole.introduction;
+        } else if (heading.contains('prologue') ||
+            rawText.startsWith('prologue')) {
+          activeReadableRole = SectionRole.prologue;
+        } else if (heading.contains('ack') ||
+            rawText.startsWith('acknowledg')) {
+          activeReadableRole = SectionRole.acknowledgments;
+        }
+        result.add(activeReadableRole);
+      } else if (macro == 3) {
+        if (heading.contains('part ') || rawText.startsWith('part ')) {
+          result.add(SectionRole.part);
+        } else if (heading.contains('epilogue') ||
+            rawText.startsWith('epilogue')) {
+          result.add(SectionRole.epilogue);
+        } else if (heading.contains('afterword') ||
+            rawText.startsWith('afterword')) {
+          result.add(SectionRole.afterword);
+        } else {
+          result.add(SectionRole.chapter);
+        }
+      } else {
+        if (heading.contains('notes') ||
+            rawText.contains('endnotes') ||
+            rawText.startsWith('notes')) {
+          result.add(SectionRole.notes);
+        } else if (heading.contains('biblio') ||
+            rawText.contains('references') ||
+            rawText.contains('works cited')) {
+          result.add(SectionRole.bibliography);
+        } else if (heading.contains('index') || rawText.startsWith('index')) {
+          result.add(SectionRole.bookIndex);
+        } else if (heading.contains('glossary') ||
+            rawText.startsWith('glossary')) {
+          result.add(SectionRole.glossary);
+        } else if (heading.contains('about the author') ||
+            rawText.contains('about the author')) {
+          result.add(SectionRole.aboutAuthor);
+        } else {
+          result.add(SectionRole.appendix);
+        }
+      }
+    }
+
+    return result;
+  }
 }

@@ -35,6 +35,74 @@ class BlockType:
     BACK_MATTER = "back_matter"
 
 
+class SectionRole:
+    COVER = "cover"
+    HALF_TITLE = "halfTitle"
+    TITLE_PAGE = "titlePage"
+    COPYRIGHT = "copyright"
+    DEDICATION = "dedication"
+    EPIGRAPH = "epigraph"
+    TOC = "toc"
+    LIST_OF_FIGURES = "listOfFigures"
+    PRAISE = "praise"
+    ALSO_BY = "alsoBy"
+    FOREWORD = "foreword"
+    PREFACE = "preface"
+    ACKNOWLEDGMENTS = "acknowledgments"
+    INTRODUCTION = "introduction"
+    PROLOGUE = "prologue"
+    PART = "part"
+    CHAPTER = "chapter"
+    EPILOGUE = "epilogue"
+    AFTERWORD = "afterword"
+    APPENDIX = "appendix"
+    NOTES = "notes"
+    GLOSSARY = "glossary"
+    BIBLIOGRAPHY = "bibliography"
+    INDEX = "index"
+    ABOUT_AUTHOR = "aboutAuthor"
+    AD_CARD = "adCard"
+    UNKNOWN = "unknown"
+
+    READABLE_ROLES = {
+        FOREWORD,
+        PREFACE,
+        ACKNOWLEDGMENTS,
+        INTRODUCTION,
+        PROLOGUE,
+        PART,
+        CHAPTER,
+        EPILOGUE,
+        AFTERWORD,
+        APPENDIX,
+        UNKNOWN,
+    }
+
+    BODY_ROLES = {
+        PART,
+        CHAPTER,
+        EPILOGUE,
+        AFTERWORD,
+        APPENDIX,
+    }
+
+    @classmethod
+    def is_readable(cls, role: Optional[str]) -> bool:
+        if not role:
+            return True
+        return role in cls.READABLE_ROLES
+
+    @classmethod
+    def is_body(cls, role: Optional[str]) -> bool:
+        if not role:
+            return True
+        return role in cls.BODY_ROLES
+
+    @classmethod
+    def is_matter(cls, role: Optional[str]) -> bool:
+        return not cls.is_readable(role)
+
+
 # Regexes for lists, numbers, and contents entries
 RE_LIST_BULLET = re.compile(r"^([•*\-–—▪▫◦]|\d+[\.\)]|\([a-zA-Z0-9]+\))\s+")
 RE_CONTENTS_LEADER = re.compile(r"(\.{3,}|_{3,}|\s{4,})\s*\d+$")

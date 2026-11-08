@@ -12,7 +12,7 @@
   <img src="https://img.shields.io/badge/Zero--JSON-Binary%20Book%20Tape-8B5CF6" alt="Binary Book Tape" />
   <img src="https://img.shields.io/badge/SHA--256-Lossless%20Canonical-10B981" alt="Lossless Canonical" />
   <img src="https://img.shields.io/badge/Tests-111%20passing-brightgreen" alt="Tests" />
-  <a href="docs/LICENSE"><img src="https://img.shields.io/badge/License-MIT-blue" alt="License" /></a>
+  <a href="LICENSE"><img src="https://img.shields.io/badge/License-GPLv3-blue.svg" alt="License: GPL v3" /></a>
 </p>
 
 ---
@@ -392,4 +392,5 @@ flutter build apk --release
 
 ## 10. License
 
-Athena is licensed under the [MIT License](docs/LICENSE).
+Athena is licensed under the [GNU General Public License v3.0 (GPL-3.0-or-later)](LICENSE).
+Third-party note: `syncfusion_flutter_pdf` is used under the [Syncfusion Community License](https://www.syncfusion.com/communitylicense).

@@ -765,6 +765,19 @@ def generate_context_cards(
 
         why_here = f'The concept "{concept.name}" is introduced in the passage above.'
 
+        if not card_citations:
+            support_tier = "internal_extractive"
+            verified_flag = False
+            sup_status = "internal_extractive"
+        elif len(card_citations) == 1 and not any("doi.org" in c.get("url", "").lower() for c in card_citations):
+            support_tier = "single_source"
+            verified_flag = True
+            sup_status = "partially_supported"
+        else:
+            support_tier = "verified_external"
+            verified_flag = True
+            sup_status = "fully_supported"
+
         card = ContextCard(
             document_id=document_id,
             source_chunk_id=chunk.id,
@@ -775,10 +788,11 @@ def generate_context_cards(
             why_here=why_here,
             citations_json=json.dumps(card_citations),
             exact_quote=exact_quote,
-            support_status="fully_supported",
+            support_status=sup_status,
+            support_tier=support_tier,
             canonical_sha256=chunk.canonical_sha256,
             generation_mode=gen_mode,
-            verified=True,
+            verified=verified_flag,
             saved=False,
             dismissed=False,
         )

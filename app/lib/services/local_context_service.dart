@@ -3,6 +3,8 @@ import 'package:crypto/crypto.dart';
 import 'package:dio/dio.dart';
 import 'package:flutter/foundation.dart';
 import 'package:shared_preferences/shared_preferences.dart';
+import 'package:athena/models/section_role.dart';
+import 'package:athena/services/ingestion_pipeline.dart';
 import 'package:athena/services/secure_storage_service.dart';
 import 'package:athena/services/lossless_chunker.dart';
 
@@ -10,6 +12,125 @@ class _AcademicCacheEntry {
   final List<Map<String, dynamic>> results;
   final DateTime timestamp;
   _AcademicCacheEntry(this.results, this.timestamp);
+}
+
+/// A planned Context Card slot distributed by word distance.
+class CardSlot {
+  final String chunkId;
+  final int sequence;
+  final String sectionTitle;
+  final SectionRole sectionRole;
+  final int wordCount;
+  final int salienceScore;
+  final String concept;
+
+  const CardSlot({
+    required this.chunkId,
+    required this.sequence,
+    required this.sectionTitle,
+    required this.sectionRole,
+    required this.wordCount,
+    required this.salienceScore,
+    required this.concept,
+  });
+}
+
+/// Word-Distance Coverage Planner (FP-11).
+/// Guarantees steady card coverage across the entire book (~1 card every 180 words,
+/// minimum distance max(120 words, 2 chunks)), never a rigid global 24-card ceiling!
+class CardPlan {
+  static List<CardSlot> plan({
+    required List<Map<String, Object?>> chunks,
+    int everyWords = 180,
+    int minWordDistance = 120,
+    LocalContextService? service,
+  }) {
+    if (chunks.isEmpty) return const [];
+    final s = service ?? LocalContextService();
+
+    final sectionChunksMap = <String, List<Map<String, Object?>>>{};
+    for (final c in chunks) {
+      final roleStr = c['section_role']?.toString();
+      final role = SectionRole.fromString(roleStr);
+      if (role.isMatter) continue;
+
+      final text = (c['raw_text'] as String?)?.trim() ?? '';
+      final words =
+          text.split(RegExp(r'\s+')).where((w) => w.isNotEmpty).toList();
+      if (words.length < 28) continue;
+      if (words.length <= 14 || c['type'] == 'heading') continue;
+      if (!DocumentIngestionPipeline.computePageQuality(text).isAcceptable) continue;
+
+      final secTitle =
+          (c['section_title'] as String?)?.trim() ?? role.displayLabel;
+      sectionChunksMap.putIfAbsent(secTitle, () => []).add(c);
+    }
+
+    final plannedSlots = <CardSlot>[];
+    final seenEntitiesBySection = <String, Set<String>>{};
+
+    for (final entry in sectionChunksMap.entries) {
+      final secTitle = entry.key;
+      final secChunks = entry.value;
+      final cardedEntities =
+          seenEntitiesBySection.putIfAbsent(secTitle, () => <String>{});
+      final secTexts =
+          secChunks.map((c) => (c['raw_text'] as String?) ?? '').toList();
+
+      int wordsSinceLastCard = everyWords;
+      int lastCardChunkIdx = -999;
+      Map<String, Object?>? bestCandidateChunk;
+      int bestCandidateScore = -999999;
+
+      for (int i = 0; i < secChunks.length; i++) {
+        final chunk = secChunks[i];
+        final text = (chunk['raw_text'] as String?)?.trim() ?? '';
+        final words =
+            text.split(RegExp(r'\s+')).where((w) => w.isNotEmpty).toList();
+        final score =
+            s.scoreSalience(chunk, cardedEntitiesInSection: cardedEntities);
+
+        wordsSinceLastCard += words.length;
+
+        if (score > bestCandidateScore) {
+          bestCandidateScore = score;
+          bestCandidateChunk = chunk;
+        }
+
+        if (wordsSinceLastCard >= everyWords && (i - lastCardChunkIdx >= 2)) {
+          final targetChunk = bestCandidateChunk ?? chunk;
+          final targetText = (targetChunk['raw_text'] as String?)?.trim() ?? '';
+          final targetWords = targetText
+              .split(RegExp(r'\s+'))
+              .where((w) => w.isNotEmpty)
+              .length;
+          final concept =
+              s.extractSalientConcept(targetText, sectionTexts: secTexts);
+          final role =
+              SectionRole.fromString(targetChunk['section_role']?.toString());
+
+          plannedSlots.add(CardSlot(
+            chunkId: targetChunk['id']?.toString() ?? '',
+            sequence: (targetChunk['sequence'] as num?)?.toInt() ??
+                (plannedSlots.length + 1),
+            sectionTitle: secTitle,
+            sectionRole: role,
+            wordCount: targetWords,
+            salienceScore: bestCandidateScore,
+            concept: concept,
+          ));
+
+          cardedEntities.add(concept.toLowerCase());
+          wordsSinceLastCard = 0;
+          lastCardChunkIdx = i;
+          bestCandidateChunk = null;
+          bestCandidateScore = -999999;
+        }
+      }
+    }
+
+    return plannedSlots;
+  }
 }
 
 /// Retrieves verified academic research & declarative editorial fact Context Cards
@@ -52,6 +173,79 @@ class LocalContextService {
     'third', 'every', 'each', 'both', 'with', 'from', 'into', 'such', 'their',
     'what', 'which', 'about', 'other', 'another', 'whose', 'whom',
   };
+
+  /// Non-Fiction & Multi-Genre Universal Salience Scorer (FP-12).
+  /// Signals:
+  ///   +3 per named entity (person/org/place/work) not yet carded in the section
+  ///   +3 per historical year, percentage, or measurement
+  ///   +4 for empirical/evidence verbs (found, showed, demonstrated, measured, estimated, reported, study, experiment, trial, survey, data)
+  ///   +3 for claim/contrast/paradox markers (contrary to, surprisingly, paradox, counterintuitive, in fact, however, whereas)
+  ///   +2 for definitional/conceptual markers (is called, known as, defined as, refers to, the term, principle of)
+  ///   -3 for preface / acknowledgments, -∞ for isMatter or suspect
+  int scoreSalience(
+    Map<String, Object?> chunk, {
+    Set<String>? cardedEntitiesInSection,
+  }) {
+    final text = (chunk['raw_text'] as String?)?.trim() ?? '';
+    final roleStr = chunk['section_role']?.toString();
+    final role = SectionRole.fromString(roleStr);
+
+    if (role.isMatter) return -999999;
+    if (!DocumentIngestionPipeline.computePageQuality(text).isAcceptable) return -999999;
+
+    final words =
+        text.split(RegExp(r'\s+')).where((w) => w.isNotEmpty).toList();
+    if (words.length < 28) return -100;
+
+    int score = 0;
+
+    // 1. Named entities (person/org/place/work) not yet carded in the section
+    final entityMatches =
+        RegExp(r'(?<![.!?]\s)\b[A-Z][a-z]{3,}\b').allMatches(text);
+    for (final m in entityMatches) {
+      final ent = m.group(0)!;
+      final entLower = ent.toLowerCase();
+      if (!_excludedConceptWords.contains(entLower)) {
+        if (cardedEntitiesInSection == null ||
+            !cardedEntitiesInSection.contains(entLower)) {
+          score += 3;
+        }
+      }
+    }
+
+    // 2. Historical year, percentage, or measurement
+    final yearOrMetric = RegExp(
+        r'\b(?:1\d{3}|20\d{2}|\d+(?:\.\d+)?%|\d+\s*(?:meters|km|miles|kg|pounds|percent|dollars))\b');
+    score += yearOrMetric.allMatches(text).length * 3;
+
+    // 3. Empirical / evidence verbs
+    final empirical = RegExp(
+      r'\b(found|showed|demonstrated|measured|estimated|reported|study|experiment|trial|survey|data)\b',
+      caseSensitive: false,
+    );
+    score += empirical.allMatches(text).length * 4;
+
+    // 4. Claim / contrast / paradox markers
+    final contrast = RegExp(
+      r'\b(contrary to|surprisingly|paradox|counterintuitive|in fact|however|whereas)\b',
+      caseSensitive: false,
+    );
+    score += contrast.allMatches(text).length * 3;
+
+    // 5. Definitional / conceptual markers
+    final definitional = RegExp(
+      r'\b(is called|known as|defined as|refers to|the term|principle of)\b',
+      caseSensitive: false,
+    );
+    score += definitional.allMatches(text).length * 2;
+
+    // 6. -3 for preface / acknowledgments
+    if (role == SectionRole.preface || role == SectionRole.acknowledgments) {
+      score -= 3;
+    }
+
+    return score;
+  }
 
   /// Evaluates a chunk for narrative tension, conceptual depth, and suitability for an immersion Context Card.
   /// Rejects trivial or transitional chunks (< 25 words) with a score of -100.
@@ -123,9 +317,8 @@ class LocalContextService {
     String documentId,
     List<Map<String, Object?>> chunks,
   ) async {
-    // Use wider chunk window for warm-start: cover enough chunks to yield diverse cards
-    // Aligned with backend WARM_START_MAX_CARDS (24) and WARM_START_CHUNK_GAP (3)
-    return buildCards(documentId, chunks.take(75).toList());
+    // Whole-book deterministic CardPlan coverage (FP-11)
+    return buildCards(documentId, chunks);
   }
 
   Future<List<Map<String, Object?>>> buildCards(
@@ -135,20 +328,22 @@ class LocalContextService {
     final cards = <Map<String, Object?>>[];
     final seen = <String>{};
 
-    // Filter candidate chunks by prose quality gate
-    final candidateChunks = chunks.where((c) {
-      final text = (c['raw_text'] as String?) ?? '';
-      return passesProseQualityGate(text);
-    }).toList();
+    final slots = CardPlan.plan(chunks: chunks, service: this);
+    if (slots.isEmpty) return const [];
 
-    if (candidateChunks.isEmpty) return const [];
+    final chunkById = {for (final c in chunks) (c['id']?.toString() ?? ''): c};
 
-    // Prioritize chunks by tension score
-    candidateChunks.sort((a, b) => scoreChunkTension(b).compareTo(scoreChunkTension(a)));
+    for (var i = 0; i < slots.length; i++) {
+      final slot = slots[i];
+      final chunk = chunkById[slot.chunkId];
+      if (chunk == null) continue;
 
-    for (var i = 0; i < candidateChunks.length && cards.length < 24; i++) {
-      final chunk = candidateChunks[i];
-      final card = await generateCardForChunk(documentId, chunk, cards.length);
+      final card = await generateCardForChunk(
+        documentId,
+        chunk,
+        i,
+        explicitConcept: slot.concept,
+      );
       if (card != null) {
         final title = (card['title'] as String?)?.toLowerCase() ?? '';
         if (seen.add(title)) {
@@ -163,29 +358,32 @@ class LocalContextService {
   Future<Map<String, Object?>?> generateCardForChunk(
     String documentId,
     Map<String, Object?> chunk,
-    int slotIndex,
-  ) async {
+    int slotIndex, {
+    String? explicitConcept,
+  }) async {
     final passage = (chunk['raw_text'] as String?)?.trim() ?? '';
     if (passage.isEmpty || !passesProseQualityGate(passage)) return null;
 
     final chunkId = chunk['id']?.toString() ?? 'chunk_$slotIndex';
 
-    // 1. Identify best salient 2-4 word concept term
-    final concept = _extractSalientConcept(passage);
-    if (concept == null || concept.isEmpty) return null;
+    // 1. Identify best salient concept term (using explicit concept if planned)
+    final concept = explicitConcept ?? extractSalientConcept(passage);
+    if (concept.isEmpty) return null;
 
     // 2. Extract verbatim exact quote from chunk
     final exactQuote = _exactQuote(passage, concept);
     if (exactQuote == null || exactQuote.isEmpty) return null;
 
     // 3. Retrieval-first: Fetch trusted academic evidence
-    final academicEvidence = await _fetchTrustedAcademicEvidence(concept, passage);
+    final academicEvidence =
+        await _fetchTrustedAcademicEvidence(concept, passage);
     Map<String, dynamic>? bestEvidence;
     if (academicEvidence.isNotEmpty) {
       bestEvidence = academicEvidence.first;
     }
 
-    if (bestEvidence == null || (bestEvidence['abstract']?.toString().isEmpty ?? true)) {
+    if (bestEvidence == null ||
+        (bestEvidence['abstract']?.toString().isEmpty ?? true)) {
       final wiki = await _lookupWikipedia(concept);
       if (wiki != null && (wiki['extract']?.isNotEmpty ?? false)) {
         bestEvidence = {
@@ -200,8 +398,9 @@ class LocalContextService {
     // 4. Content-Driven Archetype Selection
     final archetype = _determineArchetype(bestEvidence, slotIndex);
 
+    // Honest Support Tiers:
     // If no external evidence was retrieved or lexical overlap is inadequate (< 2 tokens),
-    // fall back gracefully to honest offline synthesis from document text alone (F11, F12, F15)
+    // fall back to honest internal extractive note (FP-11)
     final evidenceAbstract =
         bestEvidence?['abstract']?.toString().trim() ?? '';
     final evidenceTitle = bestEvidence?['title']?.toString().trim() ?? '';
@@ -228,21 +427,17 @@ class LocalContextService {
         'document_id': documentId,
         'source_chunk_id': chunkId,
         'concept_name': concept,
-        'card_type': archetype.toLowerCase().replaceAll(' ', '_'),
-        'title': '$archetype: $concept',
+        'card_type': 'book_cross_reference',
+        'title': 'CONCEPT NOTE: $concept',
         'exact_quote': exactQuote,
         'body': localSummary,
-        'citations': [
-          {
-            'title': 'Internal Excerpt: $concept',
-            'publisher': 'Document Analysis',
-            'url': 'https://athena.internal/excerpt',
-          }
-        ],
-        'verified': false,
-        'support_status': 'unverified',
+        'citations_json': '[]',
+        'citations': const [],
+        'verified': 0,
+        'support_status': 'internal_extractive',
+        'support_tier': 'internal_extractive',
         'canonical_sha256': sha256.convert(utf8.encode(passage)).toString(),
-        'generation_mode': 'extractive',
+        'generation_mode': 'internal_extractive',
         'created_at': DateTime.now().toUtc().toIso8601String(),
       };
     }
@@ -252,16 +447,21 @@ class LocalContextService {
     try {
       prefs = await SharedPreferences.getInstance();
     } catch (e) {
-      debugPrint('[Athena] SharedPreferences notice in LocalContextService: $e');
+      debugPrint(
+          '[Athena] SharedPreferences notice in LocalContextService: $e');
     }
     final apiKey = await SecureStorageService.instance
         .getAIKey('athena_ai_primary_api_key');
-    final provider = prefs?.getString('athena_ai_primary_provider') ?? 'gemini';
+    final provider =
+        prefs?.getString('athena_ai_primary_provider') ?? 'gemini';
     final model = prefs?.getString('athena_ai_primary_model');
     final baseUrl = prefs?.getString('athena_ai_primary_base_url');
 
     Map<String, dynamic>? aiCard;
-    if (apiKey != null && apiKey.trim().isNotEmpty && model != null && model.trim().isNotEmpty) {
+    if (apiKey != null &&
+        apiKey.trim().isNotEmpty &&
+        model != null &&
+        model.trim().isNotEmpty) {
       aiCard = await _generateWithLLM(
         archetype: archetype,
         concept: concept,
@@ -296,8 +496,8 @@ class LocalContextService {
               }
             ];
     } else {
-      // Deterministic synthesis directly from retrieved verified abstract
-      finalBody = _formatArchetypeBody(archetype, concept, evidenceAbstract);
+      finalBody =
+          _formatArchetypeBody(archetype, concept, evidenceAbstract);
       finalTitle = '$archetype: $concept';
       finalCitations = [
         {
@@ -308,12 +508,17 @@ class LocalContextService {
       ];
     }
 
-    // 6. Strict Verification Computation
+    // 6. Strict Verification & Support Tier Computation
     final isVerified = _computeVerification(
       cardBody: finalBody,
       sourceUrl: evidenceUrl,
       evidenceText: '$evidenceTitle $evidenceAbstract',
     );
+
+    final bool isMultiSource =
+        academicEvidence.length >= 2 || evidenceUrl.contains('doi.org');
+    final String supportTier =
+        isMultiSource ? 'verified_external' : 'single_source';
 
     final id = sha256
         .convert(utf8.encode('$documentId:$chunkId:$finalTitle'))
@@ -332,9 +537,11 @@ class LocalContextService {
           'Verified research insight for “$concept”. Grounded against academic literature.',
       'citations_json': jsonEncode(finalCitations),
       'exact_quote': exactQuote,
-      'support_status': isVerified ? 'verified' : 'unverified',
+      'support_status': isVerified ? 'verified' : supportTier,
+      'support_tier': supportTier,
       'canonical_sha256': chunk['canonical_sha256'] ?? '',
-      'generation_mode': aiCard != null ? 'ai_grounded' : 'local_archetype',
+      'generation_mode':
+          aiCard != null ? 'ai_grounded' : 'local_archetype',
       'verified': isVerified ? 1 : 0,
       'is_speculative_draft': false,
       'saved': 0,
@@ -847,10 +1054,14 @@ Respond ONLY with valid JSON with this exact schema:
         .toSet();
   }
 
-  /// Extracts a 2 to 4 word salient noun phrase from the passage.
-  /// Rejects single words and excluded terms (months, seasons, structure terms, etc.).
-  String? _extractSalientConcept(String passage) {
-    // 1. Try 2-4 word capitalized noun phrases (excluding sentence-initial common words)
+  /// Non-Fiction & Multi-Genre 4-Tier Concept Extractor (FP-12).
+  /// Never returns null or empty on an eligible conceptual chunk! Fall back through:
+  ///   1) Multi-word capitalized phrase (2–4 words)
+  ///   2) Single non-initial capitalized entity (>= 4 letters)
+  ///   3) Top section-recurring non-stopword conceptual term (TF-IDF / frequency >= 2 in section)
+  ///   4) Strongest noun phrase / domain bigram in the passage.
+  String extractSalientConcept(String passage, {List<String>? sectionTexts}) {
+    // 1. Multi-word capitalized phrase (2–4 words) excluding sentence-initial common words
     final capPhrases = RegExp(r'\b[A-Z][a-z]+(?:\s+[A-Z][a-z]+){1,3}\b');
     for (final m in capPhrases.allMatches(passage)) {
       final phrase = m.group(0)!.trim();
@@ -863,7 +1074,47 @@ Respond ONLY with valid JSON with this exact schema:
       }
     }
 
-    // 2. Try compound noun/domain patterns: 2-3 content words
+    // 2. Single non-initial capitalized entity (>= 4 letters)
+    final singleEntities = RegExp(r'(?<![.!?]\s)\b[A-Z][a-z]{3,}\b');
+    for (final m in singleEntities.allMatches(passage)) {
+      final ent = m.group(0)!.trim();
+      if (!_excludedConceptWords.contains(ent.toLowerCase())) {
+        return ent;
+      }
+    }
+
+    // 3. Top section-recurring non-stopword conceptual term (frequency >= 2 in section)
+    if (sectionTexts != null && sectionTexts.isNotEmpty) {
+      final termCounts = <String, int>{};
+      for (final st in sectionTexts) {
+        final words = st
+            .toLowerCase()
+            .split(RegExp(r'[^a-z]+'))
+            .where((w) => w.length >= 5 && !_excludedConceptWords.contains(w));
+        for (final w in words) {
+          termCounts[w] = (termCounts[w] ?? 0) + 1;
+        }
+      }
+      final passageWords = passage
+          .toLowerCase()
+          .split(RegExp(r'[^a-z]+'))
+          .where((w) => w.length >= 5 && !_excludedConceptWords.contains(w))
+          .toSet();
+      String? bestRecurring;
+      int maxFreq = 1;
+      for (final w in passageWords) {
+        final freq = termCounts[w] ?? 0;
+        if (freq > maxFreq) {
+          maxFreq = freq;
+          bestRecurring = w;
+        }
+      }
+      if (bestRecurring != null) {
+        return bestRecurring[0].toUpperCase() + bestRecurring.substring(1);
+      }
+    }
+
+    // 4. Strongest noun phrase / domain bigram in the passage
     final contentWords = passage
         .split(RegExp(r'[^A-Za-z]+'))
         .where((w) =>
@@ -872,7 +1123,6 @@ Respond ONLY with valid JSON with this exact schema:
         .toList();
 
     if (contentWords.length >= 2) {
-      // Pick first contiguous pair of content words if they appear together
       for (int i = 0; i < contentWords.length - 1; i++) {
         final pair = '${contentWords[i]} ${contentWords[i + 1]}';
         if (passage.toLowerCase().contains(pair.toLowerCase())) {
@@ -880,9 +1130,19 @@ Respond ONLY with valid JSON with this exact schema:
         }
       }
       return '${contentWords[0]} ${contentWords[1]}';
+    } else if (contentWords.isNotEmpty) {
+      return contentWords[0];
     }
 
-    return null;
+    // Universal fallback: never null
+    final anyWords =
+        passage.split(RegExp(r'\s+')).where((w) => w.length >= 4).toList();
+    if (anyWords.isNotEmpty) {
+      final clean = anyWords.first.replaceAll(RegExp(r'[^A-Za-z]'), '');
+      if (clean.length >= 3) return clean;
+    }
+
+    return 'Core Thesis';
   }
 
   bool _titleMatches(String term, String title) {

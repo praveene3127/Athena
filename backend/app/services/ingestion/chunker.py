@@ -230,6 +230,8 @@ def _paragraph_units(
         unit_type = matched_span.get("type") if matched_span else None
         if not unit_type:
             unit_type = classify_block(text)
+        section_title = matched_span.get("section_title") if matched_span else None
+        section_role = matched_span.get("section_role") if matched_span else None
 
         units.append(
             {
@@ -238,6 +240,8 @@ def _paragraph_units(
                 "end": end,
                 "text": text,
                 "type": unit_type,
+                "section_title": section_title,
+                "section_role": section_role or "chapter",
                 "page_start": matched_span.get("page_start", 1) if matched_span else 1,
                 "page_end": matched_span.get("page_end", 1) if matched_span else 1,
             }
@@ -287,6 +291,7 @@ def _make_reading_atoms(
                             "boundary_after": "paragraph",
                             "starts_section": True,
                             "section_title": section_title,
+                            "section_role": unit.get("section_role") or body.get("section_role") or "chapter",
                         }
                     )
                     continue
@@ -311,6 +316,7 @@ def _make_reading_atoms(
                             "boundary_after": "sentence" if len(relative_slices) > 1 else "paragraph",
                             "starts_section": part_index == 0,
                             "section_title": section_title if part_index == 0 else None,
+                            "section_role": unit.get("section_role") or body.get("section_role") or "chapter",
                         }
                     )
                 index += 1
@@ -326,6 +332,7 @@ def _make_reading_atoms(
                     "boundary_after": "paragraph",
                     "starts_section": True,
                     "section_title": section_title,
+                    "section_role": unit.get("section_role", "chapter"),
                 }
             )
             continue
@@ -351,6 +358,7 @@ def _make_reading_atoms(
                     "boundary_after": "sentence" if len(relative_slices) > 1 else "paragraph",
                     "starts_section": False,
                     "section_title": None,
+                    "section_role": unit.get("section_role", "chapter"),
                 }
             )
         index += 1
@@ -528,12 +536,17 @@ def chunk_document(
             (atoms[i]["section_title"] for i in range(atom_start, atom_end) if atoms[i].get("section_title")),
             None,
         )
+        section_role = next(
+            (atoms[i]["section_role"] for i in range(atom_start, atom_end) if atoms[i].get("section_role")),
+            "chapter",
+        )
 
         result.append({
             "id": chunk_id,
             "document_id": doc_id,
             "sequence": seq,
             "section_title": section_title,
+            "section_role": section_role,
             "raw_text": raw_text,
             "source_pages_json": pages,
             "start_offset": c_start,

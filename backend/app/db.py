@@ -47,6 +47,8 @@ def _migrate_columns():
                 conn.execute(text("ALTER TABLE context_cards ADD COLUMN exact_quote TEXT DEFAULT NULL"))
             if "support_status" not in cc_cols:
                 conn.execute(text("ALTER TABLE context_cards ADD COLUMN support_status TEXT DEFAULT 'fully_supported'"))
+            if "support_tier" not in cc_cols:
+                conn.execute(text("ALTER TABLE context_cards ADD COLUMN support_tier TEXT DEFAULT 'verified_external'"))
             if "canonical_sha256" not in cc_cols:
                 conn.execute(text("ALTER TABLE context_cards ADD COLUMN canonical_sha256 TEXT DEFAULT NULL"))
 

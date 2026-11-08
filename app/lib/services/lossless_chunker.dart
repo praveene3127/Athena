@@ -1808,7 +1808,8 @@ class LosslessChunker {
     final units = _paragraphUnits(canonicalText, spans);
     final targetWords = _targetWords(units);
     final atoms = _makeAtoms(canonicalText, units);
-    final ranges = _plan(canonicalText, atoms, targetWords);
+    final rawRanges = _plan(canonicalText, atoms, targetWords);
+    final ranges = _mergeShortFragments(canonicalText, atoms, rawRanges);
 
     var expectedStart = 0;
     for (final range in ranges) {
@@ -1855,6 +1856,12 @@ class LosslessChunker {
             .map((atom) => atom.sectionTitle)
             .whereType<String>()
             .firstOrNull,
+        'section_role': atoms
+            .skip(atomStart)
+            .take(atomEnd - atomStart)
+            .map((atom) => atom.sectionRole)
+            .whereType<String>()
+            .firstOrNull ?? 'chapter',
         'raw_text': rawText,
         'source_pages_json': jsonEncode(_pagesForSpan(start, end, spans)),
         'start_offset': start + offsetDelta,
@@ -1924,6 +1931,8 @@ class LosslessChunker {
         end: end,
         text: content,
         type: type,
+        sectionTitle: span?['section_title'] as String?,
+        sectionRole: (span?['section_role'] as String?) ?? 'chapter',
         pageStart: _asInt(span?['page_start'], fallback: 1),
         pageEnd: _asInt(span?['page_end'], fallback: 1),
       ));
@@ -1944,11 +1953,10 @@ class LosslessChunker {
     if (RegExp(r'[=≠≈≤≥∑∫√α-ωΑ-Ω]{2,}').hasMatch(value) && words.length < 25) {
       return 'formula';
     }
-    if (words.length <= 12 &&
-        !value.endsWith('.') &&
-        !value.endsWith(',') &&
-        !value.endsWith(';') &&
-        value[0].toUpperCase() == value[0]) {
+    if (RegExp(
+            r'^(?:chapter|part|book|section|preface|foreword|introduction|prologue|epilogue|afterword|appendix)\b',
+            caseSensitive: false)
+        .hasMatch(value) && words.length <= 14) {
       return 'heading';
     }
     if (RegExp(r'^(?:[•*\-–—▪▫◦]|\d+[.)]|\([a-zA-Z0-9]+\))\s+')
@@ -2009,6 +2017,7 @@ class LosslessChunker {
               boundaryAfter: 'paragraph',
               startsSection: true,
               sectionTitle: sectionTitle,
+              sectionRole: unit.sectionRole,
             ));
             index++;
             continue;
@@ -2032,6 +2041,7 @@ class LosslessChunker {
               boundaryAfter: slices.length > 1 ? 'sentence' : 'paragraph',
               startsSection: part == 0,
               sectionTitle: part == 0 ? sectionTitle : null,
+              sectionRole: unit.sectionRole,
             ));
           }
           index++;
@@ -2046,6 +2056,7 @@ class LosslessChunker {
           boundaryAfter: 'paragraph',
           startsSection: true,
           sectionTitle: sectionTitle,
+          sectionRole: unit.sectionRole,
         ));
         continue;
       }
@@ -2068,6 +2079,7 @@ class LosslessChunker {
           paragraphId: index,
           boundaryAfter: slices.length > 1 ? 'sentence' : 'paragraph',
           startsSection: false,
+          sectionRole: unit.sectionRole,
         ));
       }
       index++;
@@ -2076,10 +2088,6 @@ class LosslessChunker {
   }
 
   List<(int, int)> _splitOversized(String text) {
-    if (text.length <= _maxChars && _wordCount(text) <= _maxWords) {
-      return [(0, text.length)];
-    }
-
     final pieces = _breakIntoSmallPieces(text);
     final packed = <(int, int)>[];
     var currentStart = 0;
@@ -2131,7 +2139,8 @@ class LosslessChunker {
       final sStart = span.$1;
       final sEnd = span.$2;
       final sText = text.substring(sStart, sEnd);
-      if (sText.length <= _maxChars && _wordCount(sText) <= _maxWords) {
+      // Emergency band: only split inside a single sentence when that single sentence exceeds 110 words / 650 chars!
+      if (sText.length <= 650 && _wordCount(sText) <= 110) {
         clauseSpans.add((sStart, sEnd));
       } else {
         final subSpans = _splitByClauses(sText);
@@ -2146,7 +2155,7 @@ class LosslessChunker {
       final cStart = span.$1;
       final cEnd = span.$2;
       final cText = text.substring(cStart, cEnd);
-      if (cText.length <= _maxChars && _wordCount(cText) <= _maxWords) {
+      if (cText.length <= 650 && _wordCount(cText) <= 110) {
         finalPieces.add((cStart, cEnd));
       } else {
         final subSpans = _splitByWordsOrChars(cText);
@@ -2230,7 +2239,7 @@ class LosslessChunker {
       for (var end = start; end < atoms.length; end++) {
         if (end > start && atoms[end].startsSection) break;
         final spanChars = atoms[end].end - atoms[start].start;
-        if (spanChars > _maxChars && end > start) break;
+        if (spanChars > 450 && end > start) break;
         words += atoms[end].wordCount;
         if (words > _maxWords && end > start) break;
         final deviation = (words - targetWords) / targetWords;
@@ -2260,7 +2269,7 @@ class LosslessChunker {
           costs[start] = total;
           next[start] = end + 1;
         }
-        if (words > _maxWords) break;
+        if (words > _maxWords || spanChars > 450) break;
       }
     }
 
@@ -2276,6 +2285,64 @@ class LosslessChunker {
     }
     return ranges;
   }
+
+  List<(int, int)> _mergeShortFragments(
+    String text,
+    List<_Atom> atoms,
+    List<(int, int)> rawRanges,
+  ) {
+    if (rawRanges.length <= 1) return rawRanges;
+    final merged = <(int, int)>[];
+    int i = 0;
+    while (i < rawRanges.length) {
+      final current = rawRanges[i];
+      final aStart = current.$1;
+      final aEnd = current.$2;
+      final currentSlice =
+          text.substring(atoms[aStart].start, atoms[aEnd - 1].end);
+      final currentWords = _wordCount(currentSlice);
+
+      // 1. Standalone heading attachment: if a chunk is a standalone heading (startsSection and wordCount <= 14)
+      if (i + 1 < rawRanges.length &&
+          atoms[aStart].startsSection &&
+          (aEnd - aStart == 1) &&
+          currentWords <= 14) {
+        final next = rawRanges[i + 1];
+        final nextStart = next.$1;
+        final nextEnd = next.$2;
+        final nextSlice = text.substring(atoms[nextStart].start, atoms[nextEnd - 1].end);
+        final nextWords = _wordCount(nextSlice);
+        final combinedChars = atoms[nextEnd - 1].end - atoms[aStart].start;
+        if (currentWords + nextWords <= _maxWords && combinedChars <= 450) {
+          merged.add((aStart, nextEnd));
+          i += 2;
+          continue;
+        }
+      }
+
+      // 2. Non-final chunk < 22 words in same section: merge with adjacent chunk
+      if (currentWords < 22 && i + 1 < rawRanges.length) {
+        final next = rawRanges[i + 1];
+        final nextStart = next.$1;
+        final nextEnd = next.$2;
+        if (!atoms[nextStart].startsSection) {
+          final nextSlice =
+              text.substring(atoms[nextStart].start, atoms[nextEnd - 1].end);
+          final nextWords = _wordCount(nextSlice);
+          final combinedChars = atoms[nextEnd - 1].end - atoms[aStart].start;
+          if (currentWords + nextWords <= _maxWords && combinedChars <= 450) {
+            merged.add((aStart, nextEnd));
+            i += 2;
+            continue;
+          }
+        }
+      }
+
+      merged.add((aStart, aEnd));
+      i++;
+    }
+    return merged;
+  }
 }
 
 class _Unit {
@@ -2287,6 +2354,8 @@ class _Unit {
     required this.type,
     required this.pageStart,
     required this.pageEnd,
+    this.sectionTitle,
+    this.sectionRole = 'chapter',
   });
 
   final int start;
@@ -2296,6 +2365,8 @@ class _Unit {
   final String type;
   final int pageStart;
   final int pageEnd;
+  final String? sectionTitle;
+  final String sectionRole;
 }
 
 class _Atom {
@@ -2307,6 +2378,7 @@ class _Atom {
     required this.boundaryAfter,
     required this.startsSection,
     this.sectionTitle,
+    this.sectionRole = 'chapter',
   });
 
   final int start;
@@ -2316,6 +2388,7 @@ class _Atom {
   final String boundaryAfter;
   final bool startsSection;
   final String? sectionTitle;
+  final String sectionRole;
 }
 
 extension _FirstOrNull<T> on Iterable<T> {

@@ -82,6 +82,7 @@ class ContextCard(SQLModel, table=True):
     citations_json: str = "[]"  # list of citation dicts stored as TEXT
     exact_quote: Optional[str] = None  # Verbatim supporting quote from source chunk
     support_status: str = Field(default="fully_supported")  # fully_supported | partially_supported | unsupported | abstain
+    support_tier: Optional[str] = Field(default="verified_external")  # verified_external | single_source | internal_extractive
     canonical_sha256: Optional[str] = None
     generation_mode: str = "extractive"  # extractive | llm
     verified: bool = True

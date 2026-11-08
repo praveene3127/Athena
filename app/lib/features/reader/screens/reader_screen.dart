@@ -80,7 +80,6 @@ class _ReaderScreenState extends ConsumerState<ReaderScreen> {
   bool _preferencesLoaded = false;
   String? _savedChunkId;
   int? _savedChunkSeq;
-  int? _activeDwellChunkSeq;
   bool _isGeneratingCard = false;
 
   @override
@@ -127,7 +126,6 @@ class _ReaderScreenState extends ConsumerState<ReaderScreen> {
         final chunkSeq = currentItem.sequence;
         if (chunkSeq == null || _cardsByChunkSeq.containsKey(chunkSeq)) return;
 
-        _activeDwellChunkSeq = chunkSeq;
         final chunkId = currentItem.id;
 
         try {
@@ -160,8 +158,8 @@ class _ReaderScreenState extends ConsumerState<ReaderScreen> {
 
             _cardsByChunkSeq[chunkSeq] = cardItem;
 
-            // Only trigger UI feed recomputation if reader is still dwelling on this chunk
-            if (mounted && _activeDwellChunkSeq == chunkSeq) {
+            // Trigger UI feed recomputation whenever background card completes
+            if (mounted) {
               setState(() {
                 _recomputeCachedFeed();
               });
@@ -175,6 +173,79 @@ class _ReaderScreenState extends ConsumerState<ReaderScreen> {
 
     _loadPreferences();
     _loadChunkEdits();
+  }
+
+  final Set<int> _prefetchInFlight = {};
+
+  void _prefetchUpcomingCards(int currentFeedIndex) {
+    if (_cachedFeedItems.isEmpty) return;
+
+    // Prefetch window: [cursor + 1 .. cursor + 12]
+    final start = (currentFeedIndex + 1).clamp(0, _cachedFeedItems.length);
+    final end = (currentFeedIndex + 13).clamp(0, _cachedFeedItems.length);
+
+    for (int i = start; i < end; i++) {
+      final item = _cachedFeedItems[i];
+      if (!item.isReadingChunk) continue;
+      final seq = item.sequence;
+      if (seq == null ||
+          _cardsByChunkSeq.containsKey(seq) ||
+          _prefetchInFlight.contains(seq)) {
+        continue;
+      }
+
+      if (_prefetchInFlight.length >= 2) break;
+
+      _prefetchInFlight.add(seq);
+      _executePrefetchForChunk(item);
+    }
+  }
+
+  Future<void> _executePrefetchForChunk(ReaderItem item) async {
+    final seq = item.sequence;
+    if (seq == null) return;
+    try {
+      final chunkDb = await LocalDatabase.instance.getChunkById(item.id);
+      final chunkMap = chunkDb ?? {
+        'id': item.id,
+        'raw_text': item.rawText,
+        'sequence': seq,
+        'section_title': item.sectionTitle,
+        'section_role': item.sectionRole,
+      };
+
+      final service = LocalContextService();
+      final cardMap = await service.generateCardForChunk(
+        widget.documentId,
+        chunkMap,
+        _cardsByChunkSeq.length,
+      );
+
+      if (cardMap != null) {
+        await LocalDatabase.instance.insertCards([cardMap]);
+
+        final cardItem = ReaderItem.fromJson({
+          ...cardMap,
+          'type': 'context_card',
+          'insert_after': item.id,
+          'source_chunk_id': item.id,
+          'sequence': seq,
+          'is_speculative_draft': false,
+        });
+
+        _cardsByChunkSeq[seq] = cardItem;
+
+        if (mounted) {
+          setState(() {
+            _recomputeCachedFeed();
+          });
+        }
+      }
+    } catch (e) {
+      debugPrint('[Athena Prefetch Notice] Card generation: $e');
+    } finally {
+      _prefetchInFlight.remove(seq);
+    }
   }
 
   void _syncData(ReaderData data) {
@@ -197,6 +268,7 @@ class _ReaderScreenState extends ConsumerState<ReaderScreen> {
     }
 
     _recomputeCachedFeed(data);
+    _prefetchUpcomingCards(_currentIndex);
   }
 
   void _recomputeCachedFeed([ReaderData? data]) {
@@ -299,6 +371,7 @@ class _ReaderScreenState extends ConsumerState<ReaderScreen> {
     final index = visible.first.index.clamp(0, _currentFeed.length - 1);
     if (index != _currentIndex) {
       setState(() => _currentIndex = index);
+      _prefetchUpcomingCards(index);
       final chunk = _readingChunkAt(index, _currentFeed);
       final chunkSeq = chunk?.sequence;
       final chunkId = chunk?.id;
@@ -344,9 +417,9 @@ class _ReaderScreenState extends ConsumerState<ReaderScreen> {
   }
 
   void _onPageChanged(int index) {
-    _activeDwellChunkSeq = null;
     setState(() => _currentIndex = index);
     _governor.onPageTurn(index);
+    _prefetchUpcomingCards(index);
   }
 
   void _jumpTo(int index, int total) {

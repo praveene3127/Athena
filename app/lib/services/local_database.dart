@@ -131,6 +131,22 @@ class LocalDatabase {
             await db.execute(
                 'ALTER TABLE reading_chunks ADD COLUMN simhash_lo INTEGER');
           }
+          if (columnNames.isNotEmpty && !columnNames.contains('section_role')) {
+            await db.execute(
+                "ALTER TABLE reading_chunks ADD COLUMN section_role TEXT DEFAULT 'chapter'");
+          }
+          try {
+            final cardCols = (await db.rawQuery('PRAGMA table_info(context_cards)'))
+                .map((row) => row['name'] as String?)
+                .whereType<String>()
+                .toSet();
+            if (cardCols.isNotEmpty && !cardCols.contains('support_tier')) {
+              await db.execute(
+                  "ALTER TABLE context_cards ADD COLUMN support_tier TEXT DEFAULT 'verified_external'");
+            }
+          } catch (e) {
+            debugPrint('[Athena DB] Migration support_tier notice: $e');
+          }
           await db.execute('''
             CREATE TABLE IF NOT EXISTS chunk_user_edits (
               chunk_id TEXT PRIMARY KEY,
@@ -206,6 +222,7 @@ class LocalDatabase {
             document_id TEXT NOT NULL REFERENCES documents(id) ON DELETE CASCADE,
             sequence INTEGER NOT NULL,
             section_title TEXT,
+            section_role TEXT DEFAULT 'chapter',
             raw_text TEXT NOT NULL,
             source_pages_json TEXT NOT NULL,
             start_offset INTEGER NOT NULL,
@@ -231,6 +248,7 @@ class LocalDatabase {
             citations_json TEXT NOT NULL DEFAULT '[]',
             exact_quote TEXT,
             support_status TEXT NOT NULL DEFAULT 'unverified',
+            support_tier TEXT NOT NULL DEFAULT 'verified_external',
             canonical_sha256 TEXT NOT NULL,
             generation_mode TEXT NOT NULL DEFAULT 'extractive',
             verified INTEGER NOT NULL DEFAULT 0,
@@ -558,9 +576,9 @@ class LocalDatabase {
         batch.rawInsert('''
           INSERT INTO context_cards (
             id, document_id, source_chunk_id, concept_name, card_type, title, body,
-            why_here, citations_json, exact_quote, support_status, canonical_sha256,
+            why_here, citations_json, exact_quote, support_status, support_tier, canonical_sha256,
             generation_mode, verified, saved, dismissed, created_at
-          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
           ON CONFLICT(id) DO UPDATE SET
             document_id = excluded.document_id,
             source_chunk_id = excluded.source_chunk_id,
@@ -572,6 +590,7 @@ class LocalDatabase {
             citations_json = excluded.citations_json,
             exact_quote = excluded.exact_quote,
             support_status = excluded.support_status,
+            support_tier = excluded.support_tier,
             canonical_sha256 = excluded.canonical_sha256,
             generation_mode = excluded.generation_mode,
             verified = excluded.verified,
@@ -589,6 +608,7 @@ class LocalDatabase {
           sanitized['citations_json'] ?? '[]',
           sanitized['exact_quote'],
           sanitized['support_status'] ?? 'unverified',
+          sanitized['support_tier'] ?? 'verified_external',
           sanitized['canonical_sha256'] ?? '',
           sanitized['generation_mode'] ?? 'grounded',
           sanitized['verified'] ?? 0,
@@ -797,6 +817,7 @@ class LocalDatabase {
         'raw_text': chunk['raw_text'],
         'page_reference': pageRef,
         'section_title': chunk['section_title'],
+        'section_role': chunk['section_role'] ?? 'chapter',
         'boundary_method': chunk['boundary_method'] ?? 'paragraph',
       });
 
@@ -824,6 +845,7 @@ class LocalDatabase {
           'why_here': card['why_here'] ?? '',
           'exact_quote': card['exact_quote'],
           'support_status': card['support_status'] ?? 'unverified',
+          'support_tier': card['support_tier'] ?? 'verified_external',
           'verified': card['verified'] == 1,
           'generation_mode': card['generation_mode'] ?? 'grounded',
           'is_speculative_draft':
@@ -866,6 +888,7 @@ class LocalDatabase {
               'why_here': card['why_here'] ?? '',
               'exact_quote': card['exact_quote'],
               'support_status': card['support_status'] ?? 'unverified',
+              'support_tier': card['support_tier'] ?? 'verified_external',
               'verified': card['verified'] == 1,
               'generation_mode': card['generation_mode'] ?? 'grounded',
               'is_speculative_draft':

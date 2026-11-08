@@ -38,6 +38,10 @@ app = FastAPI(
     title="Athena Backend",
     description="Preserves source text fidelity and document order. Context is separate and grounded.",
     version="1.1.0",
+    license_info={
+        "name": "GNU General Public License v3.0",
+        "url": "https://www.gnu.org/licenses/gpl-3.0.html",
+    },
     lifespan=lifespan,
 )
 

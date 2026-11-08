@@ -650,7 +650,10 @@ class ContextCardWidget extends StatelessWidget {
   Widget _buildSourceFooter(
       ReaderThemeConfig theme, Map<String, String>? sourceInfo) {
     final hasVerifiedSource =
-        card.isVerified && card.sourceUrl.isNotEmpty && sourceInfo != null;
+        card.isVerifiedExternal && card.sourceUrl.isNotEmpty && sourceInfo != null;
+    final isSingleSource =
+        card.isSingleSource && card.sourceUrl.isNotEmpty && sourceInfo != null;
+
     return Row(
       children: [
         if (hasVerifiedSource)
@@ -676,7 +679,50 @@ class ContextCardWidget extends StatelessWidget {
                     const SizedBox(width: 6),
                     Flexible(
                       child: Text(
-                        'SOURCE: ${sourceInfo['publisher']!.toUpperCase()}',
+                        'VERIFIED SOURCE: ${sourceInfo['publisher']!.toUpperCase()}',
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                        style: TextStyle(
+                          fontFamily: AppTheme.fontUI,
+                          fontSize: 11,
+                          fontWeight: FontWeight.w600,
+                          letterSpacing: 0.5,
+                          color: theme.accentColor,
+                        ),
+                      ),
+                    ),
+                    const SizedBox(width: 4),
+                    Icon(Icons.open_in_new_rounded,
+                        size: 12, color: theme.accentColor),
+                  ],
+                ),
+              ),
+            ),
+          )
+        else if (isSingleSource)
+          Expanded(
+            child: InkWell(
+              borderRadius: BorderRadius.circular(8),
+              onTap: () => _openUrl(sourceInfo['url']),
+              child: Container(
+                padding:
+                    const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+                decoration: BoxDecoration(
+                  color: theme.pillBackground,
+                  borderRadius: BorderRadius.circular(8),
+                  border: Border.all(
+                    color: theme.borderColor.withValues(alpha: 0.8),
+                  ),
+                ),
+                child: Row(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    Icon(Icons.menu_book_rounded,
+                        size: 14, color: theme.accentColor),
+                    const SizedBox(width: 6),
+                    Flexible(
+                      child: Text(
+                        'CONTEXTUAL NOTE: ${sourceInfo['publisher']!.toUpperCase()}',
                         maxLines: 1,
                         overflow: TextOverflow.ellipsis,
                         style: TextStyle(
@@ -697,7 +743,41 @@ class ContextCardWidget extends StatelessWidget {
             ),
           )
         else
-          const Spacer(),
+          Expanded(
+            child: Container(
+              padding:
+                  const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+              decoration: BoxDecoration(
+                color: theme.pillBackground,
+                borderRadius: BorderRadius.circular(8),
+                border: Border.all(
+                  color: theme.borderColor.withValues(alpha: 0.8),
+                ),
+              ),
+              child: Row(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  Icon(Icons.auto_stories_rounded,
+                      size: 14, color: theme.accentColor),
+                  const SizedBox(width: 6),
+                  Flexible(
+                    child: Text(
+                      'BOOK CROSS-REFERENCE / CONCEPT NOTE',
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: TextStyle(
+                        fontFamily: AppTheme.fontUI,
+                        fontSize: 11,
+                        fontWeight: FontWeight.w600,
+                        letterSpacing: 0.5,
+                        color: theme.accentColor,
+                      ),
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ),
         if (onAskAthena != null) ...[
           const SizedBox(width: 8),
           IconButton(

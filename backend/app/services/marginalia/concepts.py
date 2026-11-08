@@ -236,3 +236,61 @@ def build_search_query_for_concept(concept_name: str, passage: str = "", archety
 
     return f"{clean_name} research study analysis"
 
+
+def extract_salient_concept_4tier(passage: str, section_texts: Optional[List[str]] = None) -> str:
+    """
+    Non-Fiction & Multi-Genre 4-Tier Concept Extractor (FP-12).
+    Never returns empty or None on an eligible conceptual chunk! Fall back through:
+      1) Multi-word capitalized phrase (2–4 words)
+      2) Single non-initial capitalized entity (>= 4 letters)
+      3) Top section-recurring non-stopword conceptual term (TF-IDF / frequency >= 2 in section)
+      4) Strongest noun phrase / domain bigram in the passage.
+    """
+    if not passage or not passage.strip():
+        return "Core Concept"
+
+    # 1. Multi-word capitalized phrase (2-4 words)
+    phrase_pattern = re.compile(r"\b[A-Z][a-z]+(?:\s+[A-Z][a-z]+){1,3}\b")
+    for m in phrase_pattern.finditer(passage):
+        ph = m.group(0).strip()
+        words = ph.lower().split()
+        if 2 <= len(words) <= 4 and not any(w in STOPWORDS for w in words):
+            return ph
+
+    # 2. Single non-initial capitalized entity (>= 4 letters)
+    entity_pattern = re.compile(r"(?<![.!?]\s)\b[A-Z][a-z]{3,}\b")
+    for m in entity_pattern.finditer(passage):
+        ent = m.group(0).strip()
+        if ent.lower() not in STOPWORDS:
+            return ent
+
+    # 3. Top section-recurring non-stopword conceptual term (frequency >= 2 in section)
+    if section_texts:
+        section_counts = Counter()
+        for st in section_texts:
+            tokens = [w.lower() for w in re.findall(r"\b[A-Za-z]{4,}\b", st) if w.lower() not in STOPWORDS]
+            section_counts.update(tokens)
+        passage_tokens = set(w.lower() for w in re.findall(r"\b[A-Za-z]{4,}\b", passage) if w.lower() not in STOPWORDS)
+        best_word = None
+        max_c = 1
+        for pt in passage_tokens:
+            if section_counts[pt] > max_c:
+                max_c = section_counts[pt]
+                best_word = pt
+        if best_word:
+            return best_word.capitalize()
+
+    # 4. Strongest noun phrase / domain bigram in the passage
+    content_words = [w for w in re.findall(r"\b[A-Za-z]{4,}\b", passage) if w.lower() not in STOPWORDS]
+    if len(content_words) >= 2:
+        for i in range(len(content_words) - 1):
+            pair = f"{content_words[i]} {content_words[i+1]}"
+            if pair.lower() in passage.lower():
+                return pair
+        return f"{content_words[0]} {content_words[1]}"
+    elif content_words:
+        return content_words[0]
+
+    return "Core Thesis"
+
+

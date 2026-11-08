@@ -156,7 +156,7 @@ class ReadAheadPipeline:
         Maintains backward-compatibility for short dialogue/filler (< 40 words returns 0.1).
         """
         words = text.split()
-        if len(words) < 40:
+        if len(words) < 25:
             return 0.1
 
         # Base structural density (proper nouns, numbers, technical terms)

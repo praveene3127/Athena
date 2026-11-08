@@ -107,6 +107,7 @@ class ReaderItem {
   final String? text;
   final String? pageReference;
   final String? sectionTitle;
+  final String? sectionRole;
   // Context card fields (Phase 5)
   final String? insertAfter;
   final String? sourceChunkId;
@@ -118,6 +119,7 @@ class ReaderItem {
   final bool? saved;
   final String? exactQuote;
   final String? supportStatus;
+  final String? supportTier;
   final String? boundaryMethod;
   final List<Map<String, dynamic>>? citations;
   final bool isSpeculativeDraft;
@@ -130,6 +132,7 @@ class ReaderItem {
     this.text,
     this.pageReference,
     this.sectionTitle,
+    this.sectionRole,
     this.insertAfter,
     this.sourceChunkId,
     this.cardType,
@@ -140,6 +143,7 @@ class ReaderItem {
     this.saved,
     this.exactQuote,
     this.supportStatus,
+    this.supportTier,
     this.boundaryMethod,
     this.citations,
     this.isSpeculativeDraft = false,
@@ -150,6 +154,10 @@ class ReaderItem {
   bool get isContextCard => type == 'context_card';
   String get rawText => text ?? '';
   bool get isVerified => verified == true || supportStatus == 'verified';
+  bool get isVerifiedExternal =>
+      supportTier == 'verified_external' || (isVerified && supportTier != 'single_source' && supportTier != 'internal_extractive');
+  bool get isSingleSource => supportTier == 'single_source';
+  bool get isInternalExtractive => supportTier == 'internal_extractive';
   String get sourceUrl {
     if (citations != null && citations!.isNotEmpty) {
       return (citations!.first['url'] ?? '').toString();
@@ -164,6 +172,7 @@ class ReaderItem {
     String? text,
     String? pageReference,
     String? sectionTitle,
+    String? sectionRole,
     String? insertAfter,
     String? sourceChunkId,
     String? cardType,
@@ -174,6 +183,7 @@ class ReaderItem {
     bool? saved,
     String? exactQuote,
     String? supportStatus,
+    String? supportTier,
     String? boundaryMethod,
     List<Map<String, dynamic>>? citations,
     bool? isSpeculativeDraft,
@@ -186,6 +196,7 @@ class ReaderItem {
       text: text ?? this.text,
       pageReference: pageReference ?? this.pageReference,
       sectionTitle: sectionTitle ?? this.sectionTitle,
+      sectionRole: sectionRole ?? this.sectionRole,
       insertAfter: insertAfter ?? this.insertAfter,
       sourceChunkId: sourceChunkId ?? this.sourceChunkId,
       cardType: cardType ?? this.cardType,
@@ -196,6 +207,7 @@ class ReaderItem {
       saved: saved ?? this.saved,
       exactQuote: exactQuote ?? this.exactQuote,
       supportStatus: supportStatus ?? this.supportStatus,
+      supportTier: supportTier ?? this.supportTier,
       boundaryMethod: boundaryMethod ?? this.boundaryMethod,
       citations: citations ?? this.citations,
       isSpeculativeDraft: isSpeculativeDraft ?? this.isSpeculativeDraft,
@@ -213,6 +225,7 @@ class ReaderItem {
       text: json['text']?.toString(),
       pageReference: json['page_reference']?.toString(),
       sectionTitle: json['section_title']?.toString(),
+      sectionRole: json['section_role']?.toString() ?? json['sectionRole']?.toString(),
       insertAfter: insertAfter,
       sourceChunkId: sourceChunkId,
       cardType: json['card_type']?.toString(),
@@ -223,6 +236,7 @@ class ReaderItem {
       saved: json['saved'] == true || json['saved'] == 1,
       exactQuote: json['exact_quote']?.toString(),
       supportStatus: json['support_status']?.toString(),
+      supportTier: json['support_tier']?.toString() ?? json['supportTier']?.toString(),
       boundaryMethod: json['boundary_method']?.toString(),
       isSpeculativeDraft: json['is_speculative_draft'] == true ||
           json['isSpeculativeDraft'] == true ||
