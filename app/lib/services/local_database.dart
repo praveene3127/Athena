@@ -80,6 +80,18 @@ class LocalDatabase {
             if (!docColumnNames.contains('reading_mode')) {
               await db.execute('ALTER TABLE documents ADD COLUMN reading_mode TEXT DEFAULT \'feed\'');
             }
+            if (!docColumnNames.contains('author')) {
+              await db.execute("ALTER TABLE documents ADD COLUMN author TEXT DEFAULT ''");
+            }
+            if (!docColumnNames.contains('format')) {
+              await db.execute("ALTER TABLE documents ADD COLUMN format TEXT DEFAULT ''");
+            }
+            if (!docColumnNames.contains('processed_pages')) {
+              await db.execute("ALTER TABLE documents ADD COLUMN processed_pages INTEGER DEFAULT 0");
+            }
+            if (!docColumnNames.contains('chunk_count')) {
+              await db.execute("ALTER TABLE documents ADD COLUMN chunk_count INTEGER DEFAULT 0");
+            }
           } catch (e) {
             debugPrint('Athena SQLite upgrade v2 notice: $e');
           }
@@ -114,6 +126,18 @@ class LocalDatabase {
             }
             if (!docColumnNames.contains('reading_mode')) {
               await db.execute('ALTER TABLE documents ADD COLUMN reading_mode TEXT DEFAULT \'feed\'');
+            }
+            if (!docColumnNames.contains('author')) {
+              await db.execute("ALTER TABLE documents ADD COLUMN author TEXT DEFAULT ''");
+            }
+            if (!docColumnNames.contains('format')) {
+              await db.execute("ALTER TABLE documents ADD COLUMN format TEXT DEFAULT ''");
+            }
+            if (!docColumnNames.contains('processed_pages')) {
+              await db.execute("ALTER TABLE documents ADD COLUMN processed_pages INTEGER DEFAULT 0");
+            }
+            if (!docColumnNames.contains('chunk_count')) {
+              await db.execute("ALTER TABLE documents ADD COLUMN chunk_count INTEGER DEFAULT 0");
             }
           }
 
@@ -168,6 +192,13 @@ class LocalDatabase {
               created_at TEXT NOT NULL
             )
           ''');
+          await db.execute('''
+            CREATE TABLE IF NOT EXISTS academic_evidence_cache (
+              query_key TEXT PRIMARY KEY,
+              json_payload TEXT,
+              created_at INTEGER
+            )
+          ''');
           await db.execute(
               'CREATE VIRTUAL TABLE IF NOT EXISTS reading_chunks_fts USING fts5('
               'chunk_id UNINDEXED, document_id UNINDEXED, raw_text, section_title, tokenize=\'unicode61\')');
@@ -181,12 +212,16 @@ class LocalDatabase {
             id TEXT PRIMARY KEY,
             filename TEXT NOT NULL,
             title TEXT NOT NULL,
+            author TEXT DEFAULT '',
+            format TEXT DEFAULT '',
             status TEXT NOT NULL,
             stage TEXT NOT NULL,
             stage_label TEXT NOT NULL,
             percent INTEGER NOT NULL DEFAULT 0,
             page_count INTEGER NOT NULL DEFAULT 0,
             processed_page INTEGER NOT NULL DEFAULT 0,
+            processed_pages INTEGER NOT NULL DEFAULT 0,
+            chunk_count INTEGER NOT NULL DEFAULT 0,
             file_path TEXT NOT NULL,
             canonical_text TEXT,
             spans_json TEXT,
@@ -272,15 +307,112 @@ class LocalDatabase {
             updated_at TEXT NOT NULL
           )
         ''');
+        await db.execute('''
+          CREATE TABLE academic_evidence_cache (
+            query_key TEXT PRIMARY KEY,
+            json_payload TEXT,
+            created_at INTEGER
+          )
+        ''');
       },
     );
   }
 
+  static const List<String> documentListColumns = [
+    'id',
+    'title',
+    'filename',
+    'author',
+    'file_path',
+    'format',
+    'status',
+    'stage',
+    'stage_label',
+    'percent',
+    'page_count',
+    'processed_page',
+    'processed_pages',
+    'chunk_count',
+    'current_chunk_index',
+    'current_chunk_id',
+    'reading_mode',
+    'cards_generated',
+    'layout_warning',
+    'context_status',
+    'error_code',
+    'error_message',
+    'integrity_verified',
+    'created_at',
+    'updated_at',
+  ];
+
   Future<List<Map<String, dynamic>>> listDocuments() async {
     final db = await database;
-    final rows = await db.query('documents',
-        where: "status != 'deleted'", orderBy: 'created_at DESC');
+    final rows = await db.query(
+      'documents',
+      columns: documentListColumns,
+      where: "status != 'deleted'",
+      orderBy: 'created_at DESC',
+    );
     return rows.map((r) => Map<String, dynamic>.from(r)).toList();
+  }
+
+  Future<int> recoverStaleProcessingDocuments() async {
+    final db = await database;
+    return await db.update(
+      'documents',
+      {
+        'status': 'failed',
+        'error_code': 'EXTRACTION_INTERRUPTED',
+        'error_message': 'Extraction was interrupted when the app was closed.',
+        'updated_at': DateTime.now().toIso8601String(),
+      },
+      where: "status = 'processing' OR status = 'queued'",
+    );
+  }
+
+  Future<Map<String, dynamic>?> getDocumentStatus(String id) async {
+    final doc = await getDocument(id);
+    if (doc == null) return null;
+    return {
+      'document_id': id,
+      'status': doc['status'] ?? 'ready',
+      'stage': doc['stage'] ?? 'done',
+      'stage_label': doc['stage_label'] ?? 'Ready to read',
+      'percent': doc['percent'] ?? 100,
+      if (doc['error_message'] != null)
+        'error': {
+          'code': doc['error_code'] ?? 'EXTRACTION_FAILED',
+          'message': doc['error_message'],
+        },
+      'context_status': doc['context_status'],
+    };
+  }
+
+  Future<String?> getCachedAcademicEvidence(String queryKey) async {
+    final db = await database;
+    final rows = await db.query(
+      'academic_evidence_cache',
+      columns: ['json_payload'],
+      where: 'query_key = ?',
+      whereArgs: [queryKey],
+      limit: 1,
+    );
+    if (rows.isEmpty) return null;
+    return rows.first['json_payload'] as String?;
+  }
+
+  Future<void> cacheAcademicEvidence(String queryKey, String jsonPayload) async {
+    final db = await database;
+    await db.insert(
+      'academic_evidence_cache',
+      {
+        'query_key': queryKey,
+        'json_payload': jsonPayload,
+        'created_at': DateTime.now().millisecondsSinceEpoch,
+      },
+      conflictAlgorithm: ConflictAlgorithm.replace,
+    );
   }
 
   Future<Map<String, dynamic>?> getDocument(String id) async {
@@ -399,6 +531,18 @@ class LocalDatabase {
       await batch.commit(noResult: true);
 
       try {
+        final chunkIds = indexedChunks
+            .map((c) => c['id']?.toString() ?? '')
+            .where((id) => id.isNotEmpty)
+            .toList();
+        final docId = indexedChunks.first['document_id']?.toString() ?? '';
+        if (chunkIds.isNotEmpty && docId.isNotEmpty) {
+          final placeholders = List.filled(chunkIds.length, '?').join(',');
+          await txn.rawDelete(
+            'DELETE FROM reading_chunks_fts WHERE document_id = ? AND chunk_id IN ($placeholders)',
+            [docId, ...chunkIds],
+          );
+        }
         final ftsBatch = txn.batch();
         for (final c in indexedChunks) {
           final cId = c['id']?.toString() ?? '';
@@ -451,6 +595,7 @@ class LocalDatabase {
   }
 
   /// Updates document progress, status, and metadata checkpoint during streaming ingestion.
+  /// Strict monotonic status transition: once 'ready', status and percent cannot be downgraded.
   Future<void> updateDocumentProgress(
     String id, {
     String? status,
@@ -465,16 +610,46 @@ class LocalDatabase {
     int? readingTimeMinutes,
     String? canonicalSha256,
     int? integrityVerified,
+    String? errorMessage,
+    String? errorCode,
   }) async {
     final db = await database;
+
+    final existing = await db.query(
+      'documents',
+      columns: ['status', 'percent'],
+      where: 'id = ?',
+      whereArgs: [id],
+      limit: 1,
+    );
+    final currentStatus =
+        existing.isNotEmpty ? existing.first['status'] as String? : null;
+    final currentPercent =
+        existing.isNotEmpty ? (existing.first['percent'] as num?)?.toInt() ?? 0 : 0;
+
     final updates = <String, Object?>{
       'updated_at': DateTime.now().toIso8601String(),
     };
-    if (status != null) updates['status'] = status;
+
+    if (currentStatus == 'ready') {
+      // Do not allow downgrade of status or percent once document is ready
+      if (status != null && status != 'processing' && status != 'queued') {
+        updates['status'] = status;
+      }
+      if (percent != null && percent >= currentPercent) {
+        updates['percent'] = percent;
+      }
+    } else {
+      if (status != null) updates['status'] = status;
+      if (percent != null) updates['percent'] = percent;
+    }
+
     if (stage != null) updates['stage'] = stage;
     if (stageLabel != null) updates['stage_label'] = stageLabel;
-    if (percent != null) updates['percent'] = percent;
-    if (processedPage != null) updates['processed_page'] = processedPage;
+    if (processedPage != null) {
+      updates['processed_page'] = processedPage;
+      updates['processed_pages'] = processedPage;
+    }
     if (pageCount != null) updates['page_count'] = pageCount;
     if (canonicalText != null) updates['canonical_text'] = canonicalText;
     if (totalWords != null) updates['total_words'] = totalWords;
@@ -489,6 +664,8 @@ class LocalDatabase {
     if (integrityVerified != null) {
       updates['integrity_verified'] = integrityVerified;
     }
+    if (errorMessage != null) updates['error_message'] = errorMessage;
+    if (errorCode != null) updates['error_code'] = errorCode;
 
     await db.update('documents', updates, where: 'id = ?', whereArgs: [id]);
   }

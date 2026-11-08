@@ -97,6 +97,7 @@ PROTECTED_ALPHANUMERIC: Set[str] = {
     "wifi", "powerpoint", "youtube", "deepmind", "javascript", "openai",
     "iphone", "ipad", "macos", "github", "linkedin", "chatgpt", "playwright",
     "typescript", "gpt4", "gemini",
+    "fitzgerald", "jpmorgan", "mcdonald", "mcdonald's",
 }
 
 LOADED_ENGLISH_WORDS: Set[str] = KNOWN_LITERARY_WORDS | KNOWN_TECHNICAL_WORDS | PROTECTED_ALPHANUMERIC
@@ -418,7 +419,7 @@ def split_fused_kerning_words(text: str) -> str:
     text = re.sub(r"(\.{2,})(?=[A-Za-z0-9])", r"\1 ", text)
     text = re.sub(r"(?<=[A-Za-z0-9])(\.{2,})", r" \1", text)
     text = re.sub(r"([a-zA-Z]+)([\'’\u2019](?:s|t|ll|re|ve|d|m))([a-zA-Z]+)", r"\1\2 \3", text)
-    SURNAME_PREFIXES = {"mc", "mac", "de", "di", "van", "von", "le", "la", "st"}
+    SURNAME_PREFIXES = {"mc", "mac", "de", "di", "van", "von", "le", "la", "st", "fitz"}
 
     def _split_camel(m: re.Match) -> str:
         full = m.group(0)

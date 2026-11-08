@@ -1,5 +1,6 @@
 import 'dart:async';
 import 'dart:convert';
+import 'dart:io' show File;
 import 'dart:isolate';
 import 'dart:math';
 import 'package:archive/archive.dart';
@@ -10,6 +11,8 @@ import 'package:xml/xml.dart';
 import 'package:cross_file/cross_file.dart';
 import 'package:athena/services/lossless_chunker.dart';
 import 'package:athena/models/section_role.dart';
+import 'package:athena/core/errors.dart';
+import 'package:athena/services/local_database.dart';
 
 class IngestionResult {
   final String canonicalText;
@@ -36,6 +39,8 @@ class LineFragment {
   final double height;
   final double width;
   final double fontSize;
+  final double pageHeight;
+  final bool isBold;
 
   LineFragment({
     required this.text,
@@ -43,10 +48,13 @@ class LineFragment {
     required this.bottom,
     required this.left,
     required this.right,
-    required this.height,
-    required this.width,
+    double? height,
+    double? width,
     this.fontSize = 12.0,
-  });
+    this.pageHeight = 792.0,
+    this.isBold = false,
+  })  : height = height ?? (bottom - top).abs(),
+        width = width ?? (right - left).abs();
 }
 
 class DocumentIngestionPipeline {
@@ -66,34 +74,50 @@ class DocumentIngestionPipeline {
       bool isFinalBatch,
     )? onBatch,
   }) async {
-    // 1. Resolve file bytes
-    List<int>? bytes = fileBytes;
-    if ((bytes == null || bytes.isEmpty) && filePath != null && filePath.isNotEmpty) {
-      try {
-        bytes = await XFile(filePath).readAsBytes();
-      } catch (e) {
-        debugPrint('[Athena Ingestion] File read error: $e');
-      }
-    }
-    if (bytes == null || bytes.isEmpty) {
-      throw Exception('Unable to read document bytes for $fileName');
+    final hasPath =
+        filePath != null && filePath.isNotEmpty && !filePath.startsWith('local://');
+    final hasBytes = fileBytes != null && fileBytes.isNotEmpty;
+
+    if (!hasPath && !hasBytes) {
+      throw const AppError(
+        code: 'FILE_NOT_FOUND',
+        message: 'No file path or file bytes provided for ingestion.',
+      );
     }
 
     final lowerName = fileName.toLowerCase();
 
-    // 2. Dispatch EPUB directly
+    // 1. Dispatch EPUB
     if (lowerName.endsWith('.epub')) {
-      return _ingestEpub(
+      if (kIsWeb) {
+        List<int> bytes = fileBytes ?? const [];
+        if (bytes.isEmpty && filePath != null && filePath.isNotEmpty) {
+          bytes = await XFile(filePath).readAsBytes();
+        }
+        return _ingestEpubDirect(
+          docId: docId,
+          fileName: fileName,
+          bytes: bytes,
+          onProgress: onProgress,
+          onBatch: onBatch,
+        );
+      }
+      return _runEpubPipelineWithIsolate(
         docId: docId,
         fileName: fileName,
-        bytes: bytes,
+        filePath: hasPath ? filePath : null,
+        fileBytes: hasBytes ? fileBytes : null,
         onProgress: onProgress,
         onBatch: onBatch,
       );
     }
 
-    // 3. Dispatch PDF via single worker isolate (or in-process on Web)
+    // 2. Dispatch PDF
     if (kIsWeb) {
+      List<int> bytes = fileBytes ?? const [];
+      if (bytes.isEmpty && filePath != null && filePath.isNotEmpty) {
+        bytes = await XFile(filePath).readAsBytes();
+      }
       return _runPdfPipelineDirect(
         docId: docId,
         fileName: fileName,
@@ -106,7 +130,8 @@ class DocumentIngestionPipeline {
     return _runPdfPipelineWithIsolate(
       docId: docId,
       fileName: fileName,
-      bytes: bytes,
+      filePath: hasPath ? filePath : null,
+      fileBytes: hasBytes ? fileBytes : null,
       onProgress: onProgress,
       onBatch: onBatch,
     );
@@ -117,7 +142,8 @@ class DocumentIngestionPipeline {
   static Future<IngestionResult> _runPdfPipelineWithIsolate({
     required String docId,
     required String fileName,
-    required List<int> bytes,
+    String? filePath,
+    List<int>? fileBytes,
     void Function(double progress, String stageLabel)? onProgress,
     Future<void> Function(
       List<Map<String, Object?>> batchChunks,
@@ -127,73 +153,151 @@ class DocumentIngestionPipeline {
     )? onBatch,
   }) async {
     final receivePort = ReceivePort();
-    final completer = Completer<IngestionResult>();
+    final errorPort = ReceivePort();
+    final exitPort = ReceivePort();
     final allChunks = <Map<String, Object?>>[];
     final fullCanonical = StringBuffer();
     int totalPages = 0;
+    Isolate? isolate;
+    Timer? watchdogTimer;
 
-    final isolate = await Isolate.spawn(
-      _pdfWorkerIsolateEntryPoint,
-      _PdfWorkerParams(
-        docId: docId,
-        fileName: fileName,
-        bytes: bytes,
-        sendPort: receivePort.sendPort,
-      ),
-    );
-
-    receivePort.listen((message) async {
-      if (message is _WorkerProgressEvent) {
-        onProgress?.call(message.progress, message.stageLabel);
-      } else if (message is _WorkerBatchEvent) {
-        totalPages = message.totalPages;
-        allChunks.addAll(message.batchChunks);
-        if (message.batchCanonicalText.isNotEmpty) {
-          if (fullCanonical.isNotEmpty) fullCanonical.write('\n\n');
-          fullCanonical.write(message.batchCanonicalText);
-        }
-
-        if (onBatch != null && message.batchChunks.isNotEmpty) {
-          await onBatch(
-            message.batchChunks,
-            message.processedPages,
-            message.totalPages,
-            message.isFinalBatch,
-          );
-        }
-      } else if (message is _WorkerDoneEvent) {
-        receivePort.close();
-        isolate.kill(priority: Isolate.immediate);
-
-        final canonicalStr = fullCanonical.toString().trim();
-        final canonicalSha256 = sha256.convert(utf8.encode(canonicalStr)).toString();
-
-        // End-to-end SHA-256 reconstruction check (F22)
-        final reconstructedText = allChunks
-            .map((c) => (c['raw_text'] ?? '').toString())
-            .join('');
-        final reconstructedSha256 =
-            sha256.convert(utf8.encode(reconstructedText)).toString();
-        final bool integrityVerified = (canonicalSha256 == message.canonicalSha256 ||
-            reconstructedSha256 == message.canonicalSha256);
-
-        completer.complete(IngestionResult(
-          canonicalText: canonicalStr.isNotEmpty ? canonicalStr : message.canonicalText,
-          canonicalSha256: message.canonicalSha256.isNotEmpty
-              ? message.canonicalSha256
-              : canonicalSha256,
-          pageCount: message.pageCount > 0 ? message.pageCount : totalPages,
-          chunks: allChunks,
-          integrityVerified: integrityVerified,
-        ));
-      } else if (message is _WorkerErrorEvent) {
-        receivePort.close();
-        isolate.kill(priority: Isolate.immediate);
-        completer.completeError(Exception(message.error));
+    void cleanup() {
+      watchdogTimer?.cancel();
+      watchdogTimer = null;
+      receivePort.close();
+      errorPort.close();
+      exitPort.close();
+      try {
+        isolate?.kill(priority: Isolate.immediate);
+      } catch (e) {
+        debugPrint('[Athena Ingestion] Isolate cleanup notice: $e');
       }
+    }
+
+    void resetWatchdog() {
+      watchdogTimer?.cancel();
+      watchdogTimer = Timer(const Duration(seconds: 20), () async {
+        debugPrint('[Athena Ingestion] Watchdog triggered: 20s worker timeout');
+        cleanup();
+        try {
+          await LocalDatabase.instance.updateDocumentProgress(
+            docId,
+            status: 'failed',
+            stage: 'failed',
+            stageLabel: 'Extraction interrupted or timed out.',
+            errorMessage: 'Extraction interrupted or timed out.',
+            errorCode: 'EXTRACTION_TIMEOUT',
+          );
+        } catch (e) {
+          debugPrint('[Athena Ingestion] DB watchdog update notice: $e');
+        }
+      });
+    }
+
+    errorPort.listen((errorData) {
+      receivePort.sendPort.send(_WorkerErrorEvent(
+        error: 'Extraction interrupted or out of memory: $errorData',
+      ));
     });
 
-    return completer.future;
+    exitPort.listen((_) {
+      receivePort.sendPort.send(const _WorkerErrorEvent(
+        error: 'Worker isolate exited unexpectedly',
+      ));
+    });
+
+    try {
+      isolate = await Isolate.spawn(
+        _pdfWorkerIsolateEntryPoint,
+        _PdfWorkerParams(
+          docId: docId,
+          fileName: fileName,
+          filePath: filePath,
+          bytes: fileBytes,
+          sendPort: receivePort.sendPort,
+        ),
+        onError: errorPort.sendPort,
+        onExit: exitPort.sendPort,
+        errorsAreFatal: true,
+      );
+
+      resetWatchdog();
+
+      await for (final message in receivePort) {
+        resetWatchdog();
+        if (message is _WorkerProgressEvent) {
+          onProgress?.call(message.progress, message.stageLabel);
+        } else if (message is _WorkerBatchEvent) {
+          totalPages = message.totalPages;
+          allChunks.addAll(message.batchChunks);
+          if (message.batchCanonicalText.isNotEmpty) {
+            if (fullCanonical.isNotEmpty) fullCanonical.write('\n\n');
+            fullCanonical.write(message.batchCanonicalText);
+          }
+
+          if (onBatch != null && message.batchChunks.isNotEmpty) {
+            await onBatch(
+              message.batchChunks,
+              message.processedPages,
+              message.totalPages,
+              message.isFinalBatch,
+            );
+          }
+        } else if (message is _WorkerDoneEvent) {
+          cleanup();
+
+          final canonicalStr = fullCanonical.toString().trim();
+          final canonicalSha256 =
+              sha256.convert(utf8.encode(canonicalStr)).toString();
+
+          final reconstructedText = allChunks
+              .map((c) => (c['raw_text'] ?? '').toString())
+              .join('');
+          final reconstructedSha256 =
+              sha256.convert(utf8.encode(reconstructedText)).toString();
+          final bool integrityVerified =
+              (canonicalSha256 == message.canonicalSha256 ||
+                  reconstructedSha256 == message.canonicalSha256 ||
+                  canonicalSha256 == reconstructedSha256);
+
+          return IngestionResult(
+            canonicalText:
+                canonicalStr.isNotEmpty ? canonicalStr : message.canonicalText,
+            canonicalSha256: message.canonicalSha256.isNotEmpty
+                ? message.canonicalSha256
+                : canonicalSha256,
+            pageCount: message.pageCount > 0 ? message.pageCount : totalPages,
+            chunks: allChunks,
+            integrityVerified: integrityVerified,
+          );
+        } else if (message is _WorkerErrorEvent) {
+          cleanup();
+          try {
+            await LocalDatabase.instance.updateDocumentProgress(
+              docId,
+              status: 'failed',
+              stage: 'failed',
+              stageLabel: message.error,
+              errorMessage: message.error,
+              errorCode: 'EXTRACTION_FAILED',
+            );
+          } catch (e) {
+            debugPrint('[Athena Ingestion] DB worker error update notice: $e');
+          }
+          throw AppError(
+            code: 'EXTRACTION_FAILED',
+            message: message.error,
+          );
+        }
+      }
+
+      throw const AppError(
+        code: 'EXTRACTION_INTERRUPTED',
+        message: 'Worker isolate terminated without completing.',
+      );
+    } finally {
+      cleanup();
+    }
   }
 
   static Future<IngestionResult> _runPdfPipelineDirect({
@@ -214,22 +318,20 @@ class DocumentIngestionPipeline {
         pdfDoc = PdfDocument(inputBytes: bytes);
       } catch (pdfOpenErr) {
         debugPrint(
-            '[Athena Ingestion] Direct PdfDocument open failed ($pdfOpenErr), falling back to raw text');
-        return await _runFallbackRawTextDirect(
-          docId: docId,
-          fileName: fileName,
-          bytes: bytes,
-          onProgress: onProgress,
-          onBatch: onBatch,
+            '[Athena Ingestion] Direct PdfDocument open failed ($pdfOpenErr)');
+        throw const AppError(
+          code: 'PDF_UNREADABLE',
+          message: 'This PDF is encrypted or unreadable.',
         );
       }
       final int totalPages = pdfDoc.pages.count;
-      final extractor = PdfTextExtractor(pdfDoc);
+      var extractor = PdfTextExtractor(pdfDoc);
       final bookmarks = _extractPdfBookmarks(pdfDoc);
 
       final pageLinesMap = <int, List<LineFragment>>{};
       final pageRawTextMap = <int, String>{};
 
+      int cleanPageCount = 0;
       const int windowSize = 25;
       for (int startPage = 0; startPage < totalPages; startPage += windowSize) {
         final endPage = (startPage + windowSize - 1).clamp(0, totalPages - 1);
@@ -240,10 +342,23 @@ class DocumentIngestionPipeline {
         onProgress?.call(progressFraction, stageMsg);
 
         for (int p = startPage; p <= endPage; p++) {
-          final lines = _extractHorizontalGroupedLines(extractor, p);
+          final pageHeight = pdfDoc.pages[p].size.height;
+          final lines = _extractHorizontalGroupedLines(extractor, p, pageHeight: pageHeight);
           pageLinesMap[p + 1] = lines;
-          pageRawTextMap[p + 1] = lines.map((l) => l.text).join('\n');
+          final rawText = lines.map((l) => l.text).join('\n');
+          pageRawTextMap[p + 1] = rawText;
+          if (rawText.trim().length >= 20 &&
+              computePageQuality(rawText).isAcceptable) {
+            cleanPageCount++;
+          }
         }
+      }
+
+      if (totalPages >= 3 && (cleanPageCount / totalPages) < 0.15) {
+        throw const AppError(
+          code: 'SCANNED_PDF_DETECTED',
+          message: 'Scanned image-only PDF detected (no extractable text layer).',
+        );
       }
 
       onProgress?.call(0.65, 'Analyzing document layout and structure...');
@@ -275,26 +390,50 @@ class DocumentIngestionPipeline {
     }
   }
 
-  // --- Worker Isolate (Opens PdfDocument ONCE) ---
+  static PdfDocument _openPdfDoc(_PdfWorkerParams params) {
+    List<int>? bytes = params.bytes;
+    if ((bytes == null || bytes.isEmpty) &&
+        params.filePath != null &&
+        params.filePath!.isNotEmpty &&
+        !kIsWeb) {
+      final file = File(params.filePath!);
+      if (file.existsSync()) {
+        bytes = file.readAsBytesSync();
+      }
+    }
+    if (bytes == null || bytes.isEmpty) {
+      throw const AppError(
+        code: 'PDF_UNREADABLE',
+        message: 'No file bytes available for PDF extraction.',
+      );
+    }
+
+    return PdfDocument(inputBytes: bytes);
+  }
+
+  // --- Worker Isolate (Windowed PDF Processing & Incremental Batch Emission) ---
 
   static void _pdfWorkerIsolateEntryPoint(_PdfWorkerParams params) {
     PdfDocument? pdfDoc;
     try {
       try {
-        pdfDoc = PdfDocument(inputBytes: params.bytes);
+        pdfDoc = _openPdfDoc(params);
       } catch (pdfOpenErr) {
         debugPrint(
-            '[Athena Ingestion] Worker PdfDocument open failed ($pdfOpenErr), falling back to raw text');
-        _fallbackRawTextWorker(params);
+            '[Athena Ingestion] Worker PdfDocument open failed ($pdfOpenErr)');
+        params.sendPort.send(const _WorkerErrorEvent(
+          error: 'This PDF is encrypted or unreadable.',
+        ));
         return;
       }
       final int totalPages = pdfDoc.pages.count;
-      final extractor = PdfTextExtractor(pdfDoc);
+      var extractor = PdfTextExtractor(pdfDoc);
       final bookmarks = _extractPdfBookmarks(pdfDoc);
 
       final pageLinesMap = <int, List<LineFragment>>{};
       final pageRawTextMap = <int, String>{};
 
+      int cleanPageCount = 0;
       const int windowSize = 25;
       for (int startPage = 0; startPage < totalPages; startPage += windowSize) {
         final endPage = (startPage + windowSize - 1).clamp(0, totalPages - 1);
@@ -308,11 +447,36 @@ class DocumentIngestionPipeline {
           stageLabel: stageMsg,
         ));
 
-        for (int p = startPage; p <= endPage; p++) {
-          final lines = _extractHorizontalGroupedLines(extractor, p);
-          pageLinesMap[p + 1] = lines;
-          pageRawTextMap[p + 1] = lines.map((l) => l.text).join('\n');
+        // Dispose and reopen PdfDocument every 50 pages so Syncfusion's font/glyph caches never balloon RAM
+        if (startPage > 0 && startPage % 50 == 0) {
+          try {
+            pdfDoc?.dispose();
+          } catch (e) {
+            debugPrint('[Athena Ingestion] pdfDoc dispose error: $e');
+          }
+          pdfDoc = _openPdfDoc(params);
+          extractor = PdfTextExtractor(pdfDoc);
         }
+
+        for (int p = startPage; p <= endPage; p++) {
+          final pageHeight = pdfDoc!.pages[p].size.height;
+          final lines = _extractHorizontalGroupedLines(extractor, p, pageHeight: pageHeight);
+          pageLinesMap[p + 1] = lines;
+          final rawText = lines.map((l) => l.text).join('\n');
+          pageRawTextMap[p + 1] = rawText;
+          if (rawText.trim().length >= 20 &&
+              computePageQuality(rawText).isAcceptable) {
+            cleanPageCount++;
+          }
+        }
+      }
+
+      // Scanned PDF detection (H-9)
+      if (totalPages >= 3 && (cleanPageCount / totalPages) < 0.15) {
+        params.sendPort.send(const _WorkerErrorEvent(
+          error: 'Scanned image-only PDF detected (no extractable text layer).',
+        ));
+        return;
       }
 
       params.sendPort.send(const _WorkerProgressEvent(
@@ -320,25 +484,230 @@ class DocumentIngestionPipeline {
         stageLabel: 'Analyzing document layout and structure...',
       ));
 
-      final processedResult = _processWholeDocument(
-        docId: params.docId,
+      // 1. Whole-book furniture removal (FP-6)
+      final repeatedHeadersFooters = detectFurniture(pageLinesMap);
+      final cleanLinesMap = <int, List<LineFragment>>{};
+      for (int p = 1; p <= totalPages; p++) {
+        var lines = pageLinesMap[p] ?? const [];
+        lines = lines.where((line) {
+          final ph = line.pageHeight > 0 ? line.pageHeight : 792.0;
+          final inMargin = (line.top <= 0.08 * ph) || (line.bottom >= 0.92 * ph);
+          if (!inMargin) return true; // NEVER strip lines outside top/bottom 8% margin!
+
+          final key = _furnitureKey(line.text);
+          final yBucket = (line.top / 4).round();
+          if (repeatedHeadersFooters.contains('$key@$yBucket') ||
+              repeatedHeadersFooters.contains('$key@${yBucket - 1}') ||
+              repeatedHeadersFooters.contains('$key@${yBucket + 1}')) {
+            return false;
+          }
+          if (_isLonePageNumber(line.text, pageIndex: p)) return false;
+          return true;
+        }).toList();
+        cleanLinesMap[p] = lines;
+      }
+
+      // 2. Compute LayoutProfile (FP-6)
+      final profile = LayoutProfile.compute(cleanLinesMap);
+
+      // 3. TocDetector & Heading discovery (FP-8, FP-9)
+      final tocPages = <int>{};
+      final tocTitles = <String>{};
+      final explicitHeadingMap = <int, String>{};
+
+      for (int p = 1; p <= totalPages; p++) {
+        final lines = cleanLinesMap[p] ?? const [];
+        final rawText = pageRawTextMap[p] ?? '';
+        final tocRes = TocDetector.analyzePage(
+          lines: lines,
+          bodyRight: profile.bodyRight,
+          rawPageText: rawText,
+          pageNum: p,
+          totalPages: totalPages,
+        );
+        if (tocRes.isToc) {
+          tocPages.add(p);
+          for (final entry in tocRes.entries) {
+            tocTitles.add(entry.title.toLowerCase());
+          }
+        }
+        for (final l in lines) {
+          if (isStrictHeading(
+            line: l,
+            profile: profile,
+            bookmarkTitle: bookmarks[p],
+            tocTitles: tocTitles,
+          )) {
+            explicitHeadingMap[p] = l.text.trim();
+            break;
+          }
+        }
+      }
+
+      // 4. StructureResolver: 5-state monotonic Viterbi smoothing (FP-9, FP-10)
+      final roles = StructureResolver.smoothRoles(
         totalPages: totalPages,
-        pageLinesMap: pageLinesMap,
+        pageLinesMap: cleanLinesMap,
         pageRawTextMap: pageRawTextMap,
         bookmarks: bookmarks,
+        tocPages: tocPages,
+        explicitHeadingMap: explicitHeadingMap,
       );
 
-      params.sendPort.send(_WorkerBatchEvent(
-        batchChunks: processedResult.chunks,
-        batchCanonicalText: processedResult.canonicalText,
-        processedPages: totalPages,
-        totalPages: totalPages,
-        isFinalBatch: true,
-      ));
+      // 5. Windowed Reflow, Chunking & Incremental Batch Emission (H-5, P0-01, P0-05)
+      const int chunkWindowPages = 16;
+      int chunkSeq = 1;
+      int totalCharOffset = 0;
+      final fullCanonical = StringBuffer();
+      final allChunks = <Map<String, Object?>>[];
+      String? currentCarryOver;
+      int? prevReadablePage;
+
+      for (int startP = 1; startP <= totalPages; startP += chunkWindowPages) {
+        final endP = (startP + chunkWindowPages - 1).clamp(1, totalPages);
+        final isFinalWindow = (endP == totalPages);
+
+        final windowBuffer = StringBuffer();
+        final windowSpans = <Map<String, dynamic>>[];
+
+        for (int p = startP; p <= endP; p++) {
+          final role =
+              (p - 1 < roles.length) ? roles[p - 1] : SectionRole.chapter;
+          if (role.isMatter) {
+            continue;
+          }
+
+          if (prevReadablePage != null && prevReadablePage != p - 1) {
+            currentCarryOver = null;
+          }
+          prevReadablePage = p;
+
+          var lines = cleanLinesMap[p] ?? const [];
+          if (lines.isEmpty) continue;
+
+          // 2-Column XY-cut ordering if applicable (FP-6)
+          if (profile.hasTwoColumns && profile.columnGutterLeft > 0) {
+            final col1 = lines
+                .where((l) => l.right <= profile.columnGutterRight)
+                .toList()
+              ..sort((a, b) => a.top.compareTo(b.top));
+            final col2 = lines
+                .where((l) => l.left >= profile.columnGutterLeft)
+                .toList()
+              ..sort((a, b) => a.top.compareTo(b.top));
+            final other = lines
+                .where((l) =>
+                    l.right > profile.columnGutterRight &&
+                    l.left < profile.columnGutterLeft)
+                .toList()
+              ..sort((a, b) => a.top.compareTo(b.top));
+            lines = [...col1, ...col2, ...other];
+          }
+
+          final pageHeading = explicitHeadingMap[p] ??
+              bookmarks[p] ??
+              (role != SectionRole.chapter ? role.displayLabel : null);
+
+          final reflowResult = reflowLinesIntoParagraphs(
+            lines: lines,
+            pageNum: p,
+            bookmarkTitle: pageHeading,
+            carryOver: currentCarryOver,
+            layoutProfile: profile,
+          );
+
+          currentCarryOver = reflowResult.carryOver;
+
+          for (final para in reflowResult.paragraphs) {
+            if (para.text.isEmpty) continue;
+            if (windowBuffer.isNotEmpty) {
+              windowBuffer.write('\n\n');
+            }
+            final start = windowBuffer.length;
+            windowBuffer.write(para.text);
+            final end = windowBuffer.length;
+
+            windowSpans.add({
+              'start': start,
+              'end': end,
+              'page_start': p,
+              'page_end': p,
+              'type': para.isHeading ? 'heading' : 'paragraph',
+              'section_title': para.sectionTitle ??
+                  pageHeading ??
+                  (role != SectionRole.chapter
+                      ? role.displayLabel
+                      : 'Chapter Passage'),
+              'section_role': role.name,
+            });
+          }
+        }
+
+        // Flush carryover if final window
+        if (isFinalWindow &&
+            currentCarryOver != null &&
+            currentCarryOver.isNotEmpty) {
+          if (windowBuffer.isNotEmpty) windowBuffer.write('\n\n');
+          final start = windowBuffer.length;
+          windowBuffer.write(currentCarryOver);
+          final end = windowBuffer.length;
+          windowSpans.add({
+            'start': start,
+            'end': end,
+            'page_start': totalPages,
+            'page_end': totalPages,
+            'type': 'paragraph',
+            'section_title': 'Chapter Passage',
+            'section_role': 'chapter',
+          });
+          currentCarryOver = null;
+        }
+
+        final windowCanonical = windowBuffer.toString().trim();
+        List<Map<String, Object?>> windowChunks = const [];
+
+        if (windowCanonical.isNotEmpty) {
+          windowChunks = LosslessChunker().build(
+            documentId: params.docId,
+            canonicalText: windowCanonical,
+            spans: windowSpans,
+            initialSequence: chunkSeq,
+            offsetDelta: totalCharOffset,
+          );
+
+          chunkSeq += windowChunks.length;
+          totalCharOffset +=
+              windowCanonical.length + (fullCanonical.isNotEmpty ? 2 : 0);
+          if (fullCanonical.isNotEmpty) fullCanonical.write('\n\n');
+          fullCanonical.write(windowCanonical);
+          allChunks.addAll(windowChunks);
+        }
+
+        // CRITICAL MEMORY OPTIMIZATION: Clear processed pages from RAM!
+        for (int p = startP; p <= endP; p++) {
+          pageLinesMap.remove(p);
+          cleanLinesMap.remove(p);
+          pageRawTextMap.remove(p);
+        }
+
+        if (windowChunks.isNotEmpty || isFinalWindow) {
+          params.sendPort.send(_WorkerBatchEvent(
+            batchChunks: windowChunks,
+            batchCanonicalText: windowCanonical,
+            processedPages: endP,
+            totalPages: totalPages,
+            isFinalBatch: isFinalWindow,
+          ));
+        }
+      }
+
+      final canonicalStr = fullCanonical.toString().trim();
+      final canonicalSha256 =
+          sha256.convert(utf8.encode(canonicalStr)).toString();
 
       params.sendPort.send(_WorkerDoneEvent(
-        canonicalText: processedResult.canonicalText,
-        canonicalSha256: processedResult.canonicalSha256,
+        canonicalText: canonicalStr,
+        canonicalSha256: canonicalSha256,
         pageCount: totalPages,
       ));
     } catch (e, stack) {
@@ -354,99 +723,6 @@ class DocumentIngestionPipeline {
     }
   }
 
-  static void _fallbackRawTextWorker(_PdfWorkerParams params) {
-    String raw;
-    try {
-      raw = utf8.decode(params.bytes, allowMalformed: true);
-    } catch (_) {
-      raw = String.fromCharCodes(params.bytes);
-    }
-    final clean = sanitizeProseSpacing(raw).trim();
-    final canonicalSha256 = sha256.convert(utf8.encode(clean)).toString();
-
-    final spans = [
-      {
-        'start': 0,
-        'end': clean.length,
-        'page_start': 1,
-        'page_end': 1,
-        'type': 'paragraph',
-      }
-    ];
-
-    final chunks = LosslessChunker().build(
-      documentId: params.docId,
-      canonicalText: clean,
-      spans: spans,
-    );
-
-    params.sendPort.send(_WorkerBatchEvent(
-      batchChunks: chunks,
-      batchCanonicalText: clean,
-      processedPages: 1,
-      totalPages: 1,
-      isFinalBatch: true,
-    ));
-
-    params.sendPort.send(_WorkerDoneEvent(
-      canonicalText: clean,
-      canonicalSha256: canonicalSha256,
-      pageCount: 1,
-    ));
-  }
-
-  static Future<IngestionResult> _runFallbackRawTextDirect({
-    required String docId,
-    required String fileName,
-    required List<int> bytes,
-    void Function(double progress, String stageLabel)? onProgress,
-    Future<void> Function(
-      List<Map<String, Object?>> batchChunks,
-      int processedPages,
-      int totalPages,
-      bool isFinalBatch,
-    )? onBatch,
-  }) async {
-    String raw;
-    try {
-      raw = utf8.decode(bytes, allowMalformed: true);
-    } catch (_) {
-      raw = String.fromCharCodes(bytes);
-    }
-    final clean = sanitizeProseSpacing(raw).trim();
-    final canonicalSha256 = sha256.convert(utf8.encode(clean)).toString();
-
-    final spans = [
-      {
-        'start': 0,
-        'end': clean.length,
-        'page_start': 1,
-        'page_end': 1,
-        'type': 'paragraph',
-      }
-    ];
-
-    final chunks = LosslessChunker().build(
-      documentId: docId,
-      canonicalText: clean,
-      spans: spans,
-    );
-
-    if (onBatch != null && chunks.isNotEmpty) {
-      await onBatch(chunks, 1, 1, true);
-    }
-
-    onProgress?.call(1.0, 'Ready to read');
-
-    return IngestionResult(
-      canonicalText: clean,
-      canonicalSha256: canonicalSha256,
-      pageCount: 1,
-      chunks: chunks,
-      integrityVerified: true,
-    );
-  }
-
   // --- PASS 2: Structure Resolver, LayoutProfile & TocDetector (FP-5 to FP-10) ---
 
   static bool continuesParagraph({
@@ -457,6 +733,9 @@ class DocumentIngestionPipeline {
   }) {
     final h = profile.bodyFontSize;
     final pitch = profile.linePitch;
+    final pageLeft = (profile is PageLayoutProfile) ? profile.pageBodyLeft : profile.bodyLeft;
+    final pageRight = (profile is PageLayoutProfile) ? profile.pageBodyRight : profile.bodyRight;
+    final isRagged = (profile is PageLayoutProfile) && profile.isRaggedRight;
 
     // 1) 0.5 * h < (b.top - a.top) <= 1.8 * linePitch
     final verticalDiff = b.top - a.top;
@@ -475,15 +754,22 @@ class DocumentIngestionPipeline {
       return false;
     }
 
-    // 4) a.right >= 0.90 * bodyRight OR a ends with hyphen (or !endsWithSentenceTerminalPunctuation)
+    // 4) On justified pages: a.right >= 0.90 * bodyRight OR a ends with hyphen (or !endsWithSentenceTerminalPunctuation)
+    // On ragged-right pages: rely on vertical gap (> 1.35 * linePitch) or indent rather than line width to end paragraphs (S-6, S-7)
     final aTrim = a.text.trim();
-    final reachesRight = a.right >= 0.90 * profile.bodyRight;
+    final reachesRight = a.right >= 0.90 * pageRight;
     final endsHyphen = aTrim.endsWith('-') ||
         aTrim.endsWith('\u2010') ||
         aTrim.endsWith('\u2011');
     final endsTerminal = RegExp(r'[.!?…”"’]\s*$').hasMatch(aTrim);
-    if (!reachesRight && !endsHyphen && endsTerminal) {
-      return false;
+    if (!isRagged) {
+      if (!reachesRight && !endsHyphen && endsTerminal) {
+        return false;
+      }
+    } else {
+      if (verticalDiff > 1.35 * pitch && endsTerminal) {
+        return false;
+      }
     }
 
     // 5) b does not start with a bullet, numbered list marker, or opening dialogue quote when a ended a sentence
@@ -495,10 +781,10 @@ class DocumentIngestionPipeline {
       return false;
     }
 
-    // 6) b is NOT first-line indented ((b.left - bodyLeft) < 0.5 * h when document uses paragraph indents)
+    // 6) b is NOT first-line indented ((b.left - pageLeft) >= 0.8 * h && <= 4.5 * h) (S-6, P2-01)
     if (profile.usesIndent) {
-      final indentDiff = b.left - profile.bodyLeft;
-      if (indentDiff >= 0.5 * h) {
+      final indentDiff = b.left - pageLeft;
+      if (indentDiff >= 0.8 * h && indentDiff <= 4.5 * h) {
         return false;
       }
     }
@@ -533,16 +819,24 @@ class DocumentIngestionPipeline {
       return true;
     }
 
+    final normText = _norm(text);
+
     // 2. Matches bookmark title
-    if (bookmarkTitle != null &&
-        bookmarkTitle.isNotEmpty &&
-        text.toLowerCase().contains(bookmarkTitle.toLowerCase())) {
-      return true;
+    if (bookmarkTitle != null && bookmarkTitle.isNotEmpty) {
+      final normBm = _norm(bookmarkTitle);
+      if (normText == normBm || normText.startsWith(normBm)) {
+        return true;
+      }
     }
 
     // 3. Matches TOC title
-    if (tocTitles != null && tocTitles.contains(text.toLowerCase())) {
-      return true;
+    if (tocTitles != null) {
+      for (final t in tocTitles) {
+        final normT = _norm(t);
+        if (normText == normT || normText.startsWith(normT)) {
+          return true;
+        }
+      }
     }
 
     // 4. Explicit section pattern
@@ -556,6 +850,9 @@ class DocumentIngestionPipeline {
 
     return false;
   }
+
+  static String _norm(String s) =>
+      s.toLowerCase().replaceAll(RegExp(r'[\s\-_.,:;]+'), ' ').trim();
 
   static IngestionResult _processWholeDocument({
     required String docId,
@@ -580,9 +877,18 @@ class DocumentIngestionPipeline {
     for (int p = 1; p <= totalPages; p++) {
       var lines = pageLinesMap[p] ?? const [];
       lines = lines.where((line) {
+        final ph = line.pageHeight > 0 ? line.pageHeight : 792.0;
+        final inMargin = (line.top <= 0.08 * ph) || (line.bottom >= 0.92 * ph);
+        if (!inMargin) return true; // NEVER strip lines outside top/bottom 8% margin!
+
         final key = _furnitureKey(line.text);
-        if (repeatedHeadersFooters.contains(key)) return false;
-        if (_isLonePageNumber(line.text)) return false;
+        final yBucket = (line.top / 4).round();
+        if (repeatedHeadersFooters.contains('$key@$yBucket') ||
+            repeatedHeadersFooters.contains('$key@${yBucket - 1}') ||
+            repeatedHeadersFooters.contains('$key@${yBucket + 1}')) {
+          return false;
+        }
+        if (_isLonePageNumber(line.text, pageIndex: p)) return false;
         return true;
       }).toList();
       cleanLinesMap[p] = lines;
@@ -603,6 +909,8 @@ class DocumentIngestionPipeline {
         lines: lines,
         bodyRight: profile.bodyRight,
         rawPageText: rawText,
+        pageNum: p,
+        totalPages: totalPages,
       );
       if (tocRes.isToc) {
         tocPages.add(p);
@@ -637,6 +945,7 @@ class DocumentIngestionPipeline {
     final buffer = StringBuffer();
     final spans = <Map<String, dynamic>>[];
     String? currentCarryOver;
+    int? prevReadablePage;
 
     for (int p = 1; p <= totalPages; p++) {
       final role =
@@ -645,6 +954,11 @@ class DocumentIngestionPipeline {
       if (role.isMatter) {
         continue;
       }
+
+      if (prevReadablePage != null && prevReadablePage != p - 1) {
+        currentCarryOver = null;
+      }
+      prevReadablePage = p;
 
       var lines = cleanLinesMap[p] ?? const [];
       if (lines.isEmpty) continue;
@@ -756,7 +1070,7 @@ class DocumentIngestionPipeline {
   // --- STAGE 1: Extract Lines with Visual Row Grouping (F03) ---
 
   static List<LineFragment> _extractHorizontalGroupedLines(
-      PdfTextExtractor extractor, int pageIndex) {
+      PdfTextExtractor extractor, int pageIndex, {double pageHeight = 792.0}) {
     try {
       final List<TextLine> textLines =
           extractor.extractTextLines(startPageIndex: pageIndex, endPageIndex: pageIndex);
@@ -766,13 +1080,14 @@ class DocumentIngestionPipeline {
         if (raw.trim().isEmpty) return const [];
         return raw.split('\n').where((s) => s.trim().isNotEmpty).map((s) {
           return LineFragment(
-            text: sanitizeProseSpacing(s).trim(),
+            text: s.trim(),
             top: 0,
             bottom: 12,
             left: 0,
             right: 400,
             height: 12,
             width: 400,
+            pageHeight: pageHeight,
           );
         }).toList();
       }
@@ -787,6 +1102,25 @@ class DocumentIngestionPipeline {
         if (lineText.isEmpty) lineText = line.text.trim();
         if (lineText.isEmpty) continue;
 
+        double calcFontSize = line.fontSize;
+        if (calcFontSize <= 0 && words.isNotEmpty) {
+          int totalWeight = 0;
+          double weightedFont = 0.0;
+          for (final w in words) {
+            final weight = w.text.length;
+            if (w.fontSize > 0 && weight > 0) {
+              weightedFont += w.fontSize * weight;
+              totalWeight += weight;
+            }
+          }
+          if (totalWeight > 0) {
+            calcFontSize = weightedFont / totalWeight;
+          }
+        }
+        if (calcFontSize <= 0) calcFontSize = 12.0;
+
+        final bool isBold = line.fontStyle.contains(PdfFontStyle.bold);
+
         rawFragments.add(LineFragment(
           text: lineText,
           top: b.top,
@@ -795,7 +1129,9 @@ class DocumentIngestionPipeline {
           right: b.left + b.width,
           height: b.height > 0 ? b.height : 12.0,
           width: b.width,
-          fontSize: b.height > 0 ? b.height : 12.0,
+          fontSize: calcFontSize,
+          pageHeight: pageHeight,
+          isBold: isBold,
         ));
       }
 
@@ -824,17 +1160,28 @@ class DocumentIngestionPipeline {
           final maxBottom = currentRow.map((f) => f.bottom).reduce(max);
           final minLeft = currentRow.map((f) => f.left).reduce(min);
           final maxRight = currentRow.map((f) => f.right).reduce(max);
-          final maxFont = currentRow.map((f) => f.fontSize).reduce(max);
+
+          int totalWeight = 0;
+          double weightedFont = 0.0;
+          for (final f in currentRow) {
+            final weight = f.text.length;
+            weightedFont += f.fontSize * weight;
+            totalWeight += weight;
+          }
+          final double rowFont = totalWeight > 0 ? (weightedFont / totalWeight) : currentRow.first.fontSize;
+          final bool rowBold = currentRow.any((f) => f.isBold);
 
           groupedLines.add(LineFragment(
-            text: sanitizeProseSpacing(combinedText).trim(),
+            text: combinedText.trim(),
             top: minTop,
             bottom: maxBottom,
             left: minLeft,
             right: maxRight,
             height: maxBottom - minTop,
             width: maxRight - minLeft,
-            fontSize: maxFont,
+            fontSize: rowFont,
+            pageHeight: pageHeight,
+            isBold: rowBold,
           ));
 
           currentRow = [curr];
@@ -848,17 +1195,28 @@ class DocumentIngestionPipeline {
         final maxBottom = currentRow.map((f) => f.bottom).reduce(max);
         final minLeft = currentRow.map((f) => f.left).reduce(min);
         final maxRight = currentRow.map((f) => f.right).reduce(max);
-        final maxFont = currentRow.map((f) => f.fontSize).reduce(max);
+
+        int totalWeight = 0;
+        double weightedFont = 0.0;
+        for (final f in currentRow) {
+          final weight = f.text.length;
+          weightedFont += f.fontSize * weight;
+          totalWeight += weight;
+        }
+        final double rowFont = totalWeight > 0 ? (weightedFont / totalWeight) : currentRow.first.fontSize;
+        final bool rowBold = currentRow.any((f) => f.isBold);
 
         groupedLines.add(LineFragment(
-          text: sanitizeProseSpacing(combinedText).trim(),
+          text: combinedText.trim(),
           top: minTop,
           bottom: maxBottom,
           left: minLeft,
           right: maxRight,
           height: maxBottom - minTop,
           width: maxRight - minLeft,
-          fontSize: maxFont,
+          fontSize: rowFont,
+          pageHeight: pageHeight,
+          isBold: rowBold,
         ));
       }
 
@@ -898,27 +1256,35 @@ class DocumentIngestionPipeline {
 
     for (final lines in pageLinesMap.values) {
       if (lines.isEmpty) continue;
-      final maxBottom = lines.map((l) => l.bottom).reduce(max);
-      final topThreshold = maxBottom * 0.10;
-      final bottomThreshold = maxBottom * 0.90;
-
-      final headerFooterLines = lines.where((l) =>
-          (l.top <= topThreshold || l.bottom >= bottomThreshold) &&
-          l.text.trim().length <= 80);
       final seenOnThisPage = <String>{};
 
-      for (final l in headerFooterLines) {
-        final key = _furnitureKey(l.text);
-        if (key.length >= 3 && seenOnThisPage.add(key)) {
-          occurrenceCount[key] = (occurrenceCount[key] ?? 0) + 1;
+      for (final l in lines) {
+        final ph = l.pageHeight > 0 ? l.pageHeight : 792.0;
+        final inMargin = (l.top <= 0.08 * ph) || (l.bottom >= 0.92 * ph);
+        if (!inMargin) continue;
+
+        final t = l.text.trim();
+        if (t.length > 80 || t.endsWith('.') || t.endsWith('!') || t.endsWith('?')) {
+          continue;
+        }
+
+        final baseKey = _furnitureKey(t);
+        if (baseKey.length < 3) continue;
+
+        // Bucket vertical Y to ±4pt
+        final yBucket = (l.top / 4).round();
+        final fullKey = '$baseKey@$yBucket';
+
+        if (seenOnThisPage.add(fullKey)) {
+          occurrenceCount[fullKey] = (occurrenceCount[fullKey] ?? 0) + 1;
         }
       }
     }
 
     final repeated = <String>{};
     for (final entry in occurrenceCount.entries) {
-      // Short line appearing on >= 3 pages and >= 15% of pages (FP-6)
-      if (entry.value >= 3 && (entry.value / totalPages) >= 0.15) {
+      final minPages = totalPages >= 4 ? 4 : 3;
+      if (entry.value >= minPages && (entry.value / totalPages) >= 0.15) {
         repeated.add(entry.key);
       }
     }
@@ -933,11 +1299,21 @@ class DocumentIngestionPipeline {
         .trim();
   }
 
-  static bool _isLonePageNumber(String text) {
+  static bool _isLonePageNumber(String text, {int pageIndex = 1}) {
     final t = text.trim();
-    return RegExp(r'^\s*(?:page\s+)?(\d{1,4}|[ivxlcdm]{1,7})\s*$',
-            caseSensitive: false)
-        .hasMatch(t);
+    if (RegExp(r'^(?:page\s+)?\d{1,4}$', caseSensitive: false).hasMatch(t)) {
+      return true;
+    }
+    if (pageIndex <= 35) {
+      const frontRomans = {
+        'i', 'ii', 'iii', 'iv', 'v', 'vi', 'vii', 'viii', 'ix', 'x',
+        'xi', 'xii', 'xiii', 'xiv', 'xv', 'xvi', 'xvii', 'xviii', 'xix', 'xx'
+      };
+      if (frontRomans.contains(t.toLowerCase())) {
+        return true;
+      }
+    }
+    return false;
   }
 
   // --- STAGE 3: Page Quality & OCR Corruption Gate (F02) ---
@@ -1084,9 +1460,11 @@ class DocumentIngestionPipeline {
       return ReflowResult(paragraphs: const [], carryOver: carryOver);
     }
 
-    // Determine average line height & column width on page
-    final avgHeight = lines.map((l) => l.height).reduce((a, b) => a + b) / lines.length;
-    final maxLineWidth = lines.map((l) => l.width).reduce(max);
+    final effectiveProfile = (layoutProfile is PageLayoutProfile)
+        ? layoutProfile
+        : PageLayoutProfile.compute(lines: lines, globalProfile: layoutProfile);
+
+    // Determine average font size on page
     final avgFontSize = lines.map((l) => l.fontSize).reduce((a, b) => a + b) / lines.length;
 
     final currentPara = StringBuffer();
@@ -1119,23 +1497,35 @@ class DocumentIngestionPipeline {
       var rawLine = line.text.trim();
       if (rawLine.isEmpty) continue;
 
-      // Check for Heading / Chapter indicator (F06)
-      final isHeadingCandidate = (bookmarkTitle != null && rawLine.contains(bookmarkTitle)) ||
+      // Check for Heading / Chapter indicator (F06, S-4, S-5)
+      final normLine = _norm(rawLine);
+      final normBookmark = bookmarkTitle != null ? _norm(bookmarkTitle) : null;
+      final isHeadingCandidate = (normBookmark != null && normBookmark.isNotEmpty &&
+              (normLine == normBookmark || normLine.startsWith(normBookmark))) ||
           line.fontSize >= 1.30 * avgFontSize ||
           RegExp(r'^(?:Chapter|Section|Part|Book)\s+(?:\d+|[IVXLCDM]+|[A-Z][a-z]+)',
                   caseSensitive: false)
               .hasMatch(rawLine);
 
-      if (isHeadingCandidate && currentPara.isNotEmpty) {
-        // Flush preceding paragraph
+      if (isHeadingCandidate) {
+        if (currentPara.isNotEmpty) {
+          // Flush preceding paragraph
+          paragraphs.add(ParagraphInfo(
+            text: _cleanParagraph(currentPara.toString()),
+            isHeading: isCurrentHeading,
+            sectionTitle: currentSectionTitle,
+          ));
+          currentPara.clear();
+        }
+        // Emit heading as standalone paragraph (S-4, S-5)
         paragraphs.add(ParagraphInfo(
-          text: _cleanParagraph(currentPara.toString()),
-          isHeading: isCurrentHeading,
-          sectionTitle: currentSectionTitle,
+          text: _cleanParagraph(rawLine),
+          isHeading: true,
+          sectionTitle: rawLine,
         ));
-        currentPara.clear();
-        isCurrentHeading = true;
         currentSectionTitle = rawLine;
+        isCurrentHeading = false;
+        continue;
       }
 
       // Check line-end hyphenation to join seamlessly with next line (FP-3)
@@ -1183,24 +1573,14 @@ class DocumentIngestionPipeline {
       bool isParagraphEnd = false;
       if (i + 1 < lines.length) {
         final nextLine = lines[i + 1];
-        if (layoutProfile != null) {
-          final continues = continuesParagraph(
-            a: line,
-            b: nextLine,
-            profile: layoutProfile,
-            isHeadingA: isCurrentHeading,
-          );
-          if (!continues) {
-            isParagraphEnd = true;
-          }
-        } else {
-          final verticalGap = nextLine.top - line.bottom;
-          final endsWithPunct = RegExp(r'[.!?…”"’]\s*$').hasMatch(rawLine);
-          final isShortLine = line.width < (0.75 * maxLineWidth);
-
-          if (verticalGap > (1.35 * avgHeight) || (endsWithPunct && isShortLine)) {
-            isParagraphEnd = true;
-          }
+        final continues = continuesParagraph(
+          a: line,
+          b: nextLine,
+          profile: effectiveProfile,
+          isHeadingA: isCurrentHeading,
+        );
+        if (!continues) {
+          isParagraphEnd = true;
         }
       }
 
@@ -1281,18 +1661,14 @@ class DocumentIngestionPipeline {
 
   static bool _isKnownCompoundPrefix(String prefix) {
     const prefixes = {
-      'self',
-      'non',
-      'anti',
-      'well',
-      'cross',
-      'quasi',
-      'pseudo',
-      'high',
-      'low',
-      'half',
-      'all',
-      'ex',
+      // Numerical compounds
+      'twenty', 'thirty', 'forty', 'fifty', 'sixty', 'seventy', 'eighty', 'ninety',
+      // Classical prefixes
+      'self', 'non', 'anti', 'well', 'cross', 'quasi', 'pseudo', 'high', 'low', 'half', 'all', 'ex',
+      // Common hyphenated compounds & relational terms
+      'long', 'short', 'full', 'part', 'mother', 'father', 'brother', 'sister', 'daughter', 'son',
+      'mid', 'co', 'pre', 'post', 'ultra', 'macro', 'micro', 'multi', 'inter', 'intra', 'extra',
+      'ill',
     };
     return prefixes.contains(prefix);
   }
@@ -1354,18 +1730,15 @@ class DocumentIngestionPipeline {
       return SectionRole.cover;
     }
 
-    // 2. Check HTML attributes epub:type / role="doc-*"
+    // 2. Check HTML attributes epub:type / role="doc-*" ONLY on root <body ...> or top-level <section ...> (S-8)
     if (htmlContent != null && htmlContent.isNotEmpty) {
-      final epubTypeMatch = RegExp(r'epub:type\s*=\s*["'']([^"'']+)["'']', caseSensitive: false).firstMatch(htmlContent);
-      if (epubTypeMatch != null) {
-        final epubType = epubTypeMatch.group(1)!.toLowerCase();
-        final role = _roleFromTypeString(epubType);
-        if (role != SectionRole.unknown) return role;
-      }
-      final docRoleMatch = RegExp(r'role\s*=\s*["'']doc-([^"'']+)["'']', caseSensitive: false).firstMatch(htmlContent);
-      if (docRoleMatch != null) {
-        final docRole = docRoleMatch.group(1)!.toLowerCase();
-        final role = _roleFromTypeString(docRole);
+      final rootTagMatch = RegExp(
+        r'<(?:body|section)\b[^>]*?(?:epub:type|role)\s*=\s*["''](?:doc-)?([^"'']+)["'']',
+        caseSensitive: false,
+      ).firstMatch(htmlContent);
+      if (rootTagMatch != null) {
+        final rawType = rootTagMatch.group(1)!.toLowerCase();
+        final role = _roleFromTypeString(rawType);
         if (role != SectionRole.unknown) return role;
       }
     }
@@ -1422,7 +1795,9 @@ class DocumentIngestionPipeline {
     if (RegExp(r'(?:^|[-_.])(?:biblio|references)(?:[-_.]|$)', caseSensitive: false).hasMatch(fileName)) {
       return SectionRole.bibliography;
     }
-    if (RegExp(r'(?:^|[-_.])(?:index)(?:[-_.]|$)', caseSensitive: false).hasMatch(fileName)) {
+    // Only classify as bookIndex if explicit index file AND title confirms index (S-8)
+    if ((fileName == 'index.xhtml' || fileName == 'index.html') &&
+        (sectionTitle != null && RegExp(r'\bindex\b', caseSensitive: false).hasMatch(sectionTitle))) {
       return SectionRole.bookIndex;
     }
     if (RegExp(r'(?:^|[-_.])(?:glossary)(?:[-_.]|$)', caseSensitive: false).hasMatch(fileName)) {
@@ -1488,6 +1863,400 @@ class DocumentIngestionPipeline {
     return SectionRole.unknown;
   }
 
+  static Future<IngestionResult> _ingestEpubDirect({
+    required String docId,
+    required String fileName,
+    required List<int> bytes,
+    void Function(double progress, String stageLabel)? onProgress,
+    Future<void> Function(
+      List<Map<String, Object?>> batchChunks,
+      int processedPages,
+      int totalPages,
+      bool isFinalBatch,
+    )? onBatch,
+  }) async => _ingestEpub(
+    docId: docId,
+    fileName: fileName,
+    bytes: bytes,
+    onProgress: onProgress,
+    onBatch: onBatch,
+  );
+
+  static Future<IngestionResult> _runEpubPipelineWithIsolate({
+    required String docId,
+    required String fileName,
+    String? filePath,
+    List<int>? fileBytes,
+    void Function(double progress, String stageLabel)? onProgress,
+    Future<void> Function(
+      List<Map<String, Object?>> batchChunks,
+      int processedPages,
+      int totalPages,
+      bool isFinalBatch,
+    )? onBatch,
+  }) async {
+    final receivePort = ReceivePort();
+    final errorPort = ReceivePort();
+    final exitPort = ReceivePort();
+    final allChunks = <Map<String, Object?>>[];
+    final fullCanonical = StringBuffer();
+    int totalSections = 0;
+    Isolate? isolate;
+    Timer? watchdogTimer;
+
+    void cleanup() {
+      watchdogTimer?.cancel();
+      watchdogTimer = null;
+      receivePort.close();
+      errorPort.close();
+      exitPort.close();
+      try {
+        isolate?.kill(priority: Isolate.immediate);
+      } catch (e) {
+        debugPrint('[Athena Ingestion] EPUB Isolate cleanup notice: $e');
+      }
+    }
+
+    void resetWatchdog() {
+      watchdogTimer?.cancel();
+      watchdogTimer = Timer(const Duration(seconds: 20), () async {
+        debugPrint('[Athena Ingestion] EPUB Watchdog triggered: 20s worker timeout');
+        cleanup();
+        try {
+          await LocalDatabase.instance.updateDocumentProgress(
+            docId,
+            status: 'failed',
+            stage: 'failed',
+            stageLabel: 'Extraction interrupted or timed out.',
+            errorMessage: 'Extraction interrupted or timed out.',
+            errorCode: 'EXTRACTION_TIMEOUT',
+          );
+        } catch (e) {
+          debugPrint('[Athena Ingestion] DB watchdog update notice: $e');
+        }
+      });
+    }
+
+    errorPort.listen((dynamic error) {
+      receivePort.sendPort.send(_WorkerErrorEvent(
+        error: 'Extraction interrupted or out of memory: $error',
+      ));
+    });
+
+    exitPort.listen((_) {
+      receivePort.sendPort.send(const _WorkerErrorEvent(
+        error: 'Worker isolate exited unexpectedly',
+      ));
+    });
+
+    try {
+      isolate = await Isolate.spawn<_EpubWorkerParams>(
+        _epubWorkerIsolateEntryPoint,
+        _EpubWorkerParams(
+          docId: docId,
+          fileName: fileName,
+          filePath: filePath,
+          bytes: fileBytes,
+          sendPort: receivePort.sendPort,
+        ),
+        onError: errorPort.sendPort,
+        onExit: exitPort.sendPort,
+      );
+
+      resetWatchdog();
+
+      await for (final message in receivePort) {
+        resetWatchdog();
+        if (message is _WorkerProgressEvent) {
+          onProgress?.call(message.progress, message.stageLabel);
+        } else if (message is _WorkerBatchEvent) {
+          totalSections = message.totalPages;
+          allChunks.addAll(message.batchChunks);
+          if (message.batchCanonicalText.isNotEmpty) {
+            if (fullCanonical.isNotEmpty) fullCanonical.write('\n\n');
+            fullCanonical.write(message.batchCanonicalText);
+          }
+          if (onBatch != null && message.batchChunks.isNotEmpty) {
+            await onBatch(
+              message.batchChunks,
+              message.processedPages,
+              message.totalPages,
+              message.isFinalBatch,
+            );
+          }
+        } else if (message is _WorkerDoneEvent) {
+          cleanup();
+          final canonicalStr = fullCanonical.toString().trim();
+          final canonicalSha256 =
+              sha256.convert(utf8.encode(canonicalStr)).toString();
+
+          final reconstructedText = allChunks
+              .map((c) => (c['raw_text'] ?? '').toString())
+              .join('');
+          final reconstructedSha256 =
+              sha256.convert(utf8.encode(reconstructedText)).toString();
+          final bool integrityVerified =
+              (canonicalSha256 == message.canonicalSha256 ||
+                  reconstructedSha256 == message.canonicalSha256 ||
+                  canonicalSha256 == reconstructedSha256);
+
+          return IngestionResult(
+            canonicalText:
+                canonicalStr.isNotEmpty ? canonicalStr : message.canonicalText,
+            canonicalSha256: message.canonicalSha256.isNotEmpty
+                ? message.canonicalSha256
+                : canonicalSha256,
+            pageCount: message.pageCount > 0 ? message.pageCount : totalSections,
+            chunks: allChunks,
+            integrityVerified: integrityVerified,
+          );
+        } else if (message is _WorkerErrorEvent) {
+          cleanup();
+          try {
+            await LocalDatabase.instance.updateDocumentProgress(
+              docId,
+              status: 'failed',
+              stage: 'failed',
+              stageLabel: message.error,
+              errorMessage: message.error,
+              errorCode: 'EXTRACTION_FAILED',
+            );
+          } catch (e) {
+            debugPrint('[Athena Ingestion] DB worker error update notice: $e');
+          }
+          throw AppError(
+            code: 'EXTRACTION_FAILED',
+            message: message.error,
+          );
+        }
+      }
+
+      throw const AppError(
+        code: 'EXTRACTION_INTERRUPTED',
+        message: 'Worker isolate terminated without completing.',
+      );
+    } finally {
+      cleanup();
+    }
+  }
+
+  static void _epubWorkerIsolateEntryPoint(_EpubWorkerParams params) async {
+    try {
+      List<int>? bytes = params.bytes;
+      if ((bytes == null || bytes.isEmpty) &&
+          params.filePath != null &&
+          params.filePath!.isNotEmpty &&
+          !kIsWeb) {
+        final xfile = XFile(params.filePath!);
+        bytes = await xfile.readAsBytes();
+      }
+
+      if (bytes == null || bytes.isEmpty) {
+        params.sendPort.send(const _WorkerErrorEvent(
+          error: 'EPUB file is unreadable or empty.',
+        ));
+        return;
+      }
+
+      params.sendPort.send(const _WorkerProgressEvent(
+        progress: 0.1,
+        stageLabel: 'Parsing EPUB spine and navigation manifests...',
+      ));
+
+      final archive = ZipDecoder().decodeBytes(bytes);
+      final binaryExtensions = {
+        '.png', '.jpg', '.jpeg', '.gif', '.webp', '.svg',
+        '.ttf', '.otf', '.woff', '.woff2',
+        '.mp3', '.m4a', '.mp4', '.wav', '.ogg'
+      };
+      final files = <String, ArchiveFile>{
+        for (final file in archive.files)
+          if (file.isFile &&
+              !binaryExtensions.any((ext) => file.name.toLowerCase().endsWith(ext)))
+            _normalizeEpubPath(file.name): file,
+      };
+
+      final containerBytes = files['META-INF/container.xml']?.content;
+      if (containerBytes is! List<int>) {
+        params.sendPort.send(const _WorkerErrorEvent(
+          error: 'Malformed EPUB: missing container.xml',
+        ));
+        return;
+      }
+      final container = XmlDocument.parse(utf8.decode(containerBytes));
+      final rootfile = container
+          .findAllElements('rootfile')
+          .firstOrNull
+          ?.getAttribute('full-path');
+      if (rootfile == null) {
+        params.sendPort.send(const _WorkerErrorEvent(
+          error: 'Malformed EPUB: missing rootfile',
+        ));
+        return;
+      }
+
+      final opfPath = _normalizeEpubPath(rootfile);
+      final opfBytes = files[opfPath]?.content;
+      if (opfBytes is! List<int>) {
+        params.sendPort.send(const _WorkerErrorEvent(
+          error: 'Malformed EPUB: missing OPF',
+        ));
+        return;
+      }
+      final package = XmlDocument.parse(utf8.decode(opfBytes));
+
+      final manifest = <String, ({String href, String properties})>{};
+      for (final item in package.findAllElements('item')) {
+        final id = item.getAttribute('id');
+        final href = item.getAttribute('href');
+        if (id != null && href != null) {
+          manifest[id] = (
+            href: href,
+            properties: item.getAttribute('properties') ?? '',
+          );
+        }
+      }
+
+      final spine = package.findAllElements('spine').firstOrNull;
+      if (spine == null) {
+        params.sendPort.send(const _WorkerErrorEvent(
+          error: 'Malformed EPUB: missing spine',
+        ));
+        return;
+      }
+
+      final itemRefs = spine.findElements('itemref').toList();
+      final totalSections = itemRefs.length;
+
+      final buffer = StringBuffer();
+      final spans = <Map<String, dynamic>>[];
+      int readableSectionCount = 0;
+
+      for (int idx = 0; idx < totalSections; idx++) {
+        final itemRef = itemRefs[idx];
+        if ((itemRef.getAttribute('linear') ?? '').toLowerCase() == 'no') continue;
+        final idref = itemRef.getAttribute('idref');
+        final item = idref == null ? null : manifest[idref];
+        if (item == null) continue;
+
+        final href = item.href;
+        final resolvedPath = _resolveEpubHref(opfPath, href);
+        final contentBytes = files[resolvedPath]?.content;
+        if (contentBytes is! List<int>) continue;
+
+        final htmlContent = utf8.decode(contentBytes, allowMalformed: true);
+        final sectionTitle = _extractEpubHeading(htmlContent);
+        final role = _resolveEpubSectionRole(
+          href: href,
+          properties: item.properties,
+          htmlContent: htmlContent,
+          sectionTitle: sectionTitle,
+        );
+
+        if (role.isMatter) {
+          continue;
+        }
+
+        final text = _decodeEpubHtmlToProse(htmlContent);
+        if (text.isEmpty) continue;
+
+        readableSectionCount++;
+        final progress = 0.1 + 0.6 * ((idx + 1) / totalSections);
+        params.sendPort.send(_WorkerProgressEvent(
+          progress: progress,
+          stageLabel: 'Extracting section $readableSectionCount of $totalSections...',
+        ));
+
+        if (buffer.isNotEmpty) {
+          buffer.write('\n\n');
+        }
+
+        final title = (sectionTitle != null && sectionTitle.isNotEmpty)
+            ? sectionTitle
+            : (role != SectionRole.chapter
+                ? role.displayLabel
+                : 'Chapter $readableSectionCount');
+
+        if (sectionTitle != null &&
+            sectionTitle.isNotEmpty &&
+            text.startsWith(sectionTitle)) {
+          final headingStart = buffer.length;
+          buffer.write(sectionTitle);
+          final headingEnd = buffer.length;
+
+          spans.add({
+            'start': headingStart,
+            'end': headingEnd,
+            'page_start': readableSectionCount,
+            'page_end': readableSectionCount,
+            'type': 'heading',
+            'section_title': title,
+            'section_role': role.name,
+          });
+
+          final remainingText = text.substring(sectionTitle.length).trim();
+          if (remainingText.isNotEmpty) {
+            buffer.write('\n\n');
+            final bodyStart = buffer.length;
+            buffer.write(remainingText);
+            final bodyEnd = buffer.length;
+
+            spans.add({
+              'start': bodyStart,
+              'end': bodyEnd,
+              'page_start': readableSectionCount,
+              'page_end': readableSectionCount,
+              'type': 'paragraph',
+              'section_title': title,
+              'section_role': role.name,
+            });
+          }
+        } else {
+          final sectionStart = buffer.length;
+          buffer.write(text);
+          final sectionEnd = buffer.length;
+
+          spans.add({
+            'start': sectionStart,
+            'end': sectionEnd,
+            'page_start': readableSectionCount,
+            'page_end': readableSectionCount,
+            'type': 'paragraph',
+            'section_title': title,
+            'section_role': role.name,
+          });
+        }
+      }
+
+      final canonicalStr = buffer.toString();
+      final canonicalSha256 = sha256.convert(utf8.encode(canonicalStr)).toString();
+
+      final allChunks = LosslessChunker().build(
+        documentId: params.docId,
+        canonicalText: canonicalStr,
+        spans: spans,
+      );
+
+      params.sendPort.send(_WorkerBatchEvent(
+        batchChunks: allChunks,
+        batchCanonicalText: canonicalStr,
+        processedPages: readableSectionCount,
+        totalPages: readableSectionCount,
+        isFinalBatch: true,
+      ));
+
+      params.sendPort.send(_WorkerDoneEvent(
+        canonicalText: canonicalStr,
+        canonicalSha256: canonicalSha256,
+        pageCount: totalSections,
+      ));
+    } catch (e, stack) {
+      params.sendPort.send(_WorkerErrorEvent(
+        error: '$e\n$stack',
+      ));
+    }
+  }
+
   static Future<IngestionResult> _ingestEpub({
     required String docId,
     required String fileName,
@@ -1502,9 +2271,16 @@ class DocumentIngestionPipeline {
   }) async {
     onProgress?.call(0.1, 'Parsing EPUB spine and navigation manifests...');
     final archive = ZipDecoder().decodeBytes(bytes);
+    final binaryExtensions = {
+      '.png', '.jpg', '.jpeg', '.gif', '.webp', '.svg',
+      '.ttf', '.otf', '.woff', '.woff2',
+      '.mp3', '.m4a', '.mp4', '.wav', '.ogg'
+    };
     final files = <String, ArchiveFile>{
       for (final file in archive.files)
-        if (file.isFile) _normalizeEpubPath(file.name): file,
+        if (file.isFile &&
+            !binaryExtensions.any((ext) => file.name.toLowerCase().endsWith(ext)))
+          _normalizeEpubPath(file.name): file,
     };
 
     final containerBytes = files['META-INF/container.xml']?.content;
@@ -1581,24 +2357,62 @@ class DocumentIngestionPipeline {
       if (buffer.isNotEmpty) {
         buffer.write('\n\n');
       }
-      final sectionStart = buffer.length;
-      buffer.write(text);
-      final sectionEnd = buffer.length;
 
-      spans.add({
-        'start': sectionStart,
-        'end': sectionEnd,
-        'page_start': readableSectionCount,
-        'page_end': readableSectionCount,
-        'type': 'paragraph',
-        if (sectionTitle != null && sectionTitle.isNotEmpty)
-          'section_title': sectionTitle
-        else if (role != SectionRole.chapter)
-          'section_title': role.displayLabel
-        else
-          'section_title': 'Chapter $readableSectionCount',
-        'section_role': role.name,
-      });
+      final title = (sectionTitle != null && sectionTitle.isNotEmpty)
+          ? sectionTitle
+          : (role != SectionRole.chapter
+              ? role.displayLabel
+              : 'Chapter $readableSectionCount');
+
+      if (sectionTitle != null &&
+          sectionTitle.isNotEmpty &&
+          text.startsWith(sectionTitle)) {
+        final headingStart = buffer.length;
+        buffer.write(sectionTitle);
+        final headingEnd = buffer.length;
+
+        spans.add({
+          'start': headingStart,
+          'end': headingEnd,
+          'page_start': readableSectionCount,
+          'page_end': readableSectionCount,
+          'type': 'heading',
+          'section_title': title,
+          'section_role': role.name,
+        });
+
+        final remainingText = text.substring(sectionTitle.length).trim();
+        if (remainingText.isNotEmpty) {
+          buffer.write('\n\n');
+          final bodyStart = buffer.length;
+          buffer.write(remainingText);
+          final bodyEnd = buffer.length;
+
+          spans.add({
+            'start': bodyStart,
+            'end': bodyEnd,
+            'page_start': readableSectionCount,
+            'page_end': readableSectionCount,
+            'type': 'paragraph',
+            'section_title': title,
+            'section_role': role.name,
+          });
+        }
+      } else {
+        final sectionStart = buffer.length;
+        buffer.write(text);
+        final sectionEnd = buffer.length;
+
+        spans.add({
+          'start': sectionStart,
+          'end': sectionEnd,
+          'page_start': readableSectionCount,
+          'page_end': readableSectionCount,
+          'type': 'paragraph',
+          'section_title': title,
+          'section_role': role.name,
+        });
+      }
     }
 
     final canonicalStr = buffer.toString();
@@ -1647,6 +2461,19 @@ class DocumentIngestionPipeline {
 
   static String decodeHtmlForTest(String html) => _decodeEpubHtmlToProse(html);
 
+  static SectionRole resolveEpubSectionRoleForTest({
+    required String href,
+    required String properties,
+    String? htmlContent,
+    String? sectionTitle,
+  }) =>
+      _resolveEpubSectionRole(
+        href: href,
+        properties: properties,
+        htmlContent: htmlContent,
+        sectionTitle: sectionTitle,
+      );
+
   static String _decodeEpubHtmlToProse(String html) {
     if (html.isEmpty) return '';
 
@@ -1657,6 +2484,21 @@ class DocumentIngestionPipeline {
         .replaceAll(RegExp(r'<head[^>]*>[\s\S]*?</head>', caseSensitive: false), ' ');
 
     final buf = StringBuffer();
+    int lastChar1 = -1;
+    int lastChar2 = -1;
+
+    void writeStr(String s) {
+      if (s.isEmpty) return;
+      buf.write(s);
+      if (s.length == 1) {
+        lastChar1 = lastChar2;
+        lastChar2 = s.codeUnitAt(0);
+      } else {
+        lastChar1 = s.codeUnitAt(s.length - 2);
+        lastChar2 = s.codeUnitAt(s.length - 1);
+      }
+    }
+
     final tagOrTextRegex = RegExp(r'(<[^>]+>)|([^<]+)');
     const blockTags = {
       'p', 'div', 'h1', 'h2', 'h3', 'h4', 'h5', 'h6', 'li',
@@ -1673,19 +2515,21 @@ class DocumentIngestionPipeline {
         if (nameMatch != null) {
           final tagName = nameMatch.group(1)!.toLowerCase();
           if (blockTags.contains(tagName)) {
-            final currentStr = buf.toString();
-            if (currentStr.isNotEmpty && !currentStr.endsWith('\n\n')) {
-              if (currentStr.endsWith('\n')) {
-                buf.write('\n');
+            // O(1) trailing newline check - zero string copies
+            if (lastChar2 != -1) {
+              if (lastChar1 == 0x0A && lastChar2 == 0x0A) {
+                // already double newline
+              } else if (lastChar2 == 0x0A) {
+                writeStr('\n');
               } else {
-                buf.write('\n\n');
+                writeStr('\n\n');
               }
             }
           }
           // Inline tags (span, em, i, a, b, strong, sub, sup, code, etc.) emit NOTHING
         }
       } else if (text != null) {
-        buf.write(decodeHtmlEntities(text));
+        writeStr(decodeHtmlEntities(text));
       }
     }
 
@@ -1811,13 +2655,31 @@ class DocumentIngestionPipeline {
 class _PdfWorkerParams {
   final String docId;
   final String fileName;
-  final List<int> bytes;
+  final String? filePath;
+  final List<int>? bytes;
   final SendPort sendPort;
 
   const _PdfWorkerParams({
     required this.docId,
     required this.fileName,
-    required this.bytes,
+    this.filePath,
+    this.bytes,
+    required this.sendPort,
+  });
+}
+
+class _EpubWorkerParams {
+  final String docId;
+  final String fileName;
+  final String? filePath;
+  final List<int>? bytes;
+  final SendPort sendPort;
+
+  const _EpubWorkerParams({
+    required this.docId,
+    required this.fileName,
+    this.filePath,
+    this.bytes,
     required this.sendPort,
   });
 }
@@ -1917,47 +2779,31 @@ class TocDetectionResult {
 }
 
 class TocDetector {
-  static final dotLeaderRe = RegExp(
-    r'^(.+?\S)[.…](?:[.…\s]){2,}(\d{1,4}|[ivxlcdm]{1,6})$',
-    caseSensitive: false,
-  );
-  static final trailingNumRe =
-      RegExp(r'(\d{1,4}|[ivxlcdm]{1,6})\s*$', caseSensitive: false);
   static final contentsHeaderRe =
       RegExp(r'^(?:table\s+of\s+)?contents\b', caseSensitive: false);
 
-  static int? parseRoman(String s) {
-    final clean = s.trim().toLowerCase();
-    if (!RegExp(r'^[ivxlcdm]+$').hasMatch(clean)) return null;
-    const values = {
-      'i': 1,
-      'v': 5,
-      'x': 10,
-      'l': 50,
-      'c': 100,
-      'd': 500,
-      'm': 1000
-    };
-    int total = 0;
-    int prev = 0;
-    for (int i = clean.length - 1; i >= 0; i--) {
-      final curr = values[clean[i]] ?? 0;
-      if (curr < prev) {
-        total -= curr;
-      } else {
-        total += curr;
-        prev = curr;
-      }
-    }
-    return total > 0 ? total : null;
-  }
+  static const _romanMap = {
+    'i': 1, 'ii': 2, 'iii': 3, 'iv': 4, 'v': 5,
+    'vi': 6, 'vii': 7, 'viii': 8, 'ix': 9, 'x': 10,
+    'xi': 11, 'xii': 12, 'xiii': 13, 'xiv': 14, 'xv': 15,
+    'xvi': 16, 'xvii': 17, 'xviii': 18, 'xix': 19, 'xx': 20,
+    'xxi': 21, 'xxii': 22, 'xxiii': 23, 'xxiv': 24, 'xxv': 25,
+    'xxvi': 26, 'xxvii': 27, 'xxviii': 28, 'xxix': 29, 'xxx': 30,
+    'xxxi': 31, 'xxxii': 32, 'xxxiii': 33, 'xxxiv': 34, 'xxxv': 35,
+    'xxxvi': 36, 'xxxvii': 37, 'xxxviii': 38, 'xxxix': 39, 'xl': 40,
+    'xli': 41, 'xlii': 42, 'xliii': 43, 'xliv': 44, 'xlv': 45,
+    'xlvi': 46, 'xlvii': 47, 'xlviii': 48, 'xlix': 49, 'l': 50,
+  };
+
+  static int? parseRoman(String s) => _romanMap[s.trim().toLowerCase()];
 
   static TocDetectionResult analyzePage({
     required List<LineFragment> lines,
     required double bodyRight,
     required String rawPageText,
+    int? pageNum,
+    int? totalPages,
   }) {
-    final entries = <TocEntry>[];
     bool hasContentsHeader = false;
     for (int i = 0; i < lines.length && i < 4; i++) {
       if (contentsHeaderRe.hasMatch(lines[i].text.trim())) {
@@ -1973,56 +2819,90 @@ class TocDetector {
       }
     }
 
+    // Only run TocDetector on pages in the first 15% of the book (or up to page 30)
+    // OR pages with an explicit Contents / Table of Contents heading (S-1)
+    if (pageNum != null && totalPages != null && totalPages > 0) {
+      final isEarlyPage = pageNum <= 30 || pageNum <= (totalPages * 0.15).ceil();
+      if (!isEarlyPage && !hasContentsHeader) {
+        return const TocDetectionResult(isToc: false, entries: []);
+      }
+    }
+
+    final entries = <TocEntry>[];
     final candidatePages = <int>[];
+
+    // Dot leader regex: title followed by >= 2 dots/periods and standalone page number token
+    final dotLeaderRe = RegExp(
+      r'^(.+?\S)[.…](?:[.…\s]){1,}\s*(\d{1,4}|[a-zA-Z]{1,6})$',
+      caseSensitive: false,
+    );
+    // Explicit space gap regex: title followed by >= 2 spaces or tab and standalone page number token
+    final spaceGapRe = RegExp(
+      r'^(.+?\S)(?:\s{2,}|\t+)(\d{1,4}|[a-zA-Z]{1,6})$',
+      caseSensitive: false,
+    );
+
     for (final line in lines) {
       final t = line.text.trim();
+      String? titleCandidate;
+      String? pageCandidate;
+
       final dotMatch = dotLeaderRe.firstMatch(t);
       if (dotMatch != null) {
-        final title = dotMatch.group(1)!.trim();
-        final pgStr = dotMatch.group(2)!.trim();
-        final pgNum = int.tryParse(pgStr) ?? parseRoman(pgStr);
-        if (pgNum != null) {
-          entries.add(TocEntry(title: title, pageNumber: pgNum));
-          candidatePages.add(pgNum);
-          continue;
+        titleCandidate = dotMatch.group(1)!.trim();
+        pageCandidate = dotMatch.group(2)!.trim();
+      } else {
+        final spaceMatch = spaceGapRe.firstMatch(t);
+        if (spaceMatch != null) {
+          titleCandidate = spaceMatch.group(1)!.trim();
+          pageCandidate = spaceMatch.group(2)!.trim();
         }
       }
 
-      if (bodyRight > 0 && line.right >= 0.88 * bodyRight) {
-        final numMatch = trailingNumRe.firstMatch(t);
-        if (numMatch != null) {
-          final pgStr = numMatch.group(1)!.trim();
-          final pgNum = int.tryParse(pgStr) ?? parseRoman(pgStr);
-          final title = t
-              .substring(0, numMatch.start)
-              .trim()
-              .replaceAll(RegExp(r'[\.…\-_]+$'), '')
-              .trim();
-          if (pgNum != null && title.isNotEmpty) {
-            entries.add(TocEntry(title: title, pageNumber: pgNum));
-            candidatePages.add(pgNum);
+      if (titleCandidate != null && pageCandidate != null) {
+        int? pgNum = int.tryParse(pageCandidate);
+        if (pgNum == null && RegExp(r'^[a-zA-Z]+$').hasMatch(pageCandidate)) {
+          pgNum = parseRoman(pageCandidate);
+        }
+
+        if (pgNum != null) {
+          final words = titleCandidate
+              .split(RegExp(r'\s+'))
+              .where((w) => w.isNotEmpty)
+              .toList();
+
+          // Title must be <= 14 words and NOT end with sentence-closing punctuation
+          final endsWithPeriod = RegExp(r'[.!?:;]$').hasMatch(titleCandidate);
+          if (words.length <= 14 && !endsWithPeriod) {
+            final cleanTitle = titleCandidate
+                .replaceAll(RegExp(r'[\.…\-_]+$'), '')
+                .trim();
+            if (cleanTitle.isNotEmpty) {
+              entries.add(TocEntry(title: cleanTitle, pageNumber: pgNum));
+              candidatePages.add(pgNum);
+            }
           }
         }
       }
     }
 
-    bool isNonDecreasing = false;
+    bool isStrictlyIncreasing = false;
     if (candidatePages.length >= 2) {
-      int nonDecreasingSteps = 0;
+      int strictlyIncreasingSteps = 0;
       for (int i = 0; i < candidatePages.length - 1; i++) {
-        if (candidatePages[i + 1] >= candidatePages[i]) {
-          nonDecreasingSteps++;
+        if (candidatePages[i + 1] > candidatePages[i]) {
+          strictlyIncreasingSteps++;
         }
       }
-      final ratio = nonDecreasingSteps / (candidatePages.length - 1);
-      if (ratio >= 0.60) {
-        isNonDecreasing = true;
+      final ratio = strictlyIncreasingSteps / (candidatePages.length - 1);
+      if (ratio >= 0.75) {
+        isStrictlyIncreasing = true;
       }
     }
 
-    final isToc = (entries.length >= 4 &&
-            (candidatePages.length < 2 || isNonDecreasing)) ||
-        (hasContentsHeader && entries.length >= 2);
+    final isToc = hasContentsHeader
+        ? (entries.length >= 2 && (candidatePages.length < 2 || isStrictlyIncreasing))
+        : (entries.length >= 4 && isStrictlyIncreasing);
 
     return TocDetectionResult(isToc: isToc, entries: entries);
   }
@@ -2187,6 +3067,169 @@ class LayoutProfile {
   }
 }
 
+class PageLayoutProfile extends LayoutProfile {
+  final double pageBodyLeft;
+  final double pageBodyRight;
+  final bool isRaggedRight;
+
+  const PageLayoutProfile({
+    required super.bodyFontSize,
+    required super.linePitch,
+    required this.pageBodyLeft,
+    required this.pageBodyRight,
+    required super.indent,
+    required super.usesIndent,
+    this.isRaggedRight = false,
+    super.hasTwoColumns = false,
+    super.columnGutterLeft = 0.0,
+    super.columnGutterRight = 0.0,
+  }) : super(
+          bodyLeft: pageBodyLeft,
+          bodyRight: pageBodyRight,
+        );
+
+  factory PageLayoutProfile.compute({
+    required List<LineFragment> lines,
+    LayoutProfile? globalProfile,
+  }) {
+    if (lines.isEmpty) {
+      final fallbackFontSize = globalProfile?.bodyFontSize ?? 12.0;
+      final fallbackLinePitch = globalProfile?.linePitch ?? 14.0;
+      final fallbackLeft = globalProfile?.bodyLeft ?? 54.0;
+      final fallbackRight = globalProfile?.bodyRight ?? 550.0;
+      return PageLayoutProfile(
+        bodyFontSize: fallbackFontSize,
+        linePitch: fallbackLinePitch,
+        pageBodyLeft: fallbackLeft,
+        pageBodyRight: fallbackRight,
+        indent: globalProfile?.indent ?? 0.0,
+        usesIndent: globalProfile?.usesIndent ?? false,
+        isRaggedRight: false,
+        hasTwoColumns: globalProfile?.hasTwoColumns ?? false,
+        columnGutterLeft: globalProfile?.columnGutterLeft ?? 0.0,
+        columnGutterRight: globalProfile?.columnGutterRight ?? 0.0,
+      );
+    }
+
+    final bodyFontSize = globalProfile?.bodyFontSize ?? () {
+      final fontCounts = <double, int>{};
+      for (final l in lines) {
+        if (l.fontSize <= 0) continue;
+        final bucket = (l.fontSize * 2).round() / 2.0;
+        fontCounts[bucket] = (fontCounts[bucket] ?? 0) + 1;
+      }
+      double bestFont = 12.0;
+      int maxCnt = 0;
+      for (final e in fontCounts.entries) {
+        if (e.value > maxCnt) {
+          maxCnt = e.value;
+          bestFont = e.key;
+        }
+      }
+      return bestFont;
+    }();
+
+    final linePitch = globalProfile?.linePitch ?? () {
+      final pitches = <double>[];
+      for (int i = 0; i < lines.length - 1; i++) {
+        final curr = lines[i];
+        final next = lines[i + 1];
+        if ((curr.fontSize - bodyFontSize).abs() <= 0.5 &&
+            (next.fontSize - bodyFontSize).abs() <= 0.5) {
+          final diff = next.top - curr.top;
+          if (diff > 0.5 * bodyFontSize && diff <= 3.0 * bodyFontSize) {
+            pitches.add(diff);
+          }
+        }
+      }
+      pitches.sort();
+      return pitches.isNotEmpty
+          ? pitches[pitches.length ~/ 2]
+          : bodyFontSize * 1.25;
+    }();
+
+    // 1. pageBodyLeft: 10th percentile / mode of line.left on this page (S-6, P2-01)
+    final bodyLines = lines.where((l) => (l.fontSize - bodyFontSize).abs() <= 1.0).toList();
+    final lefts = (bodyLines.isNotEmpty ? bodyLines : lines).map((l) => l.left).toList()..sort();
+    final double pageBodyLeft = lefts.isNotEmpty
+        ? lefts[(lefts.length * 0.10).floor().clamp(0, lefts.length - 1)]
+        : 54.0;
+
+    // 2. pageBodyRight: 95th percentile of line.right on this page
+    final rights = (bodyLines.isNotEmpty ? bodyLines : lines).map((l) => l.right).toList()..sort();
+    final double pageBodyRight = rights.isNotEmpty
+        ? rights[(rights.length * 0.95).floor().clamp(0, rights.length - 1)]
+        : 550.0;
+
+    // 3. Two-column detection per page (>= 16 lines, both bands >= 35%)
+    bool hasTwoCols = false;
+    double gutterLeft = 0.0;
+    double gutterRight = 0.0;
+    if (lines.length >= 16) {
+      final minLeft = lines.map((l) => l.left).reduce(min);
+      final maxRight = lines.map((l) => l.right).reduce(max);
+      final pageWidthEst = maxRight - minLeft;
+      if (pageWidthEst > 200) {
+        final mid = minLeft + pageWidthEst * 0.5;
+        final col1Lines = lines.where((l) => l.right <= mid + bodyFontSize).length;
+        final col2Lines = lines.where((l) => l.left >= mid - bodyFontSize).length;
+        if (col1Lines / lines.length >= 0.35 && col2Lines / lines.length >= 0.35) {
+          hasTwoCols = true;
+          gutterLeft = mid - bodyFontSize;
+          gutterRight = mid + bodyFontSize;
+        }
+      }
+    }
+
+    // 4. Ragged-right detection: < 50% reaching 0.90 * pageBodyRight (S-6, S-7)
+    int reachingRightCount = 0;
+    for (final l in (bodyLines.isNotEmpty ? bodyLines : lines)) {
+      if (l.right >= 0.90 * pageBodyRight) {
+        reachingRightCount++;
+      }
+    }
+    final totalBodyLines = bodyLines.isNotEmpty ? bodyLines.length : lines.length;
+    final bool isRaggedRight = totalBodyLines >= 4 &&
+        (reachingRightCount / totalBodyLines < 0.50);
+
+    // 5. Indent per page: lines where line.left - pageBodyLeft >= 0.8 * bodyFontSize && <= 4.5 * bodyFontSize
+    int indentedCount = 0;
+    final indDiffs = <double, int>{};
+    for (final l in lines) {
+      final diff = l.left - pageBodyLeft;
+      if (diff >= 0.8 * bodyFontSize && diff <= 4.5 * bodyFontSize) {
+        indentedCount++;
+        final bDiff = diff.roundToDouble();
+        indDiffs[bDiff] = (indDiffs[bDiff] ?? 0) + 1;
+      }
+    }
+    final bool usesIndent = lines.isNotEmpty && (indentedCount / lines.length >= 0.08);
+    double indent = 0.0;
+    if (usesIndent && indDiffs.isNotEmpty) {
+      int maxInd = 0;
+      for (final e in indDiffs.entries) {
+        if (e.value > maxInd) {
+          maxInd = e.value;
+          indent = e.key;
+        }
+      }
+    }
+
+    return PageLayoutProfile(
+      bodyFontSize: bodyFontSize,
+      linePitch: linePitch,
+      pageBodyLeft: pageBodyLeft,
+      pageBodyRight: pageBodyRight,
+      indent: indent,
+      usesIndent: usesIndent,
+      isRaggedRight: isRaggedRight,
+      hasTwoColumns: hasTwoCols,
+      columnGutterLeft: gutterLeft,
+      columnGutterRight: gutterRight,
+    );
+  }
+}
+
 class StructureResolver {
   static List<SectionRole> smoothRoles({
     required int totalPages,
@@ -2212,23 +3255,24 @@ class StructureResolver {
 
       final isToc = tocPages.contains(pageNum);
       final hasFrontMarkers = RegExp(
-              r'(?:copyright|©|all rights reserved|isbn|library of congress|cataloging|printed in|published by)\b')
+              r'(?:copyright|©|all rights reserved|isbn|library of congress|cataloging|printed in|published by)\b',
+              caseSensitive: false)
           .hasMatch(rawText);
-      final hasBackMarkers = RegExp(
+
+      // S-2: Back markers require >= 2 independent signals in final 25% of book
+      final bool isLatePage = totalPages > 4 && pageNum >= (totalPages * 0.75).floor();
+      final hasBackHeading = RegExp(
               r'^(?:notes?|endnotes|index|bibliography|references|works cited|glossary|about the author|also by)\b',
-              multiLine: true)
-          .hasMatch(rawText);
-      final hasReadableFrontHeader = RegExp(
-                  r'\b(preface|foreword|introduction|prologue|acknowledgments)\b')
-              .hasMatch(heading) ||
-          RegExp(r'^(?:preface|foreword|introduction|prologue|acknowledgments)\b',
-                  multiLine: true)
-              .hasMatch(rawText);
-      final hasChapterHeader = RegExp(
-                  r'^(?:chapter|part|book)\s+(?:\d+|[ivxlcdm]+|[a-z]+)\b',
-                  multiLine: true)
-              .hasMatch(rawText) ||
-          RegExp(r'\b(?:chapter|part)\s+\d+').hasMatch(heading);
+              caseSensitive: false)
+          .hasMatch(heading);
+      final hasBackLine = lines.any((l) {
+        final t = l.text.trim();
+        final wCount = t.split(RegExp(r'\s+')).where((w) => w.isNotEmpty).length;
+        return wCount <= 10 &&
+            RegExp(r'^(?:notes?|endnotes|index|bibliography|references|works cited|glossary|about the author|also by)\b',
+                    caseSensitive: false)
+                .hasMatch(t);
+      });
 
       int indexEntryCount = 0;
       for (final l in lines) {
@@ -2238,6 +3282,36 @@ class StructureResolver {
       }
       final bool isIndexDense =
           lines.length >= 8 && (indexEntryCount / lines.length >= 0.40);
+      final bool hasBackMarkers = isLatePage &&
+          (hasBackHeading || (hasBackLine && (isIndexDense || words < 120)));
+
+      // S-2: Readable front markers (preface, foreword, introduction, prologue, acknowledgments)
+      final hasReadableFrontHeader = RegExp(
+                  r'\b(preface|foreword|introduction|prologue|acknowledgments)\b',
+                  caseSensitive: false)
+              .hasMatch(heading) ||
+          lines.any((l) {
+            final t = l.text.trim();
+            final wCount = t.split(RegExp(r'\s+')).where((w) => w.isNotEmpty).length;
+            return wCount <= 10 &&
+                RegExp(r'^(?:preface|foreword|introduction|prologue|acknowledgments)\b',
+                        caseSensitive: false)
+                    .hasMatch(t);
+          });
+
+      // S-2: Chapter headers restricted to true headings (not multiline body sentences)
+      final hasChapterHeader = RegExp(
+                  r'\b(?:chapter|part)\s+(?:\d+|[ivxlcdm]+|one|two|three|four|five|six|seven|eight|nine|ten)\b',
+                  caseSensitive: false)
+              .hasMatch(heading) ||
+          lines.any((l) {
+            final t = l.text.trim();
+            final wCount = t.split(RegExp(r'\s+')).where((w) => w.isNotEmpty).length;
+            return wCount <= 10 &&
+                RegExp(r'^(?:chapter|part|book)\s+(?:\d+|[ivxlcdm]+|one|two|three|four|five|six|seven|eight|nine|ten)\b',
+                        caseSensitive: false)
+                    .hasMatch(t);
+          });
 
       final e = List<double>.filled(numStates, 0.0);
 
@@ -2253,7 +3327,7 @@ class StructureResolver {
         e[2] = 50.0;
         e[3] = 60.0;
         e[4] = 70.0;
-      } else if (hasBackMarkers || isIndexDense) {
+      } else if (hasBackMarkers || (isLatePage && isIndexDense)) {
         e[4] = 0.0;
         e[0] = 70.0;
         e[1] = 70.0;
@@ -2261,9 +3335,9 @@ class StructureResolver {
         e[3] = 50.0;
       } else if (hasReadableFrontHeader) {
         e[2] = 0.0;
-        e[0] = 30.0;
+        e[0] = 40.0;
         e[1] = 40.0;
-        e[3] = 20.0;
+        e[3] = 30.0;
         e[4] = 50.0;
       } else if (hasChapterHeader) {
         e[3] = 0.0;
@@ -2275,8 +3349,8 @@ class StructureResolver {
         if (words >= 80) {
           e[0] = 25.0;
           e[1] = 30.0;
-          e[2] = 5.0;
-          e[3] = 2.0;
+          e[2] = 2.0; // S-2: Sticky readable front
+          e[3] = 2.0; // Body
           e[4] = 8.0;
         } else {
           e[0] = 2.0;
@@ -2304,7 +3378,9 @@ class StructureResolver {
         double minPrevCost = double.infinity;
         int bestPrev = 0;
         for (int prev = 0; prev <= curr; prev++) {
-          final transCost = (prev == curr) ? 0.0 : 1.0;
+          final transCost = (prev == curr)
+              ? 0.0
+              : ((prev == 2 && curr == 3) ? 4.0 : 1.0); // S-2: 2->3 transition cost = 4.0
           final total = v[p - 1][prev] + transCost;
           if (total < minPrevCost) {
             minPrevCost = total;

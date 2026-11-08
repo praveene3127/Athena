@@ -186,5 +186,97 @@ void main() {
             reason: 'Legitimate word $w should never be mutated by spacing repair');
       }
     });
+
+    test('Invariant 10: Mixed-case brands and surname prefixes are preserved without splitting (K-8)', () {
+      const names = [
+        'FitzGerald',
+        'JPMorgan',
+        "McDonald's",
+        'McCarthy',
+        'MacArthur',
+        'DeLillo',
+      ];
+      for (final name in names) {
+        final repaired = sanitizeProseSpacing(name);
+        expect(repaired, equals(name),
+            reason: 'Name or brand $name must be protected from kerning/case splitting');
+      }
+    });
+
+    test('Invariant 11: Balanced oversized splitting eliminates short orphan tails and satisfies isLegalCut (K-2)', () {
+      // Create a 700-character paragraph of authentic prose
+      final longParagraph = List.generate(
+        15,
+        (i) => 'Authentic sentence number $i exploring neural cognitive models in literature.',
+      ).join(' ');
+
+      final spans = [
+        {'start': 0, 'end': longParagraph.length, 'page_start': 1, 'page_end': 1, 'type': 'paragraph'}
+      ];
+
+      final chunks = LosslessChunker().build(
+        documentId: 'oversized_test_doc',
+        canonicalText: longParagraph,
+        spans: spans,
+      );
+
+      expect(chunks.length, greaterThan(1));
+      // Reconstructed text must equal original
+      final reconstructed = chunks.map((c) => c['raw_text']).join();
+      expect(reconstructed, equals(longParagraph));
+
+      for (final chunk in chunks) {
+        final raw = chunk['raw_text'] as String;
+        final words = SegmentationPolicy.countWords(raw);
+        // Every split part should be balanced, not an orphan tail of < 15 words
+        expect(words, greaterThanOrEqualTo(15),
+            reason: 'Balanced splitting must prevent tiny orphan tails');
+        expect(SegmentationPolicy.isLegalCut(longParagraph, chunk['start_offset'] as int), isTrue);
+        expect(SegmentationPolicy.isLegalCut(longParagraph, chunk['end_offset'] as int), isTrue);
+      }
+    });
+
+    test('Invariant 12: Bidirectional merge eliminates sub-24 word fragments within the same section (K-6)', () {
+      // 3 short paragraphs in same chapter
+      final text = 'Short introductory thought.\n\nAnother brief observation on history.\n\nA third small remark for the reader.';
+      final spans = [
+        {'start': 0, 'end': 27, 'page_start': 1, 'page_end': 1, 'type': 'paragraph', 'section_title': 'Chapter 1', 'section_role': 'chapter'},
+        {'start': 29, 'end': 66, 'page_start': 1, 'page_end': 1, 'type': 'paragraph', 'section_title': 'Chapter 1', 'section_role': 'chapter'},
+        {'start': 68, 'end': text.length, 'page_start': 1, 'page_end': 1, 'type': 'paragraph', 'section_title': 'Chapter 1', 'section_role': 'chapter'},
+      ];
+
+      final chunks = LosslessChunker().build(
+        documentId: 'short_merge_doc',
+        canonicalText: text,
+        spans: spans,
+      );
+
+      // Chunks should merge into fewer chunks rather than 3 tiny isolated fragments
+      expect(chunks.length, lessThan(3));
+      final reconstructed = chunks.map((c) => c['raw_text']).join();
+      expect(reconstructed, equals(text));
+    });
+
+    test('Invariant 13: Section title and section role propagate to every chunk within the section (K-7)', () {
+      final text = 'CHAPTER I. DOWN THE RABBIT-HOLE\n\nAlice was beginning to get very tired of sitting by her sister on the bank, and of having nothing to do: once or twice she had peeped into the book her sister was reading, but it had no pictures or conversations in it.\n\nSo she was considering in her own mind whether the pleasure of making a daisy-chain would be worth the trouble of getting up and picking the daisies, when suddenly a White Rabbit with pink eyes ran close by her.';
+      final spans = [
+        {'start': 0, 'end': 31, 'page_start': 1, 'page_end': 1, 'type': 'heading', 'section_title': 'CHAPTER I. DOWN THE RABBIT-HOLE', 'section_role': 'chapter'},
+        {'start': 33, 'end': 239, 'page_start': 1, 'page_end': 1, 'type': 'paragraph'},
+        {'start': 241, 'end': text.length, 'page_start': 1, 'page_end': 1, 'type': 'paragraph'},
+      ];
+
+      final chunks = LosslessChunker().build(
+        documentId: 'alice_doc',
+        canonicalText: text,
+        spans: spans,
+      );
+
+      expect(chunks, isNotEmpty);
+      for (final chunk in chunks) {
+        expect(chunk['section_title'], equals('CHAPTER I. DOWN THE RABBIT-HOLE'),
+            reason: 'Every chunk in Chapter 1 must inherit the section title');
+        expect(chunk['section_role'], equals('chapter'));
+      }
+    });
   });
 }

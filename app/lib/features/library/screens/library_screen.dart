@@ -38,6 +38,7 @@ import 'package:athena/core/api/local_client_factory.dart';
 import 'package:athena/core/widgets/athena_avatar.dart';
 
 import 'package:athena/core/widgets/athena_logo.dart';
+import 'package:athena/services/local_database.dart';
 
 import 'package:athena/features/settings/widgets/byok_settings_sheet.dart';
 import 'package:athena/services/secure_storage_service.dart';
@@ -90,6 +91,14 @@ class _LibraryScreenState extends ConsumerState<LibraryScreen>
     super.initState();
 
     WidgetsBinding.instance.addObserver(this);
+
+    if (!kIsWeb) {
+      LocalDatabase.instance.recoverStaleProcessingDocuments().then((_) {
+        if (mounted) ref.invalidate(documentsProvider);
+      }).catchError((e) {
+        debugPrint('[Athena Library] recoverStaleProcessingDocuments notice: $e');
+      });
+    }
 
     _checkServerConnectionAndAutoDiscover();
 
@@ -1336,28 +1345,28 @@ class _LibraryScreenState extends ConsumerState<LibraryScreen>
 
   @override
   Widget build(BuildContext context) {
-    final docsState = ref.watch(documentsProvider);
-
-    docsState.whenData((docs) {
-      final hasProcessing = docs.any((d) => d.isProcessing);
-
-      if (hasProcessing && _pollTimer == null) {
-        int pollCount = 0;
-        _pollTimer = Timer.periodic(const Duration(milliseconds: 1500), (t) {
-          pollCount++;
-          if (pollCount > 40) {
-            t.cancel();
-            _pollTimer = null;
-            return;
-          }
-          ref.invalidate(documentsProvider);
-        });
-      } else if (!hasProcessing && _pollTimer != null) {
-        _pollTimer?.cancel();
-
-        _pollTimer = null;
-      }
+    ref.listen<AsyncValue<List<Document>>>(documentsProvider, (_, next) {
+      next.whenData((docs) {
+        final hasProcessing = docs.any((d) => d.isProcessing);
+        if (hasProcessing && _pollTimer == null) {
+          int pollCount = 0;
+          _pollTimer = Timer.periodic(const Duration(milliseconds: 1500), (t) {
+            pollCount++;
+            if (pollCount > 40) {
+              t.cancel();
+              _pollTimer = null;
+              return;
+            }
+            ref.invalidate(documentsProvider);
+          });
+        } else if (!hasProcessing && _pollTimer != null) {
+          _pollTimer?.cancel();
+          _pollTimer = null;
+        }
+      });
     });
+
+    final docsState = ref.watch(documentsProvider);
 
     final documentCount = docsState.maybeWhen(
       data: (docs) => docs.length,

@@ -11,11 +11,6 @@ final _spaceNewlineRe = RegExp(r' *\n *');
 final _multiNewlineRe = RegExp(r'\n{3,}');
 final _isLetterRe = RegExp(r'[A-Za-z]');
 
-// Unicode whitespace pattern for consistent word splitting across platforms
-final _unicodeWhitespaceRe = RegExp(
-  r'[\u0009-\u000D \u0085   -     　]+',
-  unicode: true,
-);
 
 const Set<String> _protectedSurnamePrefixes = {
   'mc',
@@ -27,6 +22,7 @@ const Set<String> _protectedSurnamePrefixes = {
   'le',
   'la',
   'st',
+  'fitz',
 };
 
 const Set<String> _protectedMixedCaseWords = {
@@ -51,6 +47,10 @@ const Set<String> _protectedMixedCaseWords = {
   'area51',
   'wifi',
   'powerpoint',
+  'fitzgerald',
+  'jpmorgan',
+  'mcdonald',
+  "mcdonald's",
 };
 
 const Set<String> _protectedCompoundWords = {
@@ -1748,7 +1748,7 @@ class LosslessChunker {
   static const int _maxChars = SegmentationPolicy.preferredMaxChars;
 
   static final RegExp _continuationStart = RegExp(
-    r'^(however|therefore|thus|moreover|furthermore|for example|for instance|as a result|in contrast|because|but|and|so|this|these|they|it)\b',
+    r'^(however|therefore|thus|moreover|furthermore|for example|for instance|as a result|in contrast|because)\b',
     caseSensitive: false,
   );
   static final RegExp _token = RegExp(r'[A-Za-z]{4,}');
@@ -1836,14 +1836,12 @@ class LosslessChunker {
       if (start != previousEnd) {
         throw StateError('Adaptive chunking produced non-contiguous offsets.');
       }
-      assert(
-        SegmentationPolicy.isLegalCut(canonicalText, start),
-        'Illegal start cut at offset $start (mid-word boundary)',
-      );
-      assert(
-        SegmentationPolicy.isLegalCut(canonicalText, end),
-        'Illegal end cut at offset $end (mid-word boundary)',
-      );
+      if (!SegmentationPolicy.isLegalCut(canonicalText, start)) {
+        throw StateError('Illegal start cut at offset $start (mid-word boundary)');
+      }
+      if (!SegmentationPolicy.isLegalCut(canonicalText, end)) {
+        throw StateError('Illegal end cut at offset $end (mid-word boundary)');
+      }
       final rawText = canonicalText.substring(start, end);
       final seq = initialSequence + i;
       result.add({
@@ -1968,9 +1966,7 @@ class LosslessChunker {
   }
 
   int _wordCount(String text) {
-    if (text.trim().isEmpty) return 0;
-    // Use Unicode whitespace for consistent cross-platform word counting
-    return text.trim().split(_unicodeWhitespaceRe).where((w) => w.isNotEmpty).length;
+    return SegmentationPolicy.countWords(text);
   }
 
   int _targetWords(List<_Unit> units) {
@@ -1993,6 +1989,9 @@ class LosslessChunker {
   List<_Atom> _makeAtoms(String canonicalText, List<_Unit> units) {
     final atoms = <_Atom>[];
     var index = 0;
+    String? currentSectionTitle;
+    String currentSectionRole = 'chapter';
+
     while (index < units.length) {
       final unit = units[index];
       if (unit.type == 'heading') {
@@ -2005,6 +2004,8 @@ class LosslessChunker {
           sectionTitle = '$sectionTitle: ${units[index].text.trim()}';
           index++;
         }
+        currentSectionTitle = sectionTitle;
+        currentSectionRole = unit.sectionRole;
         if (index < units.length) {
           final body = units[index];
           if (body.type == 'contents_entry') {
@@ -2016,8 +2017,8 @@ class LosslessChunker {
               paragraphId: index,
               boundaryAfter: 'paragraph',
               startsSection: true,
-              sectionTitle: sectionTitle,
-              sectionRole: unit.sectionRole,
+              sectionTitle: currentSectionTitle,
+              sectionRole: currentSectionRole,
             ));
             index++;
             continue;
@@ -2040,8 +2041,8 @@ class LosslessChunker {
               paragraphId: index,
               boundaryAfter: slices.length > 1 ? 'sentence' : 'paragraph',
               startsSection: part == 0,
-              sectionTitle: part == 0 ? sectionTitle : null,
-              sectionRole: unit.sectionRole,
+              sectionTitle: currentSectionTitle,
+              sectionRole: currentSectionRole,
             ));
           }
           index++;
@@ -2055,10 +2056,15 @@ class LosslessChunker {
           paragraphId: index - 1,
           boundaryAfter: 'paragraph',
           startsSection: true,
-          sectionTitle: sectionTitle,
-          sectionRole: unit.sectionRole,
+          sectionTitle: currentSectionTitle,
+          sectionRole: currentSectionRole,
         ));
         continue;
+      }
+
+      if (unit.sectionTitle != null && unit.sectionTitle!.isNotEmpty) {
+        currentSectionTitle = unit.sectionTitle;
+        currentSectionRole = unit.sectionRole;
       }
 
       final isOversized =
@@ -2079,7 +2085,8 @@ class LosslessChunker {
           paragraphId: index,
           boundaryAfter: slices.length > 1 ? 'sentence' : 'paragraph',
           startsSection: false,
-          sectionRole: unit.sectionRole,
+          sectionTitle: currentSectionTitle,
+          sectionRole: currentSectionRole,
         ));
       }
       index++;
@@ -2089,6 +2096,18 @@ class LosslessChunker {
 
   List<(int, int)> _splitOversized(String text) {
     final pieces = _breakIntoSmallPieces(text);
+    if (pieces.isEmpty) return [(0, text.length)];
+    if (pieces.length == 1) return pieces;
+
+    // Determine balanced target sizes so splits are evenly distributed without orphan tails (K-2)
+    final targetCharsCap = _maxChars; // 380
+    final targetWordsCap = _maxWords; // 65
+    final charParts = (text.length / 320).ceil();
+    final wordParts = (_wordCount(text) / 50).ceil();
+    final parts = (charParts > wordParts ? charParts : wordParts).clamp(1, 1000);
+    final balancedTargetChars = (text.length / parts).ceil().clamp(180, targetCharsCap);
+    final balancedTargetWords = (_wordCount(text) / parts).ceil().clamp(28, targetWordsCap);
+
     final packed = <(int, int)>[];
     var currentStart = 0;
     var currentEnd = 0;
@@ -2103,11 +2122,20 @@ class LosslessChunker {
       }
       final candidateChars = pEnd - currentStart;
       final candidateWords = _wordCount(text.substring(currentStart, pEnd));
-      if (candidateChars <= _maxChars && candidateWords <= _maxWords) {
-        currentEnd = pEnd;
-      } else {
+      final currentChars = currentEnd - currentStart;
+      final currentWords = _wordCount(text.substring(currentStart, currentEnd));
+
+      // If adding this piece exceeds the hard caps, we must split
+      if (candidateChars > targetCharsCap || candidateWords > targetWordsCap) {
         packed.add((currentStart, currentEnd));
         currentStart = pStart;
+        currentEnd = pEnd;
+      } else if (currentChars >= balancedTargetChars || currentWords >= balancedTargetWords) {
+        // We have reached a balanced chunk size; start a new chunk
+        packed.add((currentStart, currentEnd));
+        currentStart = pStart;
+        currentEnd = pEnd;
+      } else {
         currentEnd = pEnd;
       }
     }
@@ -2139,8 +2167,8 @@ class LosslessChunker {
       final sStart = span.$1;
       final sEnd = span.$2;
       final sText = text.substring(sStart, sEnd);
-      // Emergency band: only split inside a single sentence when that single sentence exceeds 110 words / 650 chars!
-      if (sText.length <= 650 && _wordCount(sText) <= 110) {
+      // Keep complete sentences up to _maxChars / _maxWords intact
+      if (sText.length <= _maxChars && _wordCount(sText) <= _maxWords) {
         clauseSpans.add((sStart, sEnd));
       } else {
         final subSpans = _splitByClauses(sText);
@@ -2155,7 +2183,7 @@ class LosslessChunker {
       final cStart = span.$1;
       final cEnd = span.$2;
       final cText = text.substring(cStart, cEnd);
-      if (cText.length <= 650 && _wordCount(cText) <= 110) {
+      if (cText.length <= _maxChars && _wordCount(cText) <= _maxWords) {
         finalPieces.add((cStart, cEnd));
       } else {
         final subSpans = _splitByWordsOrChars(cText);
@@ -2234,6 +2262,20 @@ class LosslessChunker {
     final next = List<int>.filled(atoms.length, atoms.length);
     costs[atoms.length] = 0;
 
+    // Precompute cut penalties in O(N) once before the DP loop (K-4, P1-03)
+    final cutPenaltyAtEnd = List<double>.generate(atoms.length, (end) {
+      if (end + 1 >= atoms.length) return 0.0;
+      final left = text.substring(atoms[end].start, atoms[end].end);
+      final right = text.substring(atoms[end + 1].start, atoms[end + 1].end);
+      var penalty = _boundaryPenalty(
+        left,
+        right,
+        atoms[end].paragraphId == atoms[end + 1].paragraphId,
+      );
+      if (atoms[end].boundaryAfter == 'sentence') penalty += 0.08;
+      return penalty;
+    });
+
     for (var start = atoms.length - 1; start >= 0; start--) {
       var words = 0;
       for (var end = start; end < atoms.length; end++) {
@@ -2257,12 +2299,7 @@ class LosslessChunker {
           chunkCost += 8 * overflow * overflow;
         }
         if (end + 1 < atoms.length) {
-          final left = text.substring(atoms[end].start, atoms[end].end);
-          final right =
-              text.substring(atoms[end + 1].start, atoms[end + 1].end);
-          chunkCost += _boundaryPenalty(left, right,
-              atoms[end].paragraphId == atoms[end + 1].paragraphId);
-          if (atoms[end].boundaryAfter == 'sentence') chunkCost += 0.08;
+          chunkCost += cutPenaltyAtEnd[end];
         }
         final total = chunkCost + costs[end + 1];
         if (total < costs[start]) {
@@ -2292,56 +2329,113 @@ class LosslessChunker {
     List<(int, int)> rawRanges,
   ) {
     if (rawRanges.length <= 1) return rawRanges;
-    final merged = <(int, int)>[];
-    int i = 0;
-    while (i < rawRanges.length) {
-      final current = rawRanges[i];
-      final aStart = current.$1;
-      final aEnd = current.$2;
-      final currentSlice =
-          text.substring(atoms[aStart].start, atoms[aEnd - 1].end);
-      final currentWords = _wordCount(currentSlice);
+    var ranges = List<(int, int)>.from(rawRanges);
+    var changed = true;
+    var iterations = 0;
 
-      // 1. Standalone heading attachment: if a chunk is a standalone heading (startsSection and wordCount <= 14)
-      if (i + 1 < rawRanges.length &&
-          atoms[aStart].startsSection &&
-          (aEnd - aStart == 1) &&
-          currentWords <= 14) {
-        final next = rawRanges[i + 1];
-        final nextStart = next.$1;
-        final nextEnd = next.$2;
-        final nextSlice = text.substring(atoms[nextStart].start, atoms[nextEnd - 1].end);
-        final nextWords = _wordCount(nextSlice);
-        final combinedChars = atoms[nextEnd - 1].end - atoms[aStart].start;
-        if (currentWords + nextWords <= _maxWords && combinedChars <= 450) {
-          merged.add((aStart, nextEnd));
-          i += 2;
-          continue;
-        }
-      }
+    // Convergence loop for merging < 24 words stubs bidirectionally (K-6, P1-01)
+    while (changed && iterations < 10) {
+      changed = false;
+      iterations++;
+      final nextRanges = <(int, int)>[];
+      var i = 0;
 
-      // 2. Non-final chunk < 22 words in same section: merge with adjacent chunk
-      if (currentWords < 22 && i + 1 < rawRanges.length) {
-        final next = rawRanges[i + 1];
-        final nextStart = next.$1;
-        final nextEnd = next.$2;
-        if (!atoms[nextStart].startsSection) {
+      while (i < ranges.length) {
+        final current = ranges[i];
+        final aStart = current.$1;
+        final aEnd = current.$2;
+        final currentSlice =
+            text.substring(atoms[aStart].start, atoms[aEnd - 1].end);
+        final currentWords = _wordCount(currentSlice);
+
+        // 1. Standalone heading attachment: if a chunk is a standalone heading (startsSection and wordCount <= 14)
+        if (i + 1 < ranges.length &&
+            atoms[aStart].startsSection &&
+            (aEnd - aStart == 1) &&
+            currentWords <= 14) {
+          final next = ranges[i + 1];
+          final nextStart = next.$1;
+          final nextEnd = next.$2;
           final nextSlice =
               text.substring(atoms[nextStart].start, atoms[nextEnd - 1].end);
           final nextWords = _wordCount(nextSlice);
           final combinedChars = atoms[nextEnd - 1].end - atoms[aStart].start;
-          if (currentWords + nextWords <= _maxWords && combinedChars <= 450) {
-            merged.add((aStart, nextEnd));
+          if (currentWords + nextWords <= _maxWords && combinedChars <= _maxChars) {
+            nextRanges.add((aStart, nextEnd));
             i += 2;
+            changed = true;
             continue;
           }
         }
-      }
 
-      merged.add((aStart, aEnd));
-      i++;
+        // 2. Non-heading chunk < 24 words: attempt bidirectional merge within same section
+        if (currentWords < 24 && !atoms[aStart].startsSection) {
+          final canMergeLeft = nextRanges.isNotEmpty &&
+              !atoms[aStart].startsSection;
+          final canMergeRight = i + 1 < ranges.length &&
+              !atoms[ranges[i + 1].$1].startsSection;
+
+          int? leftWords;
+          int? leftChars;
+          if (canMergeLeft) {
+            final prev = nextRanges.last;
+            leftWords = _wordCount(
+                text.substring(atoms[prev.$1].start, atoms[prev.$2 - 1].end));
+            leftChars = atoms[aEnd - 1].end - atoms[prev.$1].start;
+          }
+
+          int? rightWords;
+          int? rightChars;
+          if (canMergeRight) {
+            final next = ranges[i + 1];
+            rightWords = _wordCount(
+                text.substring(atoms[next.$1].start, atoms[next.$2 - 1].end));
+            rightChars = atoms[next.$2 - 1].end - atoms[aStart].start;
+          }
+
+          final validLeft = canMergeLeft &&
+              (currentWords + leftWords! <= _maxWords) &&
+              (leftChars! <= _maxChars);
+          final validRight = canMergeRight &&
+              (currentWords + rightWords! <= _maxWords) &&
+              (rightChars! <= _maxChars);
+
+          if (validLeft && validRight) {
+            // Merge with the shorter neighbor for optimal balance
+            if (leftWords <= rightWords) {
+              final prev = nextRanges.removeLast();
+              nextRanges.add((prev.$1, aEnd));
+              i++;
+              changed = true;
+              continue;
+            } else {
+              final next = ranges[i + 1];
+              nextRanges.add((aStart, next.$2));
+              i += 2;
+              changed = true;
+              continue;
+            }
+          } else if (validLeft) {
+            final prev = nextRanges.removeLast();
+            nextRanges.add((prev.$1, aEnd));
+            i++;
+            changed = true;
+            continue;
+          } else if (validRight) {
+            final next = ranges[i + 1];
+            nextRanges.add((aStart, next.$2));
+            i += 2;
+            changed = true;
+            continue;
+          }
+        }
+
+        nextRanges.add((aStart, aEnd));
+        i++;
+      }
+      ranges = nextRanges;
     }
-    return merged;
+    return ranges;
   }
 }
 

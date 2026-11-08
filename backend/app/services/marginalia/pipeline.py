@@ -336,7 +336,7 @@ class ReadAheadPipeline:
             for ec in existing_cards:
                 if ec.title:
                     clean_t = re.sub(
-                        r"^(?:What is\s+|EMPIRICAL STUDY:\s*|CRITICAL DEBATE:\s*|HISTORICAL CONTEXT:\s*|CORE PARADOX:\s*)+",
+                        r"^(?:What is\s+|REAL-WORLD STUDY:\s*|COUNTER-INTUITIVE FACT:\s*|HISTORICAL BACKSTORY:\s*|THE HIDDEN MECHANISM:\s*|EMPIRICAL STUDY:\s*|CRITICAL DEBATE:\s*|HISTORICAL CONTEXT:\s*|CORE PARADOX:\s*)+",
                         "",
                         ec.title,
                         flags=re.I,
@@ -432,6 +432,9 @@ class ReadAheadPipeline:
                         used_titles.add(card_title.lower())
                         existing_bodies.append(cached_body.strip())
                         return card_to_dict(card)
+                    else:
+                        logger.info("Cached card for '%s' rejected by claim-level deduplication (title or body match)", concept.name)
+                        continue
 
                 # Fetch Multi-Source Research Evidence (OpenAlex, Semantic Scholar, DDG, HackerNews, Wikipedia)
                 search_query = build_search_query_for_concept(concept.name, chunk.raw_text, active_archetype)

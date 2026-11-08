@@ -508,82 +508,98 @@ class ApiClient {
     }
 
     // Step B: Unified Ingestion Pipeline (F23 & F33)
-    final result = await DocumentIngestionPipeline.ingest(
-      docId: docId,
-      fileName: fileName,
-      filePath: filePath,
-      fileBytes: fileBytes,
-      onProgress: onProgress,
-      onBatch: (batchChunks, processedPages, totalPages, isFinalBatch) async {
-        await LocalDatabase.instance.insertChunksBatch(
-          batchChunks,
-          isFinalBatch: isFinalBatch,
-        );
+    int lastProgressSaveMs = 0;
+    void handleProgress(double progress, String stageLabel) {
+      onProgress?.call(progress, stageLabel);
+      final nowMs = DateTime.now().millisecondsSinceEpoch;
+      if (nowMs - lastProgressSaveMs >= 500) {
+        lastProgressSaveMs = nowMs;
+        LocalDatabase.instance.updateDocumentProgress(
+          docId,
+          percent: (progress * 100).toInt().clamp(0, 99),
+          stage: 'extracting',
+          stageLabel: stageLabel,
+        ).catchError((e) {
+          debugPrint('[Athena Ingestion] progress update notice: $e');
+        });
+      }
+    }
 
-        final progressFraction =
-            0.05 + 0.65 * (processedPages / (totalPages == 0 ? 1 : totalPages));
-        final pctInt = (progressFraction * 100).toInt();
-        final stageMsg =
-            'Extracting pages $processedPages of $totalPages ($pctInt%)...';
-        final bool canFastStart = (totalPages > 120 && processedPages >= 60);
-
-        try {
-          await LocalDatabase.instance.updateDocumentProgress(
-            docId,
-            status: canFastStart ? 'ready' : 'processing',
-            stage: 'extracting',
-            stageLabel: stageMsg,
-            percent: pctInt,
-            processedPage: processedPages,
-            pageCount: totalPages,
+    IngestionResult result;
+    try {
+      result = await DocumentIngestionPipeline.ingest(
+        docId: docId,
+        fileName: fileName,
+        filePath: filePath,
+        fileBytes: fileBytes,
+        onProgress: handleProgress,
+        onBatch: (batchChunks, processedPages, totalPages, isFinalBatch) async {
+          await LocalDatabase.instance.insertChunksBatch(
+            batchChunks,
+            isFinalBatch: isFinalBatch,
           );
-        } catch (e) {
-          debugPrint('[Athena Error] updateDocumentProgress notice: $e');
-        }
-      },
-    );
+
+          final progressFraction =
+              0.05 + 0.65 * (processedPages / (totalPages == 0 ? 1 : totalPages));
+          final pctInt = (progressFraction * 100).toInt();
+          final stageMsg =
+              'Extracting pages $processedPages of $totalPages ($pctInt%)...';
+          final bool canFastStart = (totalPages > 60 && processedPages >= 30);
+
+          try {
+            await LocalDatabase.instance.updateDocumentProgress(
+              docId,
+              status: canFastStart ? 'ready' : 'processing',
+              stage: 'extracting',
+              stageLabel: stageMsg,
+              percent: pctInt,
+              processedPage: processedPages,
+              pageCount: totalPages,
+            );
+          } catch (e) {
+            debugPrint('[Athena Error] updateDocumentProgress notice: $e');
+          }
+        },
+      );
+    } on AppError catch (e) {
+      debugPrint('[Athena Ingestion] AppError during ingest: $e');
+      try {
+        await LocalDatabase.instance.updateDocumentProgress(
+          docId,
+          status: 'failed',
+          stage: 'failed',
+          stageLabel: e.message,
+          errorMessage: e.message,
+          errorCode: e.code,
+        );
+      } catch (dbErr) {
+        debugPrint(
+            '[Athena Ingestion] Failed updating doc progress on error: $dbErr');
+      }
+      return docId;
+    } catch (e) {
+      debugPrint('[Athena Ingestion] Error during ingest: $e');
+      try {
+        await LocalDatabase.instance.updateDocumentProgress(
+          docId,
+          status: 'failed',
+          stage: 'failed',
+          stageLabel: e.toString(),
+          errorMessage: e.toString(),
+          errorCode: 'EXTRACTION_FAILED',
+        );
+      } catch (dbErr) {
+        debugPrint(
+            '[Athena Ingestion] Failed updating doc progress on error: $dbErr');
+      }
+      return docId;
+    }
 
     final allChunks = result.chunks;
     final totalPages = result.pageCount;
     final canonicalStr = result.canonicalText;
 
-    // Step C: Context Cards Generation
-    onProgress?.call(0.75, '3/4 Generating high-signal Context Cards...');
-    final cardMaps = <Map<String, Object?>>[];
-    try {
-      final contextService = LocalContextService();
-      final cards = await contextService.buildCards(docId, allChunks);
-      for (final cd in cards) {
-        cardMaps.add({
-          'id': cd['id'] ?? 'card_${cd['concept_name']}',
-          'document_id': docId,
-          'source_chunk_id': cd['source_chunk_id'] ??
-              (allChunks.isNotEmpty ? allChunks.first['id']! : ''),
-          'concept_name': cd['concept_name'] ?? '',
-          'card_type': cd['card_type'] ?? 'context',
-          'title': cd['title'] ?? '',
-          'body': cd['body'] ?? '',
-          'why_here': cd['why_here'] ?? '',
-          'citations_json': cd['citations_json'] ?? '[]',
-          'exact_quote': cd['exact_quote'],
-          'support_status': cd['support_status'] ?? 'unverified',
-          'canonical_sha256': cd['canonical_sha256'] ?? '',
-          'generation_mode': cd['generation_mode'] ?? 'research_grounded',
-          'verified': cd['verified'] == 1 ? 1 : 0,
-          'saved': 0,
-          'dismissed': 0,
-          'created_at': now,
-        });
-      }
-      if (cardMaps.isNotEmpty) {
-        await LocalDatabase.instance.insertCards(cardMaps);
-      }
-    } catch (e) {
-      debugPrint('[Athena Error] Context card generation notice: $e');
-    }
-
-    // Step D: True End-to-End SHA-256 Verification & Finalize (F22)
-    onProgress?.call(0.95, '4/4 Finalizing library index...');
+    // Step C: Mark 'ready' and 100% immediately! Never block reader on network cards (H-1 / P0-04)
     final words =
         canonicalStr.split(RegExp(r'\s+')).where((w) => w.isNotEmpty).length;
     final readingTime = (words / 200).ceil().clamp(1, 9999);
@@ -611,10 +627,41 @@ class ApiClient {
     }
 
     onProgress?.call(1.0, 'Ready to read');
+
+    // Step D: Fast 100% local extractive notes (<= 8 cards, < 20ms, zero HTTP calls)
+    try {
+      final contextService = LocalContextService();
+      final fastCards = await contextService.buildFastInitialExtractiveCards(
+        docId,
+        allChunks,
+        maxCards: 8,
+      );
+      if (fastCards.isNotEmpty) {
+        await LocalDatabase.instance.insertCards(fastCards);
+      }
+    } catch (e) {
+      debugPrint('[Athena Error] Fast extractive cards notice: $e');
+    }
+
     return docId;
   }
 
   Future<void> retryDocument(String id) async {
+    if (!kIsWeb && AppConfig.isStandaloneMobile) {
+      final doc = await LocalDatabase.instance.getDocument(id);
+      if (doc != null) {
+        final filePath = doc['file_path'] as String?;
+        final fileName = doc['filename'] as String? ?? 'document.pdf';
+        if (filePath != null &&
+            filePath.isNotEmpty &&
+            !filePath.startsWith('local://')) {
+          final xfile = XFile(filePath);
+          final length = await xfile.length();
+          unawaited(uploadDocument(null, length, fileName, filePath: filePath));
+          return;
+        }
+      }
+    }
     if (AppConfig.apiBaseUrl.isEmpty) return;
     try {
       await dio.post('/api/documents/$id/process');

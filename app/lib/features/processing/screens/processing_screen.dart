@@ -8,6 +8,7 @@ import 'package:athena/core/errors.dart';
 import 'package:athena/models/document.dart';
 import 'package:athena/core/widgets/athena_avatar.dart';
 import 'package:athena/features/library/screens/library_screen.dart';
+import 'package:athena/services/local_database.dart';
 
 class StageInfo {
   final String key;
@@ -129,6 +130,29 @@ class _ProcessingScreenState extends ConsumerState<ProcessingScreen>
     if (_pollInFlight) return;
     _pollInFlight = true;
     try {
+      if (AppConfig.isStandaloneMobile) {
+        final localData =
+            await LocalDatabase.instance.getDocumentStatus(widget.documentId);
+        if (localData != null && mounted) {
+          final status = DocumentStatus.fromJson(localData);
+          setState(() {
+            _status = status;
+            _backendUnreachable = false;
+          });
+
+          if (status.isDone) {
+            _pollTimer?.cancel();
+            ref.invalidate(documentsProvider);
+            if (status.isReady) {
+              Future.delayed(const Duration(milliseconds: 300), () {
+                if (mounted) context.go('/reader/${widget.documentId}');
+              });
+            }
+          }
+          return;
+        }
+      }
+
       final client = ref.read(apiClientProvider);
       final data = await client.getDocumentStatus(widget.documentId);
       final status = DocumentStatus.fromJson(data);

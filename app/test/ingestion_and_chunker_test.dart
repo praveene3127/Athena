@@ -1,11 +1,16 @@
 import 'dart:convert';
+import 'dart:typed_data';
 import 'package:crypto/crypto.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:sqflite_common_ffi/sqflite_ffi.dart';
+import 'package:syncfusion_flutter_pdf/pdf.dart';
+import 'package:athena/core/errors.dart';
+import 'package:athena/models/section_role.dart';
 import 'package:athena/services/lossless_chunker.dart';
 import 'package:athena/services/local_database.dart';
 import 'package:athena/services/ingestion_pipeline.dart';
+import 'package:athena/services/segmentation_policy.dart';
 
 void main() {
   TestWidgetsFlutterBinding.ensureInitialized();
@@ -541,6 +546,215 @@ void main() {
       final rawText = prefaceLines.map((l) => l.text).join('\n');
       final score = DocumentIngestionPipeline.scoreFrontOrBackMatter(prefaceLines, rawText);
       expect(score < 40, isTrue, reason: 'Substantive preface must not be classified as droppable front matter');
+    });
+
+    test('14. Corrupt or encrypted PDF fails fast with typed AppError without hang', () async {
+      final invalidBytes = Uint8List.fromList([0x25, 0x50, 0x44, 0x46, 0x00, 0xFF, 0xEE, 0xDD]);
+      final stopwatch = Stopwatch()..start();
+
+      AppError? caughtError;
+      try {
+        await DocumentIngestionPipeline.ingest(
+          docId: 'corrupt_doc_test',
+          fileName: 'corrupt.pdf',
+          fileBytes: invalidBytes,
+        );
+      } on AppError catch (e) {
+        caughtError = e;
+      } catch (e) {
+        fail('Expected AppError but got: $e');
+      } finally {
+        stopwatch.stop();
+      }
+
+      expect(caughtError, isNotNull);
+      expect(caughtError!.code, anyOf('PDF_UNREADABLE', 'EXTRACTION_FAILED'));
+      expect(stopwatch.elapsedMilliseconds, lessThan(1000));
+    });
+
+    test('15. LocalDatabase.listDocuments() SQL query excludes heavy text columns', () async {
+      final db = LocalDatabase.instance;
+      const docId = 'large_payload_metadata_audit_doc_consolidated';
+      const hugeCanonical = 'Very large canonical text that should never be loaded during listDocuments query...';
+      const hugeSpans = '[{"start":0,"end":50,"type":"paragraph"}]';
+
+      await db.insertDocument({
+        'id': docId,
+        'filename': 'metadata_test.pdf',
+        'title': 'Metadata Test Document',
+        'file_path': 'local://metadata_test.pdf',
+        'status': 'ready',
+        'stage': 'done',
+        'stage_label': 'Ready to read',
+        'percent': 100,
+        'canonical_text': hugeCanonical,
+        'spans_json': hugeSpans,
+        'created_at': DateTime.now().toIso8601String(),
+        'updated_at': DateTime.now().toIso8601String(),
+      });
+
+      expect(LocalDatabase.documentListColumns, isNot(contains('canonical_text')));
+      expect(LocalDatabase.documentListColumns, isNot(contains('spans_json')));
+
+      final list = await db.listDocuments();
+      final targetDoc = list.firstWhere((d) => d['id'] == docId);
+
+      expect(targetDoc.containsKey('canonical_text'), isFalse);
+      expect(targetDoc.containsKey('spans_json'), isFalse);
+    });
+
+    test('16. TocDetector flags 0 justified Zarathustra prose pages as TOC (S-1)', () {
+      final wordsEndingInRomanChars = ['and', 'him', 'would', 'all', 'six', 'said', 'civil', 'complex'];
+      int totalLines = 0;
+      int flaggedTocPages = 0;
+
+      for (int p = 1; p <= 10; p++) {
+        final lines = <LineFragment>[];
+        for (int i = 0; i < 28; i++) {
+          final endingWord = wordsEndingInRomanChars[i % wordsEndingInRomanChars.length];
+          final text = 'When Zarathustra was thirty years old he left his home and the lake $endingWord';
+          lines.add(LineFragment(
+            text: text,
+            left: 54.0,
+            right: 500.0,
+            top: 72.0 + (i * 14.0),
+            bottom: 84.0 + (i * 14.0),
+            fontSize: 10.0,
+            pageHeight: 792.0,
+          ));
+          totalLines++;
+        }
+        final rawText = lines.map((l) => l.text).join('\n');
+        final result = TocDetector.analyzePage(
+          lines: lines,
+          bodyRight: 500.0,
+          rawPageText: rawText,
+          pageNum: p,
+          totalPages: 100,
+        );
+
+        if (result.isToc) {
+          flaggedTocPages++;
+        }
+      }
+
+      expect(flaggedTocPages, equals(0));
+      expect(totalLines, equals(280));
+    });
+
+    test('17. StructureResolver HMM keeps 4-page Preface sticky across all 4 pages (S-2)', () {
+      const totalPages = 10;
+      final pageLinesMap = <int, List<LineFragment>>{};
+      final pageRawTextMap = <int, String>{};
+      final bookmarks = <int, String>{};
+      final explicitHeadingMap = <int, String>{};
+
+      bookmarks[2] = 'Preface';
+      explicitHeadingMap[2] = 'Preface';
+      pageRawTextMap[2] = 'Preface\nThis book explores the mechanics of reading over long spans... ' * 10;
+      pageLinesMap[2] = [
+        LineFragment(text: 'Preface', left: 54, right: 150, top: 72, bottom: 90, fontSize: 18),
+        for (int i = 1; i <= 20; i++)
+          LineFragment(text: 'This book explores the mechanics of reading line $i.', left: 54, right: 450, top: 90.0 + i * 14, bottom: 102.0 + i * 14, fontSize: 10),
+      ];
+
+      for (int p = 3; p <= 5; p++) {
+        pageRawTextMap[p] = 'Furthermore, the reader must recognize foundational principles... ' * 10;
+        pageLinesMap[p] = [
+          for (int i = 0; i < 20; i++)
+            LineFragment(text: 'Furthermore line $i on page $p.', left: 54, right: 450, top: 72.0 + i * 14, bottom: 84.0 + i * 14, fontSize: 10),
+        ];
+      }
+
+      bookmarks[6] = 'Chapter 1: The Beginning';
+      explicitHeadingMap[6] = 'Chapter 1: The Beginning';
+      pageRawTextMap[6] = 'Chapter 1: The Beginning\nIn the ancient days before writing... ' * 10;
+      pageLinesMap[6] = [
+        LineFragment(text: 'Chapter 1: The Beginning', left: 54, right: 300, top: 72, bottom: 92, fontSize: 18),
+        for (int i = 1; i <= 20; i++)
+          LineFragment(text: 'In the ancient days line $i.', left: 54, right: 450, top: 92.0 + i * 14, bottom: 104.0 + i * 14, fontSize: 10),
+      ];
+
+      for (int p = 7; p <= 10; p++) {
+        pageRawTextMap[p] = 'The narrative continues with rich depth and marginalia... ' * 10;
+        pageLinesMap[p] = [
+          for (int i = 0; i < 20; i++)
+            LineFragment(text: 'The narrative continues line $i on page $p.', left: 54, right: 450, top: 72.0 + i * 14, bottom: 84.0 + i * 14, fontSize: 10),
+        ];
+      }
+
+      final roles = StructureResolver.smoothRoles(
+        totalPages: totalPages,
+        pageLinesMap: pageLinesMap,
+        pageRawTextMap: pageRawTextMap,
+        bookmarks: bookmarks,
+        tocPages: const {},
+        explicitHeadingMap: explicitHeadingMap,
+      );
+
+      expect(roles[1], equals(SectionRole.preface));
+      expect(roles[2], equals(SectionRole.preface));
+      expect(roles[3], equals(SectionRole.preface));
+      expect(roles[4], equals(SectionRole.preface));
+      expect(roles[5], equals(SectionRole.chapter));
+    });
+
+    test('18. Real-PDF End-to-End Ingestion Golden Test (P2-06)', () async {
+      // Build a multi-page PDF with authentic chapter headings and paragraphs
+      final pdf = PdfDocument();
+      for (int i = 1; i <= 3; i++) {
+        final page = pdf.pages.add();
+        final font = PdfStandardFont(PdfFontFamily.helvetica, 11);
+        final titleFont = PdfStandardFont(PdfFontFamily.helvetica, 16, style: PdfFontStyle.bold);
+
+        page.graphics.drawString('Chapter $i. Foundations of Cognitive Reading', titleFont,
+            bounds: const Rect.fromLTWH(50, 40, 500, 30));
+
+        final bodyText = 'This is the opening narrative of chapter $i, discussing how human readers process language. '
+            'Lossless chunking ensures that every byte from the original document is faithfully retained. '
+            'When sentences flow across boundaries, the segmentation policy respects punctuation and legal cuts. '
+            'Marginalia cards then anchor directly to exact quotes without distortion.\n\n'
+            'A second paragraph further illuminates the empirical evidence supporting this reading model. '
+            'Scientists have found that distraction-free presentation modes increase retention by significant margins.';
+
+        page.graphics.drawString(bodyText, font,
+            bounds: const Rect.fromLTWH(50, 80, 500, 600));
+      }
+
+      final pdfBytes = Uint8List.fromList(pdf.saveSync());
+      pdf.dispose();
+
+      expect(pdfBytes, isNotEmpty);
+
+      // Execute full ingestion pipeline
+      final result = await DocumentIngestionPipeline.ingest(
+        docId: 'real_pdf_golden_test_doc',
+        fileName: 'cognitive_reading.pdf',
+        fileBytes: pdfBytes,
+      );
+
+      expect(result.chunks, isNotEmpty);
+      expect(result.canonicalText, contains('Chapter 1'));
+      expect(result.canonicalText, contains('Chapter 2'));
+      expect(result.canonicalText, contains('Chapter 3'));
+
+      // Invariant: Exact contiguous reconstruction
+      final reconstructed = result.chunks.map((c) => c['raw_text']).join();
+      expect(reconstructed, equals(result.canonicalText));
+
+      // Invariant: SHA-256 match
+      final expectedSha = sha256.convert(utf8.encode(result.canonicalText)).toString();
+      expect(result.canonicalSha256, equals(expectedSha));
+
+      // Invariant: All cuts legal and no mid-word boundary cuts
+      for (final chunk in result.chunks) {
+        final start = chunk['start_offset'] as int;
+        final end = chunk['end_offset'] as int;
+        expect(SegmentationPolicy.isLegalCut(result.canonicalText, start), isTrue);
+        expect(SegmentationPolicy.isLegalCut(result.canonicalText, end), isTrue);
+        expect(chunk['section_title'], isNotNull);
+        expect(chunk['section_role'], equals('chapter'));
+      }
     });
   });
 }

@@ -49,6 +49,7 @@ enum SectionRole {
 
   /// Whether this role represents core narrative or exposition body.
   bool get isBody => const {
+    SectionRole.prologue,
     SectionRole.part,
     SectionRole.chapter,
     SectionRole.epilogue,

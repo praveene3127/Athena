@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:convert';
 import 'package:crypto/crypto.dart';
 import 'package:dio/dio.dart';
@@ -7,6 +8,7 @@ import 'package:athena/models/section_role.dart';
 import 'package:athena/services/ingestion_pipeline.dart';
 import 'package:athena/services/secure_storage_service.dart';
 import 'package:athena/services/lossless_chunker.dart';
+import 'package:athena/services/local_database.dart';
 
 class _AcademicCacheEntry {
   final List<Map<String, dynamic>> results;
@@ -77,6 +79,9 @@ class CardPlan {
       final secTexts =
           secChunks.map((c) => (c['raw_text'] as String?) ?? '').toList();
 
+      // Precompute section term frequencies once per section (O(section) instead of O(slots * section))
+      final sectionTf = LocalContextService.computeSectionTermFrequency(secTexts);
+
       int wordsSinceLastCard = everyWords;
       int lastCardChunkIdx = -999;
       Map<String, Object?>? bestCandidateChunk;
@@ -104,8 +109,10 @@ class CardPlan {
               .split(RegExp(r'\s+'))
               .where((w) => w.isNotEmpty)
               .length;
-          final concept =
-              s.extractSalientConcept(targetText, sectionTexts: secTexts);
+          final concept = s.extractSalientConcept(
+            targetText,
+            precomputedSectionTf: sectionTf,
+          );
           final role =
               SectionRole.fromString(targetChunk['section_role']?.toString());
 
@@ -317,8 +324,62 @@ class LocalContextService {
     String documentId,
     List<Map<String, Object?>> chunks,
   ) async {
-    // Whole-book deterministic CardPlan coverage (FP-11)
-    return buildCards(documentId, chunks);
+    // Fast initial 100% local extractive notes (zero network calls)
+    return buildFastInitialExtractiveCards(documentId, chunks, maxCards: 8);
+  }
+
+  /// Fast 100% local extractive notes (<= 8 cards, < 20ms, zero HTTP calls).
+  /// Generated at ingest completion without delaying the user from reading.
+  Future<List<Map<String, Object?>>> buildFastInitialExtractiveCards(
+    String documentId,
+    List<Map<String, Object?>> chunks, {
+    int maxCards = 8,
+  }) async {
+    final cards = <Map<String, Object?>>[];
+    final slots = CardPlan.plan(chunks: chunks, service: this);
+    if (slots.isEmpty) return const [];
+
+    final chunkById = {for (final c in chunks) (c['id']?.toString() ?? ''): c};
+    final targetSlots = slots.take(maxCards).toList();
+
+    for (var i = 0; i < targetSlots.length; i++) {
+      final slot = targetSlots[i];
+      final chunk = chunkById[slot.chunkId];
+      if (chunk == null) continue;
+
+      final passage = (chunk['raw_text'] as String?)?.trim() ?? '';
+      if (passage.isEmpty || !passesProseQualityGate(passage)) continue;
+
+      final chunkId = chunk['id']?.toString() ?? 'chunk_$i';
+      final concept = slot.concept;
+      final exactQuote = _exactQuote(passage, concept) ??
+          (passage.length > 80 ? passage.substring(0, 80) : passage);
+      final localSummary = _summarizeLocally(passage, concept);
+      final id = sha256
+          .convert(utf8.encode('$documentId:$chunkId:$concept:$i'))
+          .toString()
+          .substring(0, 24);
+
+      cards.add({
+        'id': 'local-$id',
+        'document_id': documentId,
+        'source_chunk_id': chunkId,
+        'concept_name': concept,
+        'card_type': 'book_cross_reference',
+        'title': 'CONCEPT NOTE: $concept',
+        'exact_quote': exactQuote,
+        'body': localSummary,
+        'citations_json': '[]',
+        'citations': const [],
+        'verified': 0,
+        'support_status': 'internal_extractive',
+        'support_tier': 'internal_extractive',
+        'canonical_sha256': sha256.convert(utf8.encode(passage)).toString(),
+        'generation_mode': 'internal_extractive',
+        'created_at': DateTime.now().toUtc().toIso8601String(),
+      });
+    }
+    return cards;
   }
 
   Future<List<Map<String, Object?>>> buildCards(
@@ -813,9 +874,33 @@ Respond ONLY with valid JSON with this exact schema:
     return '$c::$excerpt';
   }
 
+  // Concurrency cap of 2 for external academic / LLM network requests
+  static int _activeExternalRequests = 0;
+  static final List<Completer<void>> _requestQueue = [];
+
+  static Future<void> _acquireConcurrencySlot() async {
+    if (_activeExternalRequests < 2) {
+      _activeExternalRequests++;
+      return;
+    }
+    final completer = Completer<void>();
+    _requestQueue.add(completer);
+    await completer.future;
+  }
+
+  static void _releaseConcurrencySlot() {
+    if (_requestQueue.isNotEmpty) {
+      final next = _requestQueue.removeAt(0);
+      next.complete();
+    } else {
+      if (_activeExternalRequests > 0) _activeExternalRequests--;
+    }
+  }
+
   Future<List<Map<String, dynamic>>> _fetchTrustedAcademicEvidence(
       String concept, String passage) async {
     final cacheKey = _cacheKey(concept, passage);
+    // 1. In-memory cache
     if (_academicCache.containsKey(cacheKey)) {
       final entry = _academicCache[cacheKey]!;
       if (DateTime.now().difference(entry.timestamp) < _cacheTtl) {
@@ -825,20 +910,40 @@ Respond ONLY with valid JSON with this exact schema:
       }
     }
 
-    final List<Map<String, dynamic>> results = [];
-    final futures = <Future<List<Map<String, dynamic>>>>[
-      _queryCrossref(concept),
-      _queryEuropePmc(concept),
-      _queryOpenAlex(concept),
-    ];
+    // 2. Persistent SQLite academic_evidence_cache
+    if (!kIsWeb) {
+      try {
+        final cachedJson =
+            await LocalDatabase.instance.getCachedAcademicEvidence(cacheKey);
+        if (cachedJson != null && cachedJson.isNotEmpty) {
+          final decoded =
+              (jsonDecode(cachedJson) as List).cast<Map<String, dynamic>>();
+          _academicCache[cacheKey] =
+              _AcademicCacheEntry(decoded, DateTime.now());
+          return decoded;
+        }
+      } catch (e) {
+        debugPrint('[Athena Context] Persistent cache read notice: $e');
+      }
+    }
 
+    await _acquireConcurrencySlot();
+    final List<Map<String, dynamic>> results = [];
     try {
+      final futures = <Future<List<Map<String, dynamic>>>>[
+        _queryCrossref(concept),
+        _queryEuropePmc(concept),
+        _queryOpenAlex(concept),
+      ];
+
       final batch = await Future.wait(futures);
       for (final list in batch) {
         results.addAll(list);
       }
     } catch (e) {
       debugPrint('Athena academic fetch batch notice: $e');
+    } finally {
+      _releaseConcurrencySlot();
     }
 
     if (results.isEmpty) {
@@ -861,6 +966,17 @@ Respond ONLY with valid JSON with this exact schema:
       _academicCache.remove(_academicCache.keys.first);
     }
     _academicCache[cacheKey] = _AcademicCacheEntry(results, DateTime.now());
+
+    // Write to persistent SQLite cache
+    if (!kIsWeb) {
+      try {
+        await LocalDatabase.instance
+            .cacheAcademicEvidence(cacheKey, jsonEncode(results));
+      } catch (e) {
+        debugPrint('[Athena Context] Persistent cache write notice: $e');
+      }
+    }
+
     return results;
   }
 
@@ -868,7 +984,7 @@ Respond ONLY with valid JSON with this exact schema:
     try {
       final cleanQ = query.replaceAll(RegExp(r'[^\w\s-]'), ' ').trim();
       final uri = Uri.parse(
-          'https://api.crossref.org/works?query=${Uri.encodeComponent(cleanQ)}&filter=has-abstract:true&rows=2');
+          'https://api.crossref.org/works?query=${Uri.encodeComponent(cleanQ)}&filter=has-abstract:true&rows=2&mailto=athena-reader@example.com');
       final res = await _dio.getUri<Map<String, dynamic>>(uri);
       final items = res.data?['message']?['items'] as List?;
       if (items == null) return const [];
@@ -1054,13 +1170,32 @@ Respond ONLY with valid JSON with this exact schema:
         .toSet();
   }
 
+  /// Precomputes section term frequencies once per section (O(section) instead of O(slots * section)).
+  static Map<String, int> computeSectionTermFrequency(List<String> sectionTexts) {
+    final termCounts = <String, int>{};
+    for (final st in sectionTexts) {
+      final words = st
+          .toLowerCase()
+          .split(RegExp(r'[^a-z]+'))
+          .where((w) => w.length >= 5 && !_excludedConceptWords.contains(w));
+      for (final w in words) {
+        termCounts[w] = (termCounts[w] ?? 0) + 1;
+      }
+    }
+    return termCounts;
+  }
+
   /// Non-Fiction & Multi-Genre 4-Tier Concept Extractor (FP-12).
   /// Never returns null or empty on an eligible conceptual chunk! Fall back through:
   ///   1) Multi-word capitalized phrase (2–4 words)
   ///   2) Single non-initial capitalized entity (>= 4 letters)
   ///   3) Top section-recurring non-stopword conceptual term (TF-IDF / frequency >= 2 in section)
   ///   4) Strongest noun phrase / domain bigram in the passage.
-  String extractSalientConcept(String passage, {List<String>? sectionTexts}) {
+  String extractSalientConcept(
+    String passage, {
+    List<String>? sectionTexts,
+    Map<String, int>? precomputedSectionTf,
+  }) {
     // 1. Multi-word capitalized phrase (2–4 words) excluding sentence-initial common words
     final capPhrases = RegExp(r'\b[A-Z][a-z]+(?:\s+[A-Z][a-z]+){1,3}\b');
     for (final m in capPhrases.allMatches(passage)) {
@@ -1084,17 +1219,11 @@ Respond ONLY with valid JSON with this exact schema:
     }
 
     // 3. Top section-recurring non-stopword conceptual term (frequency >= 2 in section)
-    if (sectionTexts != null && sectionTexts.isNotEmpty) {
-      final termCounts = <String, int>{};
-      for (final st in sectionTexts) {
-        final words = st
-            .toLowerCase()
-            .split(RegExp(r'[^a-z]+'))
-            .where((w) => w.length >= 5 && !_excludedConceptWords.contains(w));
-        for (final w in words) {
-          termCounts[w] = (termCounts[w] ?? 0) + 1;
-        }
-      }
+    final termCounts = precomputedSectionTf ??
+        (sectionTexts != null && sectionTexts.isNotEmpty
+            ? computeSectionTermFrequency(sectionTexts)
+            : null);
+    if (termCounts != null && termCounts.isNotEmpty) {
       final passageWords = passage
           .toLowerCase()
           .split(RegExp(r'[^a-z]+'))

@@ -195,6 +195,13 @@ class SegmentationPolicy {
     }
     return preferredPosition;
   }
+
+  /// Word count utility consistent with top-level countWords
+  static int countWords(String text) {
+    if (text.trim().isEmpty) return 0;
+    final wordPattern = RegExp(r'[^\u0009-\u000D \u0085   -     　]+', unicode: true);
+    return wordPattern.allMatches(text).length;
+  }
 }
 
 /// Result of a segmentation operation with full audit trail

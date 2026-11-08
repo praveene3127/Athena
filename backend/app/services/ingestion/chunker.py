@@ -28,7 +28,7 @@ _FEED_MIN_WORDS = MIN_CHUNK_WORDS
 _FEED_MAX_WORDS = MAX_CHUNK_WORDS
 _CONTINUATION_START = re.compile(
     r"^(however|therefore|thus|moreover|furthermore|for example|for instance|"
-    r"as a result|in contrast|because|but|and|so|this|these|they|it)\b",
+    r"as a result|in contrast|because)\b",
     re.IGNORECASE,
 )
 _TOKEN = re.compile(r"[A-Za-z]{4,}")
@@ -436,6 +436,19 @@ def _plan_feed_chunks(
     next_index = [len(atoms)] * len(atoms)
     costs[-1] = 0.0
 
+    cut_penalties = [0.0] * len(atoms)
+    for end in range(len(atoms) - 1):
+        left = canonical_text[atoms[end]["start"]:atoms[end]["end"]]
+        right = canonical_text[atoms[end + 1]["start"]:atoms[end + 1]["end"]]
+        p = _boundary_penalty(
+            left,
+            right,
+            atoms[end]["paragraph_id"] == atoms[end + 1]["paragraph_id"],
+        )
+        if atoms[end]["boundary_after"] == "sentence":
+            p += 0.08
+        cut_penalties[end] = p
+
     for start in range(len(atoms) - 1, -1, -1):
         words = 0
         for end in range(start, len(atoms)):
@@ -456,15 +469,7 @@ def _plan_feed_chunks(
                 chunk_cost += 8.0 * overflow * overflow
 
             if end + 1 < len(atoms):
-                left = canonical_text[atoms[end]["start"]:atoms[end]["end"]]
-                right = canonical_text[atoms[end + 1]["start"]:atoms[end + 1]["end"]]
-                chunk_cost += _boundary_penalty(
-                    left,
-                    right,
-                    atoms[end]["paragraph_id"] == atoms[end + 1]["paragraph_id"],
-                )
-                if atoms[end]["boundary_after"] == "sentence":
-                    chunk_cost += 0.08
+                chunk_cost += cut_penalties[end]
 
             total_cost = chunk_cost + costs[end + 1]
             if total_cost < costs[start]:
@@ -528,8 +533,10 @@ def chunk_document(
         c_end = last_atom["end"]
         if c_start != previous_end:
             raise ValueError("Adaptive chunker produced a gap or overlap")
-        assert is_legal_cut(canonical_text, c_start), f"Illegal start cut at {c_start}"
-        assert is_legal_cut(canonical_text, c_end), f"Illegal end cut at {c_end}"
+        if not is_legal_cut(canonical_text, c_start):
+            raise ValueError(f"Illegal start cut at {c_start}")
+        if not is_legal_cut(canonical_text, c_end):
+            raise ValueError(f"Illegal end cut at {c_end}")
         raw_text = canonical_text[c_start:c_end]
         pages = _find_pages_for_span(c_start, c_end, spans)
         section_title = next(
