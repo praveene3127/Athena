@@ -11,7 +11,7 @@
   <img src="https://img.shields.io/badge/Rust_Core-PyO3%20%7C%20Rayon-DEA584?logo=rust&logoColor=white" alt="Rust Core" />
   <img src="https://img.shields.io/badge/Zero--JSON-Binary%20Book%20Tape-8B5CF6" alt="Binary Book Tape" />
   <img src="https://img.shields.io/badge/SHA--256-Lossless%20Canonical-10B981" alt="Lossless Canonical" />
-  <img src="https://img.shields.io/badge/Tests-111%20passing-brightgreen" alt="Tests" />
+  <img src="https://img.shields.io/badge/Tests-175%20passing-brightgreen" alt="Tests" />
   <a href="LICENSE"><img src="https://img.shields.io/badge/License-GPLv3-blue.svg" alt="License: GPL v3" /></a>
 </p>
 
@@ -52,10 +52,13 @@ python -m venv .venv
 
 # 2. Install backend dependencies & start unified supervisor
 pip install -r backend/requirements.txt
-python scripts/run_athena.py
-# (On Windows, you can also run scripts/start_athena.bat)
+
+# Start with LAN Wi-Fi pairing enabled (binds to 0.0.0.0, generates secure pairing token, prints QR code):
+python scripts/run_athena.py --lan
+# (On macOS/Linux, you can also run: bash scripts/run_athena.sh --lan)
+# (On Windows, you can also run: scripts/start_athena.bat)
 ```
-The terminal prints your local network IP (e.g., `http://192.168.1.61:8000`). Connect the mobile app by going to **AI Engines &rarr; Server Host**, entering your LAN IP, and tapping **Save & Apply**.
+The terminal prints your dynamic local network IP (e.g., `http://192.168.1.61:8000`) and an ASCII pairing QR code. Connect the mobile app by going to **AI Engines &rarr; Server Host**, entering your LAN IP and pairing token, and tapping **Save & Apply**.
 
 ---
 
@@ -169,6 +172,15 @@ Compiled via PyO3 as the native Python extension `athena_rust_core`:
 - `rust_check_slop_phrase`: Aho-Corasick multi-pattern scanner blocking generic AI phrases (*"in this passage", "the author highlights"*).
 - `rust_simhash64` & `rust_simhash_hamming_distance`: 64-bit locality-sensitive lexical fingerprinting and popcount matching.
 - `rust_encode_binary_tape` & `rust_read_binary_tape_chunk`: Zero-copy flat binary serialization (`ATHN`) for instant random-access chunk decoding.
+
+### 3. On-Device Lexical/IDF vs Companion ONNX Fastembed Architecture
+- **On-Device Standalone Mobile**: Calculates TF-IDF and Shannon lexical entropy on-device within isolated background Dart workers (`LocalContextService`). Synthesizes rapid extractive cards and computes 64-bit SimHash passage fingerprints in sub-millisecond time with zero external network or server calls.
+- **Companion Engine Acceleration**: Pairs the Rust PyO3 core with ONNX Runtime (`BAAI/bge-small-en-v1.5`) dense embeddings, enabling hybrid BM25 + dense semantic vector search with Reciprocal Rank Fusion (RRF) and anti-echo cosine novelty gating ($\le 0.81$).
+
+### 4. Scanned vs. Digital Non-Fiction Guidance
+Athena is optimized for deep reading of long-form, digital non-fiction literature. The structural bouncer inspects font descriptors and character glyph mappings upfront:
+- **Clean Digital Text PDFs & EPUBs**: Enjoy instantaneous extraction, lossless SHA-256 canonical text preservation, microsecond optical font scaling, and verbatim author quote anchoring.
+- **Scanned / Raster-Only PDFs**: Athena detects image-only pages and notifies the user with diagnostic guidance. Because raster images lack true character geometry, clean digital text documents are strongly recommended for the highest reading fidelity.
 
 ---
 
@@ -331,7 +343,7 @@ Athena/
 │   ├── rust_core/                       # Pure Rust text processing engine (PyO3)
 │   │   ├── Cargo.toml                   # Rayon, Aho-Corasick, Regex, Serde, SHA-2
 │   │   └── src/lib.rs                   # De-hyphenation, SimHash, and Binary Tape (ATHN)
-│   ├── tests/                           # Backend pytest suite (66 tests)
+│   ├── tests/                           # Backend pytest suite (74 tests)
 │   └── requirements.txt                 # Backend Python dependencies
 │
 ├── releases/                            # Distribution release binaries
@@ -339,7 +351,9 @@ Athena/
 │
 ├── scripts/                             # Operational tooling & verification engines
 │   ├── run_athena.py                    # Unified supervisor (FastAPI + LAN IP discovery)
+│   ├── run_athena.sh                    # Bash supervisor for macOS / Linux
 │   ├── start_athena.bat                 # 1-Click Windows launcher
+│   ├── strict_goal_judge.py             # Strict 8-gate architectural invariant evaluator
 │   └── verify_release.py                # Release binary integrity verifier
 │
 └── docs/                                # Architectural Decision Records & Specifications
@@ -360,6 +374,11 @@ When running the Companion Engine, the FastAPI server mounts the Flutter Web cli
 | `/api/documents/upload-url` | `POST` | `{"url": "https://..."}` | `{"document_id": "doc_...", "status": "processing"}` | Imports document directly from a public URL |
 | `/api/documents/sample` | `POST` | None | `{"document_id": "doc_sample_...", "status": "ready"}`| Seeds sample book for instant reading |
 | `/api/documents/{id}/reader`| `GET` | None | `{"document": {...}, "chunks": [...], "cards": [...]}`| Retrieves lossless chunks and grounded marginalia cards |
+| `/api/documents/{id}/cards/generate` | `POST` | `{"chunk_index": 4}` | `{"status": "ok", "cards": [...]}` | Synthesizes grounded marginalia cards for target chunk |
+| `/api/documents/{id}/chapters` | `GET` | None | `{"chapters": [...]}` | Returns detected structural headings and table of contents |
+| `/api/documents/{id}/vibe-check` | `POST` | `{"chunk_index": 0}` | `{"status": "ok", "archetype": "..."}` | Evaluates epistemic curiosity triggers and conceptual density |
+| `/api/documents/{id}/export-markdown` | `GET` | None | Streams markdown text | Exports full book with verbatim text and inline marginalia |
+| `/api/documents/{id}/tape` | `GET` | None | Streams `.athena.bin` | Streams zero-JSON flat binary book tape buffer |
 | `/api/documents/{id}/search`| `GET` | `?q=...&top_k=8` | `{"document_id": "...", "results": [...]}` | Hybrid search across book (BM25 + Dense + RRF) |
 | `/api/documents/{id}/progress`| `POST` | `{"chunk_index": 42}` | `{"status": "ok"}` | Persists active reading position across devices |
 | `/api/ask` | `POST` | `{"document_id": "...", "chunk_id": "...", "question": "..."}` | `{"answer": "...", "status": "ok"}` | Grounded Q&A against the active passage via configured key |
@@ -375,14 +394,20 @@ When running the Companion Engine, the FastAPI server mounts the Flutter Web cli
 ## 9. Development & Verification Workflow
 
 ```bash
-# Backend pytest suite (66 tests)
+# Backend pytest suite (74 tests)
 pytest backend/tests -q
 
-# Flutter static analysis
-flutter analyze lib
+# Flutter static analysis (0 issues)
+flutter analyze
 
-# Flutter unit & widget test suites (45 tests)
+# Flutter unit & widget test suites (101 tests)
 flutter test
+
+# Comprehensive 8-Gate Release Verification Suite
+python scripts/verify_release.py
+
+# Strict Architectural Invariant & Monorepo Judge
+python scripts/strict_goal_judge.py
 
 # Build Android production APK
 flutter build apk --release

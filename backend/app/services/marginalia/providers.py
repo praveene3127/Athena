@@ -16,6 +16,7 @@ def get_shared_async_client() -> httpx.AsyncClient:
             _shared_async_client = httpx.AsyncClient(
                 timeout=DEFAULT_TIMEOUT,
                 follow_redirects=False,
+                trust_env=False,
                 limits=httpx.Limits(max_keepalive_connections=10, max_connections=20),
                 http2=True,
             )
@@ -24,6 +25,7 @@ def get_shared_async_client() -> httpx.AsyncClient:
             _shared_async_client = httpx.AsyncClient(
                 timeout=DEFAULT_TIMEOUT,
                 follow_redirects=False,
+                trust_env=False,
                 limits=httpx.Limits(max_keepalive_connections=10, max_connections=20),
                 http2=False,
             )
@@ -149,7 +151,6 @@ async def fetch_provider_models(
             headers["anthropic-version"] = "2023-06-01"
         elif auth_type in ("goog_api_key", "query_param_or_bearer") or provider_key == "gemini":
             headers["x-goog-api-key"] = clean_key
-            params["key"] = clean_key
 
     try:
         client = get_shared_async_client()
@@ -256,10 +257,11 @@ async def test_provider_model(
 
     if provider_key == "gemini":
         # 1. First test credentials via official models catalog
-        models_url = f"https://generativelanguage.googleapis.com/v1beta/models?key={clean_key}"
+        models_url = "https://generativelanguage.googleapis.com/v1beta/models"
+        headers = {"x-goog-api-key": clean_key}
         try:
             client = get_shared_async_client()
-            resp = await client.get(models_url)
+            resp = await client.get(models_url, headers=headers)
             latency_ms = int((time.perf_counter() - t0) * 1000)
             if resp.status_code == 200:
                 data = resp.json()

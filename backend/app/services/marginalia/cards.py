@@ -49,6 +49,16 @@ from sqlmodel import Session, select
 logger = logging.getLogger(__name__)
 
 _EVIDENCE_CACHE: Dict[str, List[Dict[str, str]]] = {}
+_EVIDENCE_CACHE_MAX_SIZE = 512
+
+
+def _cache_evidence(key: str, data: List[Dict[str, str]]) -> None:
+    """Store in _EVIDENCE_CACHE with FIFO/LRU eviction cap at 512 entries."""
+    if len(_EVIDENCE_CACHE) >= _EVIDENCE_CACHE_MAX_SIZE:
+        # Pop oldest entry (FIFO in Python 3.7+ dict)
+        oldest_key = next(iter(_EVIDENCE_CACHE))
+        _EVIDENCE_CACHE.pop(oldest_key, None)
+    _EVIDENCE_CACHE[key] = data
 
 
 def _fetch_multi_source_evidence(
@@ -72,11 +82,15 @@ def _fetch_multi_source_evidence(
     try:
         academic_evidence = fetch_trusted_academic_evidence(concept_label, query, timeout=2.5)
         for ae in academic_evidence:
+            text_extract = (ae.get("abstract") or ae.get("title", ""))[:400]
+            pub = ae.get("publisher", "Peer-Reviewed Source")
             results.append({
                 "title": ae.get("title", "Academic Publication"),
-                "publisher": ae.get("publisher", "Peer-Reviewed Source"),
+                "publisher": pub,
+                "source": pub,
                 "url": ae.get("url", "https://doi.org"),
-                "extract": (ae.get("abstract") or ae.get("title", ""))[:400],
+                "extract": text_extract,
+                "snippet": text_extract,
                 "source_type": "academic_paper",
             })
     except Exception as exc:
@@ -113,11 +127,14 @@ def _fetch_multi_source_evidence(
                 y = w.get("publication_year") or ""
                 c = w.get("cited_by_count") or 0
                 doi = w.get("doi") or w.get("id") or "https://openalex.org"
+                ext = abst or t
                 out.append({
                     "title": f"Study ({y}, cited {c}x): {t}",
                     "publisher": "openalex.org",
+                    "source": "openalex.org",
                     "url": doi,
-                    "extract": abst or t,
+                    "extract": ext,
+                    "snippet": ext,
                     "source_type": "academic_paper",
                 })
             return out
@@ -147,11 +164,14 @@ def _fetch_multi_source_evidence(
                 pub = pub_parts[0][0] or "" if pub_parts and pub_parts[0] else ""
                 abst = item.get("abstract") or ""
                 abst_clean = re.sub(r"<[^>]+>", "", abst).strip()[:400]
+                ext = abst_clean or t
                 out.append({
                     "title": f"Study ({pub}, cited {c}x): {t}",
                     "publisher": "crossref.org",
+                    "source": "crossref.org",
                     "url": link,
-                    "extract": abst_clean or t,
+                    "extract": ext,
+                    "snippet": ext,
                     "source_type": "academic_paper",
                 })
             return out
@@ -169,11 +189,14 @@ def _fetch_multi_source_evidence(
                 c = p.get("citationCount") or 0
                 u = p.get("url") or "https://semanticscholar.org"
                 a = p.get("abstract") or ""
+                ext = a[:400]
                 out.append({
                     "title": f"{t} ({y}, {c} citations)",
                     "publisher": "semanticscholar.org",
+                    "source": "semanticscholar.org",
                     "url": u,
-                    "extract": a[:400],
+                    "extract": ext,
+                    "snippet": ext,
                     "source_type": "academic_paper",
                 })
             return out
@@ -188,20 +211,26 @@ def _fetch_multi_source_evidence(
             txt = data.get("AbstractText") or data.get("Answer") or ""
             link = data.get("AbstractURL")
             if txt and link:
+                ext = txt[:400]
                 out.append({
                     "title": data.get("Heading") or clean_q.title(),
                     "publisher": "duckduckgo.com",
+                    "source": "duckduckgo.com",
                     "url": link,
-                    "extract": txt[:400],
+                    "extract": ext,
+                    "snippet": ext,
                     "source_type": "web_context",
                 })
             for topic in data.get("RelatedTopics", [])[:2]:
                 if isinstance(topic, dict) and topic.get("Text") and topic.get("FirstURL"):
+                    ext = topic.get("Text")[:300]
                     out.append({
                         "title": topic.get("Text")[:60],
                         "publisher": "duckduckgo.com",
+                        "source": "duckduckgo.com",
                         "url": topic.get("FirstURL"),
-                        "extract": topic.get("Text")[:300],
+                        "extract": ext,
+                        "snippet": ext,
                         "source_type": "web_context",
                     })
             return out
@@ -220,8 +249,10 @@ def _fetch_multi_source_evidence(
                 out.append({
                     "title": f"Debate: {t}",
                     "publisher": "news.ycombinator.com",
+                    "source": "news.ycombinator.com",
                     "url": u,
                     "extract": t,
+                    "snippet": t,
                     "source_type": "discourse",
                 })
             return out
@@ -261,17 +292,21 @@ def _fetch_multi_source_evidence(
             if wdata and wdata.get("citation", {}).get("url"):
                 cit = wdata["citation"]
                 if cit.get("url") not in seen_urls:
+                    w_extract = wdata.get("extract", "")[:400]
+                    w_pub = cit.get("publisher") or "en.wikipedia.org"
                     deduped.append({
                         "title": cit.get("title") or f"{concept_label} (Wikipedia)",
-                        "publisher": cit.get("publisher") or "en.wikipedia.org",
+                        "publisher": w_pub,
+                        "source": w_pub,
                         "url": cit.get("url"),
-                        "extract": wdata.get("extract", "")[:400],
+                        "extract": w_extract,
+                        "snippet": w_extract,
                         "source_type": "encyclopedia",
                     })
         except Exception:
             pass
 
-    _EVIDENCE_CACHE[cache_key] = deduped
+    _cache_evidence(cache_key, deduped)
     return deduped
 
 

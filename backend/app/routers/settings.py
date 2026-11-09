@@ -20,7 +20,12 @@ from app.services.marginalia.providers import (
     fetch_provider_models,
     test_provider_model,
 )
-from app.security import validate_public_http_url
+from app.security import (
+    validate_provider_http_url,
+    validate_public_http_url,
+    encrypt_secret,
+    decrypt_secret,
+)
 
 logger = logging.getLogger("athena.settings")
 router = APIRouter(prefix="/api/settings", tags=["settings"])
@@ -79,15 +84,15 @@ async def fetch_models(payload: FetchModelsRequest, session: Session = Depends(g
     """Dynamically queries the provider's live models catalog API."""
     api_key = payload.api_key
     if payload.base_url:
-        validate_public_http_url(payload.base_url)
+        validate_provider_http_url(payload.base_url, allow_local=(payload.provider.lower() == "custom"))
     # If key wasn't supplied or is masked placeholder, check saved DB setting
     if not api_key or "..." in api_key:
         saved = session.exec(select(AISettings).where(AISettings.id == "global")).first()
         if saved:
             if saved.primary_provider == payload.provider:
-                api_key = saved.primary_api_key
+                api_key = decrypt_secret(saved.primary_api_key)
             elif saved.fallback_provider == payload.provider:
-                api_key = saved.fallback_api_key
+                api_key = decrypt_secret(saved.fallback_api_key)
 
     models = await fetch_provider_models(
         provider=payload.provider,
@@ -102,14 +107,14 @@ async def test_connection(payload: TestConnectionRequest, session: Session = Dep
     """Tests live connection to the provider with a 5-token completion ping."""
     api_key = payload.api_key
     if payload.base_url:
-        validate_public_http_url(payload.base_url)
+        validate_provider_http_url(payload.base_url, allow_local=(payload.provider.lower() == "custom"))
     if not api_key or "..." in api_key:
         saved = session.exec(select(AISettings).where(AISettings.id == "global")).first()
         if saved:
             if saved.primary_provider == payload.provider:
-                api_key = saved.primary_api_key
+                api_key = decrypt_secret(saved.primary_api_key)
             elif saved.fallback_provider == payload.provider:
-                api_key = saved.fallback_api_key
+                api_key = decrypt_secret(saved.fallback_api_key)
 
     result = await test_provider_model(
         provider=payload.provider,
@@ -126,15 +131,17 @@ async def get_ai_config(session: Session = Depends(get_session)):
     saved = session.exec(select(AISettings).where(AISettings.id == "global")).first()
 
     if saved and (saved.primary_api_key or saved.primary_provider == "custom"):
+        decrypted_primary = decrypt_secret(saved.primary_api_key)
+        decrypted_fallback = decrypt_secret(saved.fallback_api_key)
         return {
-            "is_configured": bool(saved.primary_api_key or saved.primary_provider == "custom"),
+            "is_configured": bool(decrypted_primary or saved.primary_provider == "custom"),
             "primary_provider": saved.primary_provider,
             "primary_model": saved.primary_model or "",
-            "primary_api_key_masked": _mask_key(saved.primary_api_key),
+            "primary_api_key_masked": _mask_key(decrypted_primary),
             "primary_base_url": saved.primary_base_url,
             "fallback_provider": saved.fallback_provider,
             "fallback_model": saved.fallback_model,
-            "fallback_api_key_masked": _mask_key(saved.fallback_api_key),
+            "fallback_api_key_masked": _mask_key(decrypted_fallback),
             "fallback_base_url": saved.fallback_base_url,
         }
 
@@ -172,17 +179,23 @@ async def save_ai_config(
         saved = AISettings(id="global")
         session.add(saved)
 
+    # Validate base URLs
+    if payload.primary_base_url:
+        validate_provider_http_url(payload.primary_base_url, allow_local=(payload.primary_provider.lower() == "custom"))
+    if payload.fallback_base_url:
+        validate_provider_http_url(payload.fallback_base_url, allow_local=((payload.fallback_provider or "").lower() == "custom"))
+
     # Primary provider & key update
     saved.primary_provider = payload.primary_provider
     if payload.primary_api_key and "..." not in payload.primary_api_key and "••••" not in payload.primary_api_key:
-        saved.primary_api_key = payload.primary_api_key.strip()
+        saved.primary_api_key = encrypt_secret(payload.primary_api_key.strip())
     saved.primary_model = payload.primary_model or ""
     saved.primary_base_url = payload.primary_base_url
 
     # Fallback provider & key update
     saved.fallback_provider = payload.fallback_provider
     if payload.fallback_api_key and "..." not in payload.fallback_api_key and "••••" not in payload.fallback_api_key:
-        saved.fallback_api_key = payload.fallback_api_key.strip()
+        saved.fallback_api_key = encrypt_secret(payload.fallback_api_key.strip())
     elif not payload.fallback_provider:
         saved.fallback_api_key = None
     saved.fallback_model = payload.fallback_model

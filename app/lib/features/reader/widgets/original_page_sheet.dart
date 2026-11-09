@@ -1,6 +1,8 @@
 import 'package:flutter/material.dart';
+import 'package:athena/core/config/config.dart';
 import 'package:athena/core/theme/theme.dart';
 import 'package:athena/core/api/api_client.dart';
+import 'package:athena/services/local_database.dart';
 
 /// Modal bottom sheet allowing inspection of the exact original PDF page.
 /// Uses InteractiveViewer for pan & zoom.
@@ -127,86 +129,124 @@ class OriginalPageSheet extends StatelessWidget {
                 ),
               ),
             ),
-            // Interactive viewer for high-res page image
+            // Interactive viewer for high-res page image or offline text fallback
             Expanded(
-              child: InteractiveViewer(
-                minScale: 1.0,
-                maxScale: 4.0,
-                child: Center(
-                  child: Image.network(
-                    imageUrl,
-                    fit: BoxFit.contain,
-                    loadingBuilder: (context, child, loadingProgress) {
-                      if (loadingProgress == null) return child;
-                      final total = loadingProgress.expectedTotalBytes;
-                      final loaded = loadingProgress.cumulativeBytesLoaded;
-                      final value =
-                          total != null && total > 0 ? loaded / total : null;
-                      return Center(
-                        child: Column(
-                          mainAxisSize: MainAxisSize.min,
-                          children: [
-                            CircularProgressIndicator(
-                              value: value,
-                              color: isDark ? Colors.white : AppTheme.ink,
-                            ),
-                            const SizedBox(height: 12),
-                            Text(
-                              'Rendering high-res page...',
-                              style: TextStyle(
-                                fontFamily: AppTheme.fontUI,
-                                color: isDark
-                                    ? AppTheme.darkTextMuted
-                                    : AppTheme.textMuted,
-                                fontSize: 13,
+              child: AppConfig.isStandaloneMobile
+                  ? _buildOfflinePageContent(context, isDark)
+                  : InteractiveViewer(
+                      minScale: 1.0,
+                      maxScale: 4.0,
+                      child: Center(
+                        child: Image.network(
+                          imageUrl,
+                          headers: AppConfig.pairingToken.isNotEmpty
+                              ? {'X-Athena-Pairing-Token': AppConfig.pairingToken}
+                              : null,
+                          fit: BoxFit.contain,
+                          loadingBuilder: (context, child, loadingProgress) {
+                            if (loadingProgress == null) return child;
+                            final total = loadingProgress.expectedTotalBytes;
+                            final loaded =
+                                loadingProgress.cumulativeBytesLoaded;
+                            final value = total != null && total > 0
+                                ? loaded / total
+                                : null;
+                            return Center(
+                              child: Column(
+                                mainAxisSize: MainAxisSize.min,
+                                children: [
+                                  CircularProgressIndicator(
+                                    value: value,
+                                    color: isDark ? Colors.white : AppTheme.ink,
+                                  ),
+                                  const SizedBox(height: 12),
+                                  Text(
+                                    'Rendering high-res page...',
+                                    style: TextStyle(
+                                      fontFamily: AppTheme.fontUI,
+                                      color: isDark
+                                          ? AppTheme.darkTextMuted
+                                          : AppTheme.textMuted,
+                                      fontSize: 13,
+                                    ),
+                                  ),
+                                ],
                               ),
-                            ),
-                          ],
+                            );
+                          },
+                          errorBuilder: (context, error, stackTrace) {
+                            return _buildOfflinePageContent(context, isDark);
+                          },
                         ),
-                      );
-                    },
-                    errorBuilder: (context, error, stackTrace) {
-                      return Center(
-                        child: Padding(
-                          padding: const EdgeInsets.all(24.0),
-                          child: Column(
-                            mainAxisSize: MainAxisSize.min,
-                            children: [
-                              const Icon(Icons.broken_image_rounded,
-                                  color: Colors.redAccent, size: 48),
-                              const SizedBox(height: 12),
-                              Text(
-                                'Could not load page image.',
-                                style: TextStyle(
-                                  fontFamily: AppTheme.fontUI,
-                                  color: isDark ? Colors.white : AppTheme.ink,
-                                  fontWeight: FontWeight.bold,
-                                ),
-                              ),
-                              const SizedBox(height: 4),
-                              Text(
-                                error.toString(),
-                                style: TextStyle(
-                                  fontFamily: AppTheme.fontUI,
-                                  color: isDark
-                                      ? AppTheme.darkTextMuted
-                                      : AppTheme.textMuted,
-                                  fontSize: 12,
-                                ),
-                                textAlign: TextAlign.center,
-                              ),
-                            ],
-                          ),
-                        ),
-                      );
-                    },
-                  ),
-                ),
-              ),
+                      ),
+                    ),
             ),
           ],
         ),
       ),
+    );
+  }
+
+  Widget _buildOfflinePageContent(BuildContext context, bool isDark) {
+    return FutureBuilder<List<Map<String, dynamic>>>(
+      future: LocalDatabase.instance.getChunks(documentId),
+      builder: (context, snapshot) {
+        if (snapshot.connectionState == ConnectionState.waiting) {
+          return const Center(child: CircularProgressIndicator());
+        }
+        final chunks = snapshot.data ?? [];
+        final pageChunks = chunks.where((c) {
+          final p = (c['page_number'] as num?)?.toInt() ??
+              ((c['page_start'] as num?)?.toInt() ?? 1);
+          return p == pageNumber;
+        }).toList();
+
+        final displayText = pageChunks.isNotEmpty
+            ? pageChunks
+                .map((c) => c['raw_text']?.toString() ?? '')
+                .join('\n\n')
+            : (chunks.isNotEmpty
+                ? 'Page text preserved in local archive for $pageReference.'
+                : 'Page content preserved locally.');
+
+        return Container(
+          padding: const EdgeInsets.all(24.0),
+          alignment: Alignment.topLeft,
+          child: SingleChildScrollView(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Row(
+                  children: [
+                    const Icon(Icons.menu_book_outlined,
+                        size: 16, color: Color(0xFFD97706)),
+                    const SizedBox(width: 8),
+                    Text(
+                      'OFFLINE PAGE TEXT · ${pageReference ?? "PAGE $pageNumber"}',
+                      style: const TextStyle(
+                        fontFamily: AppTheme.fontMono,
+                        fontSize: 11,
+                        fontWeight: FontWeight.w700,
+                        color: Color(0xFFD97706),
+                      ),
+                    ),
+                  ],
+                ),
+                const SizedBox(height: 16),
+                Text(
+                  displayText,
+                  style: TextStyle(
+                    fontFamily: AppTheme.fontReading,
+                    fontSize: 15.5,
+                    height: 1.65,
+                    color: isDark ? const Color(0xFFE5E5E5) : AppTheme.ink,
+                  ),
+                ),
+              ],
+            ),
+          ),
+        );
+      },
     );
   }
 }

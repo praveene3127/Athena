@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "athena-backend"
-version = "0.1.0"
+version = "1.1.0"
 description = "Athena High-Performance Reading Engine Backend"
 license = "GPL-3.0-or-later"
 readme = "README.md"

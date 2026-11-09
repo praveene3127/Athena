@@ -30,10 +30,16 @@ def create_or_save_user_quote(
     req: UserQuoteRequest, session: Session = Depends(get_session)
 ) -> Dict[str, Any]:
     """Saves or updates an authentic user passage quote into the SQLite ContextCard vault."""
+    # Verify document exists
+    doc = session.get(Document, req.document_id)
+    if not doc:
+        raise AppException("NOT_FOUND", "Document not found", status_code=404)
+
     card_id = req.id or f"quote_{uuid.uuid4().hex[:12]}"
     effective_chunk_id = req.source_chunk_id or req.chunk_id or ""
-    effective_body = req.body or req.quote_text or ""
-    effective_exact = req.exact_quote or req.quote_text or (effective_body[:280] if len(effective_body) > 280 else effective_body)
+    effective_body = (req.body or req.quote_text or "")[:4000]
+    effective_title = (req.title or "Saved Passage")[:300]
+    effective_exact = (req.exact_quote or req.quote_text or (effective_body[:280] if len(effective_body) > 280 else effective_body))[:2000]
 
     card = session.get(ContextCard, card_id)
     if not card:
@@ -43,7 +49,7 @@ def create_or_save_user_quote(
             source_chunk_id=effective_chunk_id,
             concept_name="Saved Passage",
             card_type="user_highlight",
-            title=req.title or "Saved Passage",
+            title=effective_title,
             body=effective_body,
             why_here=f"From: {req.document_title}" if req.document_title else "Saved directly by reader",
             exact_quote=effective_exact,
@@ -55,10 +61,12 @@ def create_or_save_user_quote(
             verified=True,
         )
     else:
+        # Cross-document ownership check
+        if card.document_id != req.document_id:
+            raise AppException("FORBIDDEN", "Card does not belong to the specified document", status_code=403)
         card.saved = True
         card.dismissed = False
-        if req.title:
-            card.title = req.title
+        card.title = effective_title
         if effective_body:
             card.body = effective_body
         if effective_exact:

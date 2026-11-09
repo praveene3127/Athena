@@ -18,6 +18,7 @@ from app.config import (
     GEMINI_API_KEY_SECONDARY,
     GEMINI_MODEL,
 )
+from app.security import decrypt_secret
 
 logger = logging.getLogger(__name__)
 
@@ -258,7 +259,7 @@ class LLMService:
 
         if active_settings and (active_settings.primary_api_key or active_settings.primary_provider == "custom"):
             p_prov = (active_settings.primary_provider or "openrouter").lower()
-            p_key = active_settings.primary_api_key or ""
+            p_key = decrypt_secret(active_settings.primary_api_key) or ""
             p_model = model or active_settings.primary_model or ""
             p_url = active_settings.primary_base_url
 
@@ -291,7 +292,7 @@ class LLMService:
 
             if active_settings.fallback_provider and (active_settings.fallback_api_key or active_settings.fallback_provider == "custom"):
                 f_prov = active_settings.fallback_provider.lower()
-                f_key = active_settings.fallback_api_key or ""
+                f_key = decrypt_secret(active_settings.fallback_api_key) or ""
                 f_url = active_settings.fallback_base_url
                 f_model = active_settings.fallback_model or ""
 
@@ -965,13 +966,16 @@ class LLMService:
                     except Exception:
                         pass
 
-            # 3. Always merge verified reference_citations
+            # 3. Reference citations handling: If model generated text without web search, prefer verified reference_citations
             if reference_citations:
-                for ref_cite in reference_citations:
-                    u = ref_cite.get("url")
-                    if u and u not in seen_urls:
-                        seen_urls.add(u)
-                        citations.append(ref_cite)
+                if not gemini_response or not citations:
+                    citations = list(reference_citations)
+                else:
+                    for ref_cite in reference_citations:
+                        u = ref_cite.get("url")
+                        if u and u not in seen_urls:
+                            seen_urls.add(u)
+                            citations.append(ref_cite)
 
             if not citations:
                 return None

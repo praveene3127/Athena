@@ -301,8 +301,9 @@ def extract_document_content(
         raw_text_file.close()
         raw_text_file = None
 
-        # Scanned PDF validation
-        if (total_pages > 0 and empty_pages_count / total_pages > 0.5) or triage_data["is_primarily_scanned"]:
+        # Scanned PDF validation (only applicable to PDF format; EPUB is digital XHTML by specification)
+        is_pdf = Path(file_path).suffix.lower() == ".pdf"
+        if is_pdf and ((total_pages > 0 and empty_pages_count / total_pages > 0.5) or triage_data["is_primarily_scanned"]):
             raise AppException("SCANNED_NOT_SUPPORTED")
 
         # Total usable words validation

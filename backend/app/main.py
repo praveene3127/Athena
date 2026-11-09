@@ -64,12 +64,11 @@ async def require_lan_pairing_token(request: Request, call_next):
         client_host = getattr(request.client, "host", "") if request.client else ""
         is_loopback = client_host in {"127.0.0.1", "::1", "localhost", "testclient"}
         path = request.url.path
-        is_mutating = request.method not in {"GET", "HEAD", "OPTIONS"}
-        is_protected_settings = path.startswith("/api/settings")
-        is_protected_api = path.startswith("/api/") and path not in {"/api/health", "/api/pair-info", "/api"}
-        if not is_loopback and ((is_mutating and is_protected_api) or is_protected_settings):
+        is_exempt = path in {"/api/health", "/api/pair-info", "/api/version", "/health", "/api"} or not path.startswith("/api/")
+        if not is_loopback and not is_exempt:
             token = request.headers.get("X-Athena-Pairing-Token", "").strip()
-            if not token or token != pairing_token:
+            import secrets
+            if not token or not secrets.compare_digest(token, pairing_token):
                 return JSONResponse(
                     status_code=401,
                     content={
@@ -125,7 +124,7 @@ app.add_middleware(
     CORSMiddleware,
     allow_origins=sorted(_EXPLICIT_ALLOWED_ORIGINS),
     allow_origin_regex=_ALLOWED_ORIGIN.pattern,
-    allow_credentials=True,
+    allow_credentials=False,
     allow_methods=["GET", "POST", "PUT", "DELETE", "OPTIONS", "HEAD"],
     allow_headers=["Content-Type", "X-Athena-Context-Token", "X-Athena-Pairing-Token", "Authorization", "Accept"],
 )
@@ -178,13 +177,22 @@ def get_root():
 @app.get("/health")
 @app.get("/api/health")
 def get_health():
-    """Fast liveness check; never opens SQLite or initializes/downloads a model."""
+    """Liveness & readiness check; verifies SQLite reachability."""
     from app.services.edge.novelty import embedding_readiness
-    db_status = "configured"
+    db_status = "ok"
+    try:
+        from app.db import engine
+        from sqlalchemy import text
+        with engine.connect() as conn:
+            conn.execute(text("SELECT 1"))
+    except Exception as db_err:
+        logger.warning("Database health check failed: %s", db_err)
+        db_status = "error"
+
     model_status = embedding_readiness()
 
     return {
-        "status": "ok",
+        "status": "ok" if db_status == "ok" else "degraded",
         "database": db_status,
         "model_status": model_status,
         "llm_configured": any(os.environ.get(name, "").strip() for name in (
@@ -207,14 +215,23 @@ def get_pair_info():
         pass
 
     tunnel_url = os.environ.get("TUNNEL_URL") or os.environ.get("CLOUDFLARE_URL")
+    try:
+        api_port = int(os.environ.get("ATHENA_PORT", "8000"))
+    except ValueError:
+        api_port = 8000
+    try:
+        web_port = int(os.environ.get("ATHENA_WEB_PORT", "8080"))
+    except ValueError:
+        web_port = 8080
+
     return {
         "status": "ok",
         "lan_ip": lan_ip,
-        "api_port": 8000,
-        "web_port": 8080,
-        "base_url": f"http://{lan_ip}:8000",
-        "phone_wifi_url": f"http://{lan_ip}:8000",
-        "desktop_url": "http://127.0.0.1:8080",
+        "api_port": api_port,
+        "web_port": web_port,
+        "base_url": f"http://{lan_ip}:{api_port}",
+        "phone_wifi_url": f"http://{lan_ip}:{api_port}",
+        "desktop_url": f"http://127.0.0.1:{web_port}",
         "tunnel_url": tunnel_url,
         "pairing_required": bool(os.environ.get("ATHENA_PAIRING_TOKEN", "").strip()),
     }

@@ -1,6 +1,9 @@
+import logging
 from typing import Any, Dict
 from fastapi import Request, status
 from fastapi.responses import JSONResponse
+
+logger = logging.getLogger("athena.errors")
 
 ERROR_MESSAGES: Dict[str, str] = {
     "UNSUPPORTED_FILE": "Please choose a PDF or EPUB book.",
@@ -41,7 +44,8 @@ async def app_exception_handler(request: Request, exc: AppException) -> JSONResp
 
 
 async def generic_exception_handler(request: Request, exc: Exception) -> JSONResponse:
-    """Catch-all handler ensuring even unhandled 500s return the standardized envelope."""
+    """Catch-all handler ensuring even unhandled 500s return the standardized envelope with server log."""
+    logger.exception("Unhandled server exception processing %s %s: %s", request.method, request.url.path, exc)
     return JSONResponse(
         status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
         content=error_envelope("INTERNAL"),

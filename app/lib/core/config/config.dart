@@ -33,6 +33,33 @@ class AppConfig {
 
   static String? get runtimeBaseUrl => _runtimeBaseUrl;
 
+  /// Checks whether a given URL is permitted for HTTP traffic.
+  /// HTTPS is always permitted. HTTP is ONLY permitted for loopback
+  /// (127.0.0.1, localhost, 10.0.2.2, ::1), mDNS (*.local), and private RFC1918
+  /// LAN IP ranges (192.168.x.x, 10.x.x.x, 172.16-31.x.x).
+  static bool isPermittedHttpUrl(String url) {
+    final uri = Uri.tryParse(url.trim());
+    if (uri == null) return false;
+    if (uri.scheme == 'https') return true;
+    if (uri.scheme != 'http') return false;
+
+    final host = uri.host.toLowerCase();
+    if (host == '127.0.0.1' || host == 'localhost' || host == '10.0.2.2' || host == '::1') {
+      return true;
+    }
+    if (host.endsWith('.local')) return true;
+
+    // IPv4 RFC1918 check:
+    final parts = host.split('.');
+    if (parts.length == 4 && parts.every((p) => int.tryParse(p) != null)) {
+      final octets = parts.map(int.parse).toList();
+      if (octets[0] == 10) return true;
+      if (octets[0] == 192 && octets[1] == 168) return true;
+      if (octets[0] == 172 && octets[1] >= 16 && octets[1] <= 31) return true;
+    }
+    return false;
+  }
+
   /// Load runtime URL and pairing token from local preferences.
   static Future<void> init() async {
     try {

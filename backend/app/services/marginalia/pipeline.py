@@ -196,6 +196,16 @@ class ReadAheadPipeline:
                 c.sequence: self.score_epistemic_curiosity(c.raw_text) for c in chunks
             }
 
+    def evict_document(self, doc_id: str) -> None:
+        """Evicts in-memory pipeline state for doc_id on document deletion."""
+        self.chunk_densities.pop(doc_id, None)
+        self.reader_cursor.pop(doc_id, None)
+        self.last_heartbeat.pop(doc_id, None)
+        self.viewport_epochs.pop(doc_id, None)
+        self.subscribers.pop(doc_id, None)
+        self.in_flight = {item for item in self.in_flight if item[0] != doc_id}
+        logger.info("Evicted pipeline state for deleted document %s", doc_id)
+
     def get_in_flight_indices(self, doc_id: str) -> List[int]:
         """Returns sequence indices of chunks currently being processed or in queue for doc_id."""
         return [seq for (d_id, seq) in self.in_flight if d_id == doc_id]
@@ -442,7 +452,7 @@ class ReadAheadPipeline:
                     search_query, concept.name, active_archetype, self.wiki_client
                 )
                 evidence_text = "\n\n".join(
-                    f"[{e.get('source', 'Source').upper()} - {e.get('title', 'Study')} ({e.get('year', '')})]: {e.get('snippet', '')}"
+                    f"[{e.get('source', e.get('publisher', 'Source')).upper()} - {e.get('title', 'Study')} ({e.get('year', '')})]: {(e.get('snippet') or e.get('extract') or '').strip()}"
                     for e in evidence_list
                 )
 
@@ -457,8 +467,8 @@ class ReadAheadPipeline:
                     f"[Passage {c.sequence}]: {c.raw_text.strip()}" for c in prev_chunks
                 )
 
-                # --- TIER 2: Gemini Google Search Grounding with 3-Chunk Narrative Arc ---
-                if self.llm_service.is_gemini_configured:
+                # --- TIER 2: LLM Grounding with 3-Chunk Narrative Arc ---
+                if self.llm_service.is_configured:
                     adjacent = session.exec(
                         select(ReadingChunk).where(
                             ReadingChunk.document_id == doc_id,
@@ -523,7 +533,7 @@ class ReadAheadPipeline:
                         if not citations and evidence_list:
                             for ev in evidence_list[:2]:
                                 citations.append({
-                                    "source": ev.get("source", "academic"),
+                                    "source": ev.get("source") or ev.get("publisher") or "academic",
                                     "url": ev.get("url", ""),
                                     "title": ev.get("title", ""),
                                     "year": ev.get("year", ""),
@@ -574,11 +584,11 @@ class ReadAheadPipeline:
                 citations_list = []
                 if evidence_list:
                     top_ev = evidence_list[0]
-                    ev_snippet = top_ev.get("snippet", "").strip()
+                    ev_snippet = (top_ev.get("snippet") or top_ev.get("extract") or "").strip()
                     if len(ev_snippet) > 20:
                         evidence_body = ev_snippet
                         citations_list.append({
-                            "source": top_ev.get("source", "research"),
+                            "source": top_ev.get("source") or top_ev.get("publisher") or "research",
                             "url": top_ev.get("url", ""),
                             "title": top_ev.get("title", ""),
                             "year": top_ev.get("year", ""),

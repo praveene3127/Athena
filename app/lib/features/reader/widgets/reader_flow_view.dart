@@ -117,6 +117,7 @@ class ReaderFlowView extends StatelessWidget {
         if (item.isReadingChunk) {
           return Center(
             child: ChunkWidget(
+              documentId: documentId,
               chunk: item,
               fontSize: fontSize,
               fontFamily: fontFamily,

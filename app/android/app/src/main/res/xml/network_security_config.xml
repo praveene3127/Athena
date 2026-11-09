@@ -1,6 +1,8 @@
 <?xml version="1.0" encoding="utf-8"?>
 <network-security-config>
-  <base-config cleartextTrafficPermitted="false">
+  <!-- Permit cleartext at the Android XML layer so local RFC1918 Wi-Fi IPs (192.168.x.x, 10.x.x.x, 172.16-31.x.x) can connect.
+       Dart (ApiClient & AppConfig) strictly enforces that plain http:// is rejected for any public internet host! -->
+  <base-config cleartextTrafficPermitted="true">
     <trust-anchors>
       <certificates src="system" />
     </trust-anchors>

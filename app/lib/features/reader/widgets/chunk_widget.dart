@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
+import 'package:athena/core/api/api_client.dart';
 import 'package:athena/core/theme/theme.dart';
 import 'package:athena/core/theme/reader_theme.dart';
 import 'package:athena/models/document.dart';
@@ -11,12 +12,14 @@ import 'package:athena/services/local_database.dart';
 /// tabular monospace metadata headers, high-contrast serif prose, code block isolation,
 /// and interactive inline text/code delta editing with personal note callouts.
 class ChunkWidget extends StatefulWidget {
+  final String documentId;
   final ReaderItem chunk;
   final double fontSize;
   final VoidCallback onViewOriginalPage;
   final VoidCallback onAsk;
   final void Function([String? selectedText])? onSaveQuote;
   final VoidCallback? onDeepDive;
+  final VoidCallback? onPlainTake;
   final VoidCallback? onGenerateCard;
   final bool isFeedMode;
   final bool bionicFocusEnabled;
@@ -30,12 +33,14 @@ class ChunkWidget extends StatefulWidget {
 
   const ChunkWidget({
     super.key,
+    this.documentId = '',
     required this.chunk,
     required this.fontSize,
     required this.onViewOriginalPage,
     required this.onAsk,
     this.onSaveQuote,
     this.onDeepDive,
+    this.onPlainTake,
     this.onGenerateCard,
     this.isFeedMode = true,
     this.bionicFocusEnabled = false,
@@ -92,9 +97,11 @@ class _ChunkWidgetState extends State<ChunkWidget> {
   Future<void> _saveEdit() async {
     final newText = _textController.text.trim();
     final newNote = _noteController.text.trim();
-    final docId = widget.chunk.id.contains('-c')
-        ? widget.chunk.id.split('-c').first
-        : (widget.chunk.id.contains('chunk_') ? widget.chunk.id.split('_')[1] : 'default_doc');
+    final docId = widget.documentId.isNotEmpty
+        ? widget.documentId
+        : (widget.chunk.id.contains('-c')
+            ? widget.chunk.id.split('-c').first
+            : (widget.chunk.id.contains('chunk_') ? widget.chunk.id.split('_')[1] : 'default_doc'));
 
     final effectiveEditedText = newText != widget.chunk.rawText ? newText : null;
     final effectiveNote = newNote.isNotEmpty ? newNote : null;
@@ -122,9 +129,11 @@ class _ChunkWidgetState extends State<ChunkWidget> {
   }
 
   Future<void> _resetToOriginal() async {
-    final docId = widget.chunk.id.contains('-c')
-        ? widget.chunk.id.split('-c').first
-        : 'default_doc';
+    final docId = widget.documentId.isNotEmpty
+        ? widget.documentId
+        : (widget.chunk.id.contains('-c')
+            ? widget.chunk.id.split('-c').first
+            : 'default_doc');
 
     try {
       await LocalDatabase.instance.saveChunkEdit(
@@ -592,6 +601,22 @@ class _ChunkWidgetState extends State<ChunkWidget> {
       child: Row(
         mainAxisAlignment: MainAxisAlignment.end,
         children: [
+          _buildActionPill(
+            label: 'Plain Take',
+            icon: Icons.lightbulb_outline_rounded,
+            color: const Color(0xFFD97706),
+            theme: theme,
+            onTap: () {
+              if (widget.onPlainTake != null) {
+                widget.onPlainTake!();
+              } else if (widget.onDeepDive != null) {
+                widget.onDeepDive!();
+              } else {
+                _showPlainTakeSheet(context, theme);
+              }
+            },
+          ),
+          const SizedBox(width: 8),
           if (widget.onDeepDive != null) ...[
             _buildActionPill(
               label: 'Fact-Check',
@@ -611,6 +636,134 @@ class _ChunkWidgetState extends State<ChunkWidget> {
           ),
         ],
       ),
+    );
+  }
+
+  Future<void> _showPlainTakeSheet(
+      BuildContext context, ReaderThemeConfig theme) async {
+    final docId = widget.documentId.isNotEmpty
+        ? widget.documentId
+        : (widget.chunk.id.contains('-c')
+            ? widget.chunk.id.split('-c').first
+            : 'doc');
+    final seq = widget.chunk.sequence ?? 1;
+
+    showModalBottomSheet(
+      context: context,
+      backgroundColor: Colors.transparent,
+      isScrollControlled: true,
+      builder: (ctx) {
+        return FutureBuilder<Map<String, dynamic>>(
+          future: ApiClient().fetchVibeCheck(docId, seq),
+          builder: (ctx, snapshot) {
+            final isDark = Theme.of(ctx).brightness == Brightness.dark;
+            final data = snapshot.data;
+            final plainTake = data?['plain_take']?.toString() ??
+                (snapshot.connectionState == ConnectionState.waiting
+                    ? 'Synthesizing plain take...'
+                    : 'The core takeaway from this passage in direct language.');
+            final analogy = data?['analogy']?.toString();
+
+            return Container(
+              padding: const EdgeInsets.all(24),
+              decoration: BoxDecoration(
+                color: theme.scaffoldBackground,
+                borderRadius:
+                    const BorderRadius.vertical(top: Radius.circular(24)),
+                border: Border.all(color: theme.borderColor),
+              ),
+              child: SafeArea(
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Row(
+                      children: [
+                        const Icon(Icons.lightbulb_outline_rounded,
+                            color: Color(0xFFD97706), size: 20),
+                        const SizedBox(width: 8),
+                        Text(
+                          'PLAIN TAKE',
+                          style: TextStyle(
+                            fontFamily: AppTheme.fontMono,
+                            fontSize: 11,
+                            fontWeight: FontWeight.w700,
+                            letterSpacing: 1.0,
+                            color: const Color(0xFFD97706),
+                          ),
+                        ),
+                        const Spacer(),
+                        IconButton(
+                          icon: const Icon(Icons.close_rounded, size: 20),
+                          onPressed: () => Navigator.of(ctx).pop(),
+                        ),
+                      ],
+                    ),
+                    const SizedBox(height: 12),
+                    if (snapshot.connectionState == ConnectionState.waiting)
+                      const Padding(
+                        padding: EdgeInsets.symmetric(vertical: 24),
+                        child: Center(
+                          child: CircularProgressIndicator(
+                            strokeWidth: 2,
+                            color: Color(0xFFD97706),
+                          ),
+                        ),
+                      )
+                    else ...[
+                      Text(
+                        plainTake,
+                        style: TextStyle(
+                          fontFamily: AppTheme.fontReading,
+                          fontSize: 16,
+                          height: 1.6,
+                          color: theme.textColor,
+                        ),
+                      ),
+                      if (analogy != null && analogy.isNotEmpty) ...[
+                        const SizedBox(height: 14),
+                        Container(
+                          padding: const EdgeInsets.all(12),
+                          decoration: BoxDecoration(
+                            color: isDark
+                                ? const Color(0xFF1E1A14)
+                                : const Color(0xFFFEF3C7)
+                                    .withValues(alpha: 0.5),
+                            borderRadius: BorderRadius.circular(12),
+                            border: Border.all(
+                              color: const Color(0xFFD97706)
+                                  .withValues(alpha: 0.3),
+                            ),
+                          ),
+                          child: Row(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: [
+                              const Icon(Icons.auto_stories_outlined,
+                                  size: 16, color: Color(0xFFD97706)),
+                              const SizedBox(width: 8),
+                              Expanded(
+                                child: Text(
+                                  'Analogy: $analogy',
+                                  style: TextStyle(
+                                    fontFamily: AppTheme.fontUI,
+                                    fontSize: 13,
+                                    height: 1.5,
+                                    color: theme.textColor,
+                                  ),
+                                ),
+                              ),
+                            ],
+                          ),
+                        ),
+                      ],
+                    ],
+                  ],
+                ),
+              ),
+            );
+          },
+        );
+      },
     );
   }
 

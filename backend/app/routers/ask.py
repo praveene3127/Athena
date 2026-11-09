@@ -208,8 +208,8 @@ def ask_about_local_passage(
     if not check_rate_limit(request.client.host if request.client else "unknown"):
         return {"status": "rate_limited", "answer": None}
     llm = LLMService()
-    if not llm.is_gemini_configured:
-        return {"status": "not_configured", "answer": None}
+    if not llm.is_configured:
+        return {"status": "no_key", "answer": None}
 
     passage = req.passage_text.strip()
     if req.selected_text and req.selected_text.strip() in passage:
@@ -237,8 +237,8 @@ def generate_local_context(
         return {"status": "invalid_quote", "card": None}
 
     llm = LLMService()
-    if not llm.is_gemini_configured:
-        return {"status": "not_configured", "card": None}
+    if not llm.is_configured:
+        return {"status": "no_key", "card": None}
     context = llm.generate_grounded_context(
         concept_name=req.concept_name.strip(),
         passage_text=req.passage_text.strip(),

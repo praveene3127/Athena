@@ -26,9 +26,25 @@ String extractEpubText(List<int> bytes) {
       for (final file in archive.files)
         if (file.isFile) _normalizeEpubPath(file.name): file,
     };
+
+    if (files.containsKey('META-INF/encryption.xml') || files.containsKey('META-INF/rights.xml')) {
+      final encBytes = files['META-INF/encryption.xml']?.content;
+      if (encBytes is List<int>) {
+        final encXml = utf8.decode(encBytes, allowMalformed: true);
+        if (encXml.contains('<EncryptedData') &&
+            !encXml.contains('http://www.idpf.org/2008/embedding') &&
+            !encXml.contains('http://ns.adobe.com/pdf/enc/font')) {
+          throw const AppError(
+            code: 'DRM_PROTECTED',
+            message: 'This EPUB is DRM-protected and cannot be read.',
+          );
+        }
+      }
+    }
+
     final containerBytes = files['META-INF/container.xml']?.content;
     if (containerBytes is! List<int>) return '';
-    final container = XmlDocument.parse(utf8.decode(containerBytes));
+    final container = XmlDocument.parse(DocumentIngestionPipeline.decodeXmlBytes(containerBytes));
     final rootfile = container
         .findAllElements('rootfile')
         .firstOrNull
@@ -38,7 +54,7 @@ String extractEpubText(List<int> bytes) {
     final opfPath = _normalizeEpubPath(rootfile);
     final opfBytes = files[opfPath]?.content;
     if (opfBytes is! List<int>) return '';
-    final package = XmlDocument.parse(utf8.decode(opfBytes));
+    final package = XmlDocument.parse(DocumentIngestionPipeline.decodeXmlBytes(opfBytes));
     final manifest = <String, ({String href, String properties})>{};
     for (final item in package.findAllElements('item')) {
       final id = item.getAttribute('id');
@@ -114,60 +130,8 @@ String _resolveEpubHref(String opfPath, String href) {
       opfDirectory.isEmpty ? decoded : '$opfDirectory/$decoded');
 }
 
-String _epubMarkupToText(String source) {
-  final separated = source
-      .replaceAll(
-          RegExp(r'<style[^>]*>[\s\S]*?</style>', caseSensitive: false), ' ')
-      .replaceAll(
-          RegExp(r'<script[^>]*>[\s\S]*?</script>', caseSensitive: false), ' ')
-      .replaceAll(
-        RegExp(
-            r'</?(?:p|div|h[1-6]|br|hr|li|tr|blockquote|section|article)[^>]*>',
-            caseSensitive: false),
-        '\n\n',
-      )
-      .replaceAll(RegExp(r'<[^>]+>'), ' ');
-  final decoded = separated.replaceAllMapped(
-    RegExp(r'&(#x[0-9a-f]+|#\d+|[a-z]+);', caseSensitive: false),
-    (match) {
-      final entity = match[1]!.toLowerCase();
-      const named = {
-        'amp': '&',
-        'lt': '<',
-        'gt': '>',
-        'quot': '"',
-        'apos': "'",
-        'nbsp': ' ',
-        'ldquo': '“',
-        'rdquo': '”',
-        'lsquo': '‘',
-        'rsquo': '’',
-        'mdash': '—',
-        'ndash': '–',
-        'hellip': '…',
-      };
-      if (named.containsKey(entity)) return named[entity]!;
-      try {
-        final codePoint = entity.startsWith('#x')
-            ? int.parse(entity.substring(2), radix: 16)
-            : entity.startsWith('#')
-                ? int.parse(entity.substring(1))
-                : null;
-        if (codePoint != null && codePoint >= 0 && codePoint <= 0x10ffff) {
-          return String.fromCharCode(codePoint);
-        }
-      } on FormatException {
-        return match[0]!;
-      }
-      return match[0]!;
-    },
-  );
-  return decoded
-      .replaceAll(RegExp(r'[ \t\r]+'), ' ')
-      .replaceAll(RegExp(r' *\n *'), '\n')
-      .replaceAll(RegExp(r'\n{3,}'), '\n\n')
-      .trim();
-}
+String _epubMarkupToText(String source) =>
+    DocumentIngestionPipeline.decodeEpubHtmlToProse(source);
 
 class ApiClient {
   static bool _backendReachable = true;
@@ -183,10 +147,21 @@ class ApiClient {
     return _backendReachable;
   }
 
-  static void recordBackendFailure() {
+  static void recordBackendFailure({Object? error}) {
+    if (error is DioException) {
+      final type = error.type;
+      final code = error.response?.statusCode;
+      // Only trip circuit breaker on actual server unreachable / connection refused / 502/503/504
+      final isConnectionIssue = type == DioExceptionType.connectionError ||
+          type == DioExceptionType.connectionTimeout ||
+          (code != null && code >= 502 && code <= 504);
+      if (!isConnectionIssue) {
+        return;
+      }
+    }
     _backendReachable = false;
     _backendCircuitBreakerResetTime =
-        DateTime.now().add(const Duration(seconds: 60));
+        DateTime.now().add(const Duration(seconds: 15));
   }
 
   static void recordBackendSuccess() {
@@ -234,6 +209,20 @@ class ApiClient {
           if (base.isNotEmpty) {
             options.baseUrl = base;
           }
+          final fullUri = options.uri;
+          if (fullUri.scheme == 'http' && !isPermittedHttpHost(fullUri.toString())) {
+            return handler.reject(
+              DioException(
+                requestOptions: options,
+                error: const AppError(
+                  code: 'CLEARTEXT_NOT_PERMITTED',
+                  message:
+                      'Cleartext HTTP is strictly prohibited for non-local hosts. Use https:// or a private LAN IP.',
+                ),
+                type: DioExceptionType.cancel,
+              ),
+            );
+          }
           final pairingToken = AppConfig.pairingToken;
           if (pairingToken.isNotEmpty) {
             options.headers['X-Athena-Pairing-Token'] = pairingToken;
@@ -252,8 +241,10 @@ class ApiClient {
     }
     try {
       final response = await dio.get('/api/health');
+      recordBackendSuccess();
       return response.data as Map<String, dynamic>;
     } on DioException catch (e) {
+      recordBackendFailure(error: e);
       throw _handleDioError(e);
     }
   }
@@ -579,14 +570,15 @@ class ApiClient {
       return docId;
     } catch (e) {
       debugPrint('[Athena Ingestion] Error during ingest: $e');
+      final appErr = AppError.fromException(e);
       try {
         await LocalDatabase.instance.updateDocumentProgress(
           docId,
           status: 'failed',
           stage: 'failed',
-          stageLabel: e.toString(),
-          errorMessage: e.toString(),
-          errorCode: 'EXTRACTION_FAILED',
+          stageLabel: appErr.message,
+          errorMessage: appErr.message,
+          errorCode: appErr.code,
         );
       } catch (dbErr) {
         debugPrint(
@@ -598,6 +590,27 @@ class ApiClient {
     final allChunks = result.chunks;
     final totalPages = result.pageCount;
     final canonicalStr = result.canonicalText;
+
+    if (canonicalStr.trim().isEmpty || allChunks.isEmpty) {
+      const err = AppError(
+        code: 'SCANNED_NOT_SUPPORTED',
+        message:
+            'No readable text could be extracted from this document. Scanned image-only files are not supported on-device.',
+      );
+      try {
+        await LocalDatabase.instance.updateDocumentProgress(
+          docId,
+          status: 'failed',
+          stage: 'failed',
+          stageLabel: err.message,
+          errorMessage: err.message,
+          errorCode: err.code,
+        );
+      } catch (e) {
+        debugPrint('[Athena Error] Failed updating doc status on empty text: $e');
+      }
+      throw err;
+    }
 
     // Step C: Mark 'ready' and 100% immediately! Never block reader on network cards (H-1 / P0-04)
     final words =
@@ -613,9 +626,7 @@ class ApiClient {
         percent: 100,
         processedPage: totalPages,
         pageCount: totalPages,
-        canonicalText: canonicalStr.isNotEmpty
-            ? canonicalStr
-            : 'Document content preserved.',
+        canonicalText: canonicalStr,
         totalWords: words,
         totalCharacters: canonicalStr.length,
         readingTimeMinutes: readingTime,
@@ -717,14 +728,14 @@ class ApiClient {
     try {
       final response = await dio
           .get('/api/documents/$id/reader')
-          .timeout(const Duration(milliseconds: 1800));
+          .timeout(const Duration(seconds: 30));
       recordBackendSuccess();
       final data = response.data as Map<String, dynamic>;
       _sanitizeReaderData(data);
       _cacheReaderLocally(id, data);
       return data;
     } catch (e) {
-      recordBackendFailure();
+      recordBackendFailure(error: e);
       if (!kIsWeb) {
         final dbData = await LocalDatabase.instance.getReaderData(id);
         final chunks = dbData['chunks'] as List?;
@@ -1236,9 +1247,14 @@ class ApiClient {
                 .trim();
             if (summary.isNotEmpty) {
               return {
+                'chunk_index': chunkIndex,
+                'plain_take': summary,
+                'simplified': summary,
+                'analogy': null,
+                'fallback': false,
                 'vibe': 'Key Insight',
                 'summary': summary,
-                'source': 'direct_anthropic'
+                'source': 'direct_anthropic',
               };
             }
           }
@@ -1249,6 +1265,11 @@ class ApiClient {
     }
 
     return {
+      'chunk_index': chunkIndex,
+      'plain_take': "A foundational turning point in the author's thesis.",
+      'simplified': "A foundational turning point in the author's thesis.",
+      'analogy': null,
+      'fallback': true,
       'vibe': 'Key Insight',
       'summary': "A foundational turning point in the author's thesis.",
     };
@@ -1590,39 +1611,46 @@ class ApiClient {
         prompt: prompt,
       );
 
-      // If primary failed with 429 or 5xx/network error, automatically retry with configured secondary provider
+      // If primary failed with 429 or 5xx/network error, automatically retry with configured fallback provider
       if (result['status'] == 'rate_limited' ||
           result['status'] == 'network_error') {
-        final secondaryKey = await SecureStorageService.instance
+        final fallbackKey = await SecureStorageService.instance
+                .getAIKey('athena_ai_fallback_api_key') ??
+            await SecureStorageService.instance
                 .getAIKey('athena_ai_secondary_api_key') ??
             '';
-        if (secondaryKey.trim().isNotEmpty) {
-          final secondaryProvider =
-              prefs.getString('athena_ai_secondary_provider') ?? 'groq';
-          var secondaryModel =
-              prefs.getString('athena_ai_secondary_model') ?? '';
-          final secondaryBaseUrl =
+        if (fallbackKey.trim().isNotEmpty) {
+          final fallbackProvider =
+              prefs.getString('athena_ai_fallback_provider') ??
+              prefs.getString('athena_ai_secondary_provider') ??
+              'groq';
+          var fallbackModel =
+              prefs.getString('athena_ai_fallback_model') ??
+              prefs.getString('athena_ai_secondary_model') ??
+              '';
+          final fallbackBaseUrl =
+              prefs.getString('athena_ai_fallback_base_url') ??
               prefs.getString('athena_ai_secondary_base_url');
 
-          if (secondaryModel.isEmpty) {
-            final secModels = await fetchModels(
-              provider: secondaryProvider,
-              apiKey: secondaryKey,
-              baseUrl: secondaryBaseUrl,
+          if (fallbackModel.isEmpty) {
+            final fbModels = await fetchModels(
+              provider: fallbackProvider,
+              apiKey: fallbackKey,
+              baseUrl: fallbackBaseUrl,
             );
-            if (secModels.isNotEmpty) secondaryModel = secModels.first.id;
+            if (fbModels.isNotEmpty) fallbackModel = fbModels.first.id;
           }
 
-          if (secondaryModel.isNotEmpty) {
-            final secResult = await _callLlmChat(
-              provider: secondaryProvider,
-              key: secondaryKey.trim(),
-              model: secondaryModel,
-              baseUrl: secondaryBaseUrl,
+          if (fallbackModel.isNotEmpty) {
+            final fbResult = await _callLlmChat(
+              provider: fallbackProvider,
+              key: fallbackKey.trim(),
+              model: fallbackModel,
+              baseUrl: fallbackBaseUrl,
               prompt: prompt,
             );
-            if (secResult['status'] == 'ok') {
-              return secResult;
+            if (fbResult['status'] == 'ok') {
+              return fbResult;
             }
           }
         }
@@ -1647,14 +1675,15 @@ class ApiClient {
     final client = Dio();
     try {
       if (provider == 'gemini') {
-        if (model.isEmpty) {
+        final cleanModel = model.replaceFirst(RegExp(r'^models/'), '');
+        if (cleanModel.isEmpty) {
           return {
             'status': 'no_key',
             'message': 'No live Gemini model selected in Settings.'
           };
         }
         final url =
-            'https://generativelanguage.googleapis.com/v1beta/models/$model:generateContent';
+            'https://generativelanguage.googleapis.com/v1beta/models/$cleanModel:generateContent';
         final resp = await client.post(
           url,
           data: {
@@ -2224,21 +2253,7 @@ class ApiClient {
   /// for loopback (127.0.0.1, localhost) or private RFC1918 LAN networks
   /// (192.168.x.x, 10.x.x.x, 172.16-31.x.x, *.local).
   static bool isPermittedHttpHost(String url) {
-    final uri = Uri.tryParse(url.trim());
-    if (uri == null) return false;
-    if (uri.scheme == 'https') return true;
-    if (uri.scheme != 'http') return false;
-    final host = uri.host.toLowerCase();
-    if (host == '127.0.0.1' || host == 'localhost' || host == '10.0.2.2') return true;
-    if (host.endsWith('.local')) return true;
-    if (RegExp(r'^10\.\d{1,3}\.\d{1,3}\.\d{1,3}$').hasMatch(host)) return true;
-    if (RegExp(r'^192\.168\.\d{1,3}\.\d{1,3}$').hasMatch(host)) return true;
-    final m172 = RegExp(r'^172\.(\d{1,3})\.\d{1,3}\.\d{1,3}$').firstMatch(host);
-    if (m172 != null) {
-      final octet = int.tryParse(m172.group(1)!) ?? 0;
-      if (octet >= 16 && octet <= 31) return true;
-    }
-    return false;
+    return AppConfig.isPermittedHttpUrl(url);
   }
 
   /// Sanitizes AI provider base URLs and enforces HTTPS for all cloud endpoints.
@@ -2275,6 +2290,7 @@ class ApiClient {
     if (targetUrl.isEmpty) {
       return {
         'ok': false,
+        'code': 'EMPTY_URL',
         'message': 'Server URL is empty. Athena is operating in standalone mobile mode.',
       };
     }
@@ -2282,12 +2298,14 @@ class ApiClient {
     if (uri == null || (!uri.isScheme('http') && !uri.isScheme('https'))) {
       return {
         'ok': false,
+        'code': 'INVALID_URL',
         'message': 'Invalid URL scheme. Must begin with http:// or https://',
       };
     }
     if (uri.isScheme('http') && !isPermittedHttpHost(targetUrl)) {
       return {
         'ok': false,
+        'code': 'CLEARTEXT_NOT_PERMITTED',
         'message': 'Cleartext HTTP is only allowed for private LAN IPs (192.168.x.x, 10.x.x.x, *.local) or loopback.',
       };
     }
@@ -2317,24 +2335,30 @@ class ApiClient {
       }
       return {
         'ok': false,
+        'code': 'HTTP_${response.statusCode}',
         'message': 'Server returned HTTP ${response.statusCode}: ${response.statusMessage}',
       };
     } on DioException catch (e) {
+      String code = 'NETWORK_ERROR';
       String msg;
       if (e.type == DioExceptionType.connectionTimeout || e.type == DioExceptionType.connectionError) {
+        code = 'CONNECTION_TIMED_OUT';
         msg = 'Connection refused or timed out at $targetUrl. Verify desktop server is running and phone is on the same Wi-Fi.';
       } else if (e.response?.statusCode == 401 || e.response?.statusCode == 403) {
+        code = 'INVALID_PAIRING_TOKEN';
         msg = 'Pairing token rejected (HTTP ${e.response?.statusCode}). Enter the Pairing Token shown in your desktop terminal.';
       } else {
         msg = e.message ?? 'Unknown connection error';
       }
       return {
         'ok': false,
+        'code': code,
         'message': msg,
       };
     } catch (e) {
       return {
         'ok': false,
+        'code': 'UNKNOWN',
         'message': 'Connection test failed: $e',
       };
     }

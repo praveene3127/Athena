@@ -1,4 +1,6 @@
 import 'package:flutter/material.dart';
+import 'package:athena/core/api/api_client.dart';
+import 'package:athena/core/config/config.dart';
 import 'package:athena/core/theme/theme.dart';
 import 'package:athena/core/theme/reader_theme.dart';
 import 'package:athena/models/document.dart';
@@ -12,6 +14,7 @@ class ReaderSearchSheet extends StatefulWidget {
   final String documentId;
   final String themeId;
   final List<ReaderItem> feedItems;
+  final ApiClient? apiClient;
   final ValueChanged<int> onJumpToItemIndex;
 
   const ReaderSearchSheet({
@@ -19,6 +22,7 @@ class ReaderSearchSheet extends StatefulWidget {
     required this.documentId,
     required this.themeId,
     required this.feedItems,
+    this.apiClient,
     required this.onJumpToItemIndex,
   });
 
@@ -27,6 +31,7 @@ class ReaderSearchSheet extends StatefulWidget {
     required String documentId,
     required String themeId,
     required List<ReaderItem> feedItems,
+    ApiClient? apiClient,
     required ValueChanged<int> onJumpToItemIndex,
   }) {
     return showModalBottomSheet<void>(
@@ -37,6 +42,7 @@ class ReaderSearchSheet extends StatefulWidget {
         documentId: documentId,
         themeId: themeId,
         feedItems: feedItems,
+        apiClient: apiClient,
         onJumpToItemIndex: onJumpToItemIndex,
       ),
     );
@@ -69,8 +75,24 @@ class _ReaderSearchSheetState extends State<ReaderSearchSheet> {
 
     setState(() => _isSearching = true);
     try {
-      final results =
-          await LocalDatabase.instance.searchChunks(widget.documentId, q);
+      List<Map<String, dynamic>> results = const [];
+      if (widget.apiClient != null &&
+          !AppConfig.isStandaloneMobile &&
+          AppConfig.apiBaseUrl.isNotEmpty) {
+        try {
+          final serverResults =
+              await widget.apiClient!.searchDocument(widget.documentId, q);
+          if (serverResults.isNotEmpty) {
+            results = serverResults;
+          }
+        } catch (e) {
+          debugPrint('[Athena SearchSheet] Server search error, using local fallback: $e');
+        }
+      }
+      if (results.isEmpty) {
+        results =
+            await LocalDatabase.instance.searchChunks(widget.documentId, q);
+      }
       if (mounted) {
         final resolved = results.isNotEmpty ? results : _searchInMemory(q);
         setState(() {

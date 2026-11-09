@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
@@ -6,6 +7,7 @@ import 'package:go_router/go_router.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:scrollable_positioned_list/scrollable_positioned_list.dart';
 
+import 'package:athena/core/config/config.dart';
 import 'package:athena/core/theme/theme.dart';
 import 'package:athena/core/theme/reader_theme.dart';
 import 'package:athena/models/document.dart';
@@ -53,7 +55,8 @@ class ReaderScreen extends ConsumerStatefulWidget {
   ConsumerState<ReaderScreen> createState() => _ReaderScreenState();
 }
 
-class _ReaderScreenState extends ConsumerState<ReaderScreen> {
+class _ReaderScreenState extends ConsumerState<ReaderScreen>
+    with WidgetsBindingObserver {
   final GlobalKey<ScaffoldState> _scaffoldKey = GlobalKey<ScaffoldState>();
   late PageController _pageController;
   late ItemScrollController _flowScrollController;
@@ -73,6 +76,8 @@ class _ReaderScreenState extends ConsumerState<ReaderScreen> {
   final Set<String> _dismissedCardIds = {};
   final Map<String, String> _chunkEdits = {};
   final Map<String, String> _chunkNotes = {};
+  final Map<String, ReaderItem> _chunksById = {};
+  Timer? _flowSaveDebounceTimer;
   List<ReaderItem> _currentFeed = const [];
   List<ReaderItem> _cachedFeedItems = const [];
   ReaderData? _lastReaderData;
@@ -85,6 +90,7 @@ class _ReaderScreenState extends ConsumerState<ReaderScreen> {
   @override
   void initState() {
     super.initState();
+    WidgetsBinding.instance.addObserver(this);
     _pageController = PageController(initialPage: 0);
     _flowScrollController = ItemScrollController();
     _flowPositionsListener = ItemPositionsListener.create();
@@ -110,13 +116,8 @@ class _ReaderScreenState extends ConsumerState<ReaderScreen> {
         });
 
         if (chunkSeq != null) {
-          ref.read(apiClientProvider).syncReadingProgress(
-                widget.documentId,
-                chunkSeq,
-                chunkId: chunkId,
-                feedIndex: index,
-                readingMode: _readingMode,
-              );
+          _syncProgressAndMergeCards(chunkSeq,
+              chunkId: chunkId, feedIndex: index);
         }
       },
       onAiDwell: (index) async {
@@ -136,12 +137,35 @@ class _ReaderScreenState extends ConsumerState<ReaderScreen> {
             'sequence': chunkSeq,
           };
 
-          final service = LocalContextService();
-          final cardMap = await service.generateCardForChunk(
-            widget.documentId,
-            chunkMap,
-            _cardsByChunkSeq.length,
-          );
+          Map<String, Object?>? cardMap;
+          if (!AppConfig.isStandaloneMobile &&
+              AppConfig.apiBaseUrl.isNotEmpty) {
+            try {
+              final serverCard = await ref
+                  .read(apiClientProvider)
+                  .generateCardForChunk(
+                    widget.documentId,
+                    chunkSeq,
+                    chunkId: currentItem.id,
+                    feedIndex: index,
+                  );
+              if (serverCard != null) {
+                cardMap = Map<String, Object?>.from(serverCard);
+              }
+            } catch (e) {
+              debugPrint(
+                  '[Athena Card Sync] Remote generateCardForChunk notice: $e');
+            }
+          }
+
+          if (cardMap == null) {
+            final service = LocalContextService();
+            cardMap = await service.generateCardForChunk(
+              widget.documentId,
+              chunkMap,
+              _cardsByChunkSeq.length,
+            );
+          }
 
           if (cardMap != null) {
             // ALWAYS persist valid generated cards to SQLite so the work is never lost (RC-07)
@@ -214,12 +238,32 @@ class _ReaderScreenState extends ConsumerState<ReaderScreen> {
         'section_role': item.sectionRole,
       };
 
-      final service = LocalContextService();
-      final cardMap = await service.generateCardForChunk(
-        widget.documentId,
-        chunkMap,
-        _cardsByChunkSeq.length,
-      );
+      Map<String, Object?>? cardMap;
+      if (!AppConfig.isStandaloneMobile && AppConfig.apiBaseUrl.isNotEmpty) {
+        try {
+          final serverCard = await ref
+              .read(apiClientProvider)
+              .generateCardForChunk(
+                widget.documentId,
+                seq,
+                chunkId: item.id,
+              );
+          if (serverCard != null) {
+            cardMap = Map<String, Object?>.from(serverCard);
+          }
+        } catch (e) {
+          debugPrint('[Athena Prefetch] Remote generateCardForChunk notice: $e');
+        }
+      }
+
+      if (cardMap == null) {
+        final service = LocalContextService();
+        cardMap = await service.generateCardForChunk(
+          widget.documentId,
+          chunkMap,
+          _cardsByChunkSeq.length,
+        );
+      }
 
       if (cardMap != null) {
         await LocalDatabase.instance.insertCards([cardMap]);
@@ -281,6 +325,12 @@ class _ReaderScreenState extends ConsumerState<ReaderScreen> {
       showContextCards: true,
     );
     _currentFeed = _cachedFeedItems;
+    _chunksById.clear();
+    for (final it in _cachedFeedItems) {
+      if (it.isReadingChunk) {
+        _chunksById[it.id] = it;
+      }
+    }
   }
 
   Future<void> _loadPreferences() async {
@@ -353,11 +403,77 @@ class _ReaderScreenState extends ConsumerState<ReaderScreen> {
 
   @override
   void dispose() {
+    WidgetsBinding.instance.removeObserver(this);
+    _flowSaveDebounceTimer?.cancel();
     _flowPositionsListener.itemPositions
         .removeListener(_onFlowPositionsChanged);
     _governor.dispose();
     _pageController.dispose();
     super.dispose();
+  }
+
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    if (state == AppLifecycleState.paused ||
+        state == AppLifecycleState.inactive) {
+      _flushReadingProgress();
+    }
+  }
+
+  void _flushReadingProgress() {
+    if (_currentIndex < 0 || _currentIndex >= _cachedFeedItems.length) return;
+    final chunk = _readingChunkAt(_currentIndex, _cachedFeedItems);
+    final chunkSeq = chunk?.sequence;
+    final chunkId = chunk?.id;
+    if (chunkSeq != null) {
+      ref.read(apiClientProvider).syncReadingProgress(
+            widget.documentId,
+            chunkSeq,
+            chunkId: chunkId,
+            feedIndex: _currentIndex,
+            readingMode: _readingMode,
+          );
+    }
+  }
+
+  Future<void> _syncProgressAndMergeCards(
+    int chunkSeq, {
+    String? chunkId,
+    int? feedIndex,
+  }) async {
+    try {
+      final res = await ref.read(apiClientProvider).syncReadingProgress(
+            widget.documentId,
+            chunkSeq,
+            chunkId: chunkId,
+            feedIndex: feedIndex ?? _currentIndex,
+            readingMode: _readingMode,
+          );
+      if (res['cards'] is List) {
+        final cardsList = res['cards'] as List;
+        bool changed = false;
+        for (final c in cardsList) {
+          if (c is Map) {
+            final map = Map<String, dynamic>.from(c);
+            final seq = map['sequence'] is int
+                ? map['sequence'] as int
+                : int.tryParse(map['sequence']?.toString() ?? '');
+            if (seq != null && !_cardsByChunkSeq.containsKey(seq)) {
+              _cardsByChunkSeq[seq] = ReaderItem.fromJson({
+                ...map,
+                'type': 'context_card',
+              });
+              changed = true;
+            }
+          }
+        }
+        if (changed && mounted) {
+          setState(() => _recomputeCachedFeed());
+        }
+      }
+    } catch (e) {
+      debugPrint('[Athena Progress] Sync notice: $e');
+    }
   }
 
   void _onFlowPositionsChanged() {
@@ -372,28 +488,29 @@ class _ReaderScreenState extends ConsumerState<ReaderScreen> {
     if (index != _currentIndex) {
       setState(() => _currentIndex = index);
       _prefetchUpcomingCards(index);
-      final chunk = _readingChunkAt(index, _currentFeed);
-      final chunkSeq = chunk?.sequence;
-      final chunkId = chunk?.id;
-      unawaited(SharedPreferences.getInstance().then((prefs) {
-        prefs.setInt('reader_pos_${widget.documentId}', index);
-        if (chunkId != null) {
-          prefs.setString('reader_chunk_id_${widget.documentId}', chunkId);
-        }
-        if (chunkSeq != null) {
-          prefs.setInt('reader_chunk_seq_${widget.documentId}', chunkSeq);
-        }
-      }));
-      if (chunkSeq != null) {
-        ref.read(apiClientProvider).syncReadingProgress(
-              widget.documentId,
-              chunkSeq,
-              chunkId: chunkId,
-              feedIndex: index,
-              readingMode: _readingMode,
-            );
-      }
       _governor.onPageTurn(index);
+
+      // Debounce flow scroll position saves (600ms)
+      _flowSaveDebounceTimer?.cancel();
+      _flowSaveDebounceTimer = Timer(const Duration(milliseconds: 600), () {
+        if (!mounted) return;
+        final chunk = _readingChunkAt(index, _currentFeed);
+        final chunkSeq = chunk?.sequence;
+        final chunkId = chunk?.id;
+        unawaited(SharedPreferences.getInstance().then((prefs) {
+          prefs.setInt('reader_pos_${widget.documentId}', index);
+          if (chunkId != null) {
+            prefs.setString('reader_chunk_id_${widget.documentId}', chunkId);
+          }
+          if (chunkSeq != null) {
+            prefs.setInt('reader_chunk_seq_${widget.documentId}', chunkSeq);
+          }
+        }));
+        if (chunkSeq != null) {
+          _syncProgressAndMergeCards(chunkSeq,
+              chunkId: chunkId, feedIndex: index);
+        }
+      });
     }
   }
 
@@ -402,9 +519,9 @@ class _ReaderScreenState extends ConsumerState<ReaderScreen> {
     final item = items[index];
     if (item.isReadingChunk) return item;
     final sourceId = item.sourceChunkId ?? item.insertAfter;
-    if (sourceId == null) return null;
-    for (final candidate in items) {
-      if (candidate.isReadingChunk && candidate.id == sourceId) return candidate;
+    if (sourceId != null) {
+      final cached = _chunksById[sourceId];
+      if (cached != null) return cached;
     }
     return null;
   }
@@ -472,9 +589,14 @@ class _ReaderScreenState extends ConsumerState<ReaderScreen> {
           }
           return ChaptersDrawer(
             title: d.title,
+            documentId: widget.documentId,
+            apiClient: ref.read(apiClientProvider),
             feedItems: _cachedFeedItems,
             theme: theme,
-            onSelectIndex: (idx) => _jumpTo(idx, _cachedFeedItems.length),
+            onSelectIndex: (idx) {
+              Navigator.of(context).pop();
+              _jumpTo(idx, _cachedFeedItems.length);
+            },
           );
         },
         orElse: () => null,
@@ -484,10 +606,9 @@ class _ReaderScreenState extends ConsumerState<ReaderScreen> {
         readingMode: _readingMode,
         theme: theme,
         isDark: isDark,
-        progress:
-            readerAsync.value != null && readerAsync.value!.items.isNotEmpty
-                ? (_currentIndex + 1) / readerAsync.value!.items.length
-                : 0.0,
+        progress: _cachedFeedItems.isNotEmpty
+            ? ((_currentIndex + 1) / _cachedFeedItems.length).clamp(0.0, 1.0)
+            : 0.0,
         onBack: () => context.go('/'),
         onReadingModeChanged: (mode) {
           setState(() => _readingMode = mode);
@@ -500,6 +621,7 @@ class _ReaderScreenState extends ConsumerState<ReaderScreen> {
             documentId: widget.documentId,
             themeId: _themeId,
             feedItems: _cachedFeedItems,
+            apiClient: ref.read(apiClientProvider),
             onJumpToItemIndex: (idx) => _jumpTo(idx, _cachedFeedItems.length),
           );
         },
@@ -803,13 +925,26 @@ class _ReaderScreenState extends ConsumerState<ReaderScreen> {
   void _toggleSaveCard(ReaderItem card) async {
     final client = ref.read(apiClientProvider);
     final wasSaved = card.saved ?? false;
+    final newSaved = !wasSaved;
+
+    // Optimistically toggle saved on the card in _cardsByChunkSeq (P2-05)
+    final seq = card.sequence;
+    if (seq != null && _cardsByChunkSeq.containsKey(seq)) {
+      final existing = _cardsByChunkSeq[seq]!;
+      _cardsByChunkSeq[seq] = existing.copyWith(saved: newSaved);
+    }
+    setState(() => _recomputeCachedFeed());
+
     try {
+      if (!kIsWeb) {
+        await LocalDatabase.instance.setCardSaved(card.id, newSaved);
+      }
       if (wasSaved) {
         await client.unsaveCard(card.id);
       } else {
         await client.saveCard(card.id);
       }
-      ref.invalidate(readerDataProvider(widget.documentId));
+      ref.invalidate(savedCardsProvider);
     } catch (e) {
       debugPrint('[Athena] Toggle save card notice: $e');
     }
@@ -831,7 +966,6 @@ class _ReaderScreenState extends ConsumerState<ReaderScreen> {
     setState(() => _isGeneratingCard = true);
     HapticFeedback.lightImpact();
 
-    final service = LocalContextService();
     final chunkDb = await LocalDatabase.instance.getChunkById(currentChunk.id);
     final chunkMap = chunkDb ?? {
       'id': currentChunk.id,
@@ -840,11 +974,35 @@ class _ReaderScreenState extends ConsumerState<ReaderScreen> {
     };
 
     try {
-      final cardMap = await service.generateCardForChunk(
-        widget.documentId,
-        chunkMap,
-        _cardsByChunkSeq.length,
-      );
+      Map<String, Object?>? cardMap;
+      if (!AppConfig.isStandaloneMobile &&
+          AppConfig.apiBaseUrl.isNotEmpty) {
+        try {
+          final serverCard = await ref
+              .read(apiClientProvider)
+              .generateCardForChunk(
+                widget.documentId,
+                chunkSeq,
+                chunkId: currentChunk.id,
+                feedIndex: _currentIndex,
+              );
+          if (serverCard != null) {
+            cardMap = Map<String, Object?>.from(serverCard);
+          }
+        } catch (e) {
+          debugPrint(
+              '[Athena Card Action] Remote generateCardForChunk notice: $e');
+        }
+      }
+
+      if (cardMap == null) {
+        final service = LocalContextService();
+        cardMap = await service.generateCardForChunk(
+          widget.documentId,
+          chunkMap,
+          _cardsByChunkSeq.length,
+        );
+      }
       if (cardMap != null && mounted) {
         final cardItem = ReaderItem.fromJson({
           ...cardMap,

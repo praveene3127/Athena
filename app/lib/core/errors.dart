@@ -4,6 +4,11 @@ class AppError implements Exception {
 
   const AppError({required this.code, required this.message});
 
+  factory AppError.fromException(Object e) {
+    if (e is AppError) return e;
+    return AppError(code: 'INTERNAL', message: e.toString());
+  }
+
   static const Map<String, String> userMessages = {
     'UNSUPPORTED_FILE': 'Please choose a PDF or EPUB book.',
     'PDF_UNREADABLE': 'This book could not be read.',

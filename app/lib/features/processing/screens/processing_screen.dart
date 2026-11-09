@@ -67,7 +67,7 @@ const _stageDetails = [
     key: 'preparing_context',
     title: 'Preparing Grounded Context',
     description: 'Retrieving authoritative explanations with distance spacing',
-    icon: Icons.auto_awesome_rounded,
+    icon: Icons.fact_check_outlined,
   ),
   StageInfo(
     key: 'done',

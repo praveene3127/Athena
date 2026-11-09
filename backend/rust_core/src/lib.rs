@@ -31,6 +31,11 @@ const KNOWN_TECHNICAL_WORDS: &[&str] = &[
     "spectroradiometry", "neurodegenerative",
 ];
 
+const PROTECTED_ALPHANUMERIC: &[&str] = &[
+    "h2o", "co2", "3d", "4d", "5d", "mp3", "mp4", "b12", "o2", "n2",
+    "f1", "f2", "a4", "b5", "v8", "v12", "k9", "g7", "g8", "g20",
+];
+
 const BANNED_GENERIC_SLOP_PHRASES: &[&str] = &[
     "in this passage",
     "in the passage",
@@ -65,13 +70,13 @@ static DEHYPHEN_RE: LazyLock<Regex> = LazyLock::new(|| {
     Regex::new(r"\b([A-Za-z]+)-\s+([a-z]+)\b").unwrap()
 });
 static FN_PUNCT_RE: LazyLock<Regex> = LazyLock::new(|| {
-    Regex::new(r"(?<=[a-zA-Z\)])([;,.!?])\d{1,3}(?=\s|$|[)\]\'\u{2019}\u{201d}])").unwrap()
+    Regex::new(r"([a-zA-Z\)])([;,.!?])\d{1,3}(\s|$|[)\]\'\u{2019}\u{201d}])").unwrap()
 });
 static FN_WORD_RE: LazyLock<Regex> = LazyLock::new(|| {
-    Regex::new(r"(?<=[a-zA-Z]{3})\d{1,2}(?=\s|$|[)\]\'\u{2019}\u{201d}])").unwrap()
+    Regex::new(r"\b([a-zA-Z]{3,})(\d{1,2})(\s|$|[)\]\"\'\u{2019}\u{201d}.,;:!?])").unwrap()
 });
 static PUNCT_SPACE_RE: LazyLock<Regex> = LazyLock::new(|| {
-    Regex::new(r"([;:,!?])(?=[A-Za-z])").unwrap()
+    Regex::new(r"([;:,!?])([A-Za-z])").unwrap()
 });
 static CAMEL_RE: LazyLock<Regex> = LazyLock::new(|| {
     Regex::new(r"([a-z]{2,})([A-Z][a-z]+)").unwrap()
@@ -146,6 +151,7 @@ pub fn self_heal_prose_text_core(text: &str) -> String {
     let roman_set: HashSet<&str> = ROMAN_NUMERALS.iter().copied().collect();
     let compound_set: HashSet<&str> = COMPOUND_PREFIXES.iter().copied().collect();
     let technical_set: HashSet<&str> = KNOWN_TECHNICAL_WORDS.iter().copied().collect();
+    let protected_set: HashSet<&str> = PROTECTED_ALPHANUMERIC.iter().copied().collect();
 
     // 1. Spaced char runs removal: e.g. "i i i i i" or "u u u u"
     let cleaned = remove_spaced_repeated_chars(text);
@@ -154,7 +160,7 @@ pub fn self_heal_prose_text_core(text: &str) -> String {
     let cleaned = LETTER_SPACED_RE.replace_all(&cleaned, |caps: &regex::Captures| {
         let matched = &caps[0];
         let collapsed: String = matched.split_whitespace().collect();
-        if collapsed.eq_ignore_ascii_case("LIBERTY") {
+        if collapsed.chars().all(|c| c.is_ascii_alphabetic()) && !roman_set.contains(collapsed.to_lowercase().as_str()) {
             collapsed
         } else {
             matched.to_string()
@@ -214,11 +220,24 @@ pub fn self_heal_prose_text_core(text: &str) -> String {
         })
         .into_owned();
 
-    // 5. Superscript footnote callout stripping: "Foulis;2" -> "Foulis;", "Moore.3" -> "Moore."
-    intermediate = FN_PUNCT_RE.replace_all(&intermediate, "$1").into_owned();
+    // 5. Superscript footnote callout stripping: "Foulis;2" -> "Foulis;", "Moore.3" -> "Moore.", "word2 " -> "word "
+    intermediate = FN_PUNCT_RE.replace_all(&intermediate, "$1$2$3").into_owned();
+    intermediate = FN_WORD_RE
+        .replace_all(&intermediate, |caps: &regex::Captures| {
+            let word = &caps[1];
+            let num = &caps[2];
+            let trailing = &caps[3];
+            let combined = format!("{}{}", word, num).to_lowercase();
+            if protected_set.contains(combined.as_str()) {
+                caps[0].to_string()
+            } else {
+                format!("{}{}", word, trailing)
+            }
+        })
+        .into_owned();
 
     // 6. Spacing after punctuation: "candle.Headmaster" -> "candle. Headmaster"
-    intermediate = PUNCT_SPACE_RE.replace_all(&intermediate, "$1 ").into_owned();
+    intermediate = PUNCT_SPACE_RE.replace_all(&intermediate, "$1 $2").into_owned();
 
     // 7. Collapse duplicate whitespace
     WS_RE.replace_all(&intermediate, " ").trim().to_string()
@@ -808,9 +827,81 @@ pub extern "C" fn athena_heal_and_chunk_json(
         Err(_) => return std::ptr::null_mut(),
     };
     let healed = self_heal_prose_text_core(input);
+
+    // Simple sentence-based atom splitting to wire plan_feed_chunks_core
+    let mut atom_starts = Vec::new();
+    let mut atom_ends = Vec::new();
+    let mut atom_words = Vec::new();
+    let mut atom_para_ids = Vec::new();
+    let mut atom_is_sentence = Vec::new();
+    let mut atom_starts_section = Vec::new();
+
+    let mut current_idx = 0;
+    let mut para_id = 0;
+    for para in healed.split("\n\n") {
+        let para_trimmed = para.trim();
+        if para_trimmed.is_empty() {
+            current_idx += para.len() + 2;
+            para_id += 1;
+            continue;
+        }
+        let start_pos = healed[current_idx..].find(para_trimmed).unwrap_or(0) + current_idx;
+        let mut sent_start = start_pos;
+        for part in para_trimmed.split_inclusive(&['.', '!', '?'][..]) {
+            let p_trimmed = part.trim();
+            if p_trimmed.is_empty() {
+                continue;
+            }
+            let s_start = healed[sent_start..].find(p_trimmed).unwrap_or(0) + sent_start;
+            let s_end = s_start + p_trimmed.len();
+            let words = p_trimmed.split_whitespace().count().max(1);
+            atom_starts.push(s_start);
+            atom_ends.push(s_end);
+            atom_words.push(words);
+            atom_para_ids.push(para_id);
+            atom_is_sentence.push(true);
+            atom_starts_section.push(atom_starts.len() == 1);
+            sent_start = s_end;
+        }
+        current_idx = start_pos + para_trimmed.len();
+        para_id += 1;
+    }
+
+    let chunks: Vec<serde_json::Value> = if !atom_starts.is_empty() {
+        match plan_feed_chunks_core(
+            &healed,
+            &atom_starts,
+            &atom_ends,
+            &atom_words,
+            &atom_para_ids,
+            &atom_is_sentence,
+            &atom_starts_section,
+            target_words.max(35),
+        ) {
+            Ok(cuts) => cuts
+                .into_iter()
+                .map(|(s, e)| {
+                    serde_json::json!({
+                        "start_char": s,
+                        "end_char": e,
+                        "raw_text": &healed[s..e],
+                    })
+                })
+                .collect(),
+            Err(_) => vec![serde_json::json!({
+                "start_char": 0,
+                "end_char": healed.len(),
+                "raw_text": &healed,
+            })],
+        }
+    } else {
+        Vec::new()
+    };
+
     let json_res = serde_json::json!({
         "healed": healed,
         "target_words": target_words,
+        "chunks": chunks,
     });
     let s = json_res.to_string();
     let c_res = std::ffi::CString::new(s).unwrap_or_default();

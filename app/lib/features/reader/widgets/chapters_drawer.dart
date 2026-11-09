@@ -1,13 +1,18 @@
 import 'package:flutter/material.dart';
+import 'package:athena/core/api/api_client.dart';
+import 'package:athena/core/config/config.dart';
 import 'package:athena/core/theme/theme.dart';
 import 'package:athena/core/theme/reader_theme.dart';
 import 'package:athena/models/document.dart';
 
 /// L7 Modular Widget: Chapters and Outline Drawer.
 ///
-/// Clean drawer displaying book sections, chapters, and passage milestones.
-class ChaptersDrawer extends StatelessWidget {
+/// Clean drawer displaying book sections, chapters, and passage milestones with
+/// support for hierarchical chapter levels and API integration.
+class ChaptersDrawer extends StatefulWidget {
   final String title;
+  final String? documentId;
+  final ApiClient? apiClient;
   final List<ReaderItem> feedItems;
   final ReaderThemeConfig theme;
   final ValueChanged<int> onSelectIndex;
@@ -15,27 +20,91 @@ class ChaptersDrawer extends StatelessWidget {
   const ChaptersDrawer({
     super.key,
     required this.title,
+    this.documentId,
+    this.apiClient,
     required this.feedItems,
     required this.theme,
     required this.onSelectIndex,
   });
 
   @override
+  State<ChaptersDrawer> createState() => _ChaptersDrawerState();
+}
+
+class _ChaptersDrawerState extends State<ChaptersDrawer> {
+  List<Map<String, dynamic>> _chapters = [];
+  bool _loading = false;
+
+  @override
+  void initState() {
+    super.initState();
+    _loadChapters();
+  }
+
+  Future<void> _loadChapters() async {
+    if (widget.apiClient != null &&
+        widget.documentId != null &&
+        !AppConfig.isStandaloneMobile &&
+        AppConfig.apiBaseUrl.isNotEmpty) {
+      setState(() => _loading = true);
+      try {
+        final serverChapters =
+            await widget.apiClient!.getChapters(widget.documentId!);
+        if (mounted && serverChapters.isNotEmpty) {
+          setState(() {
+            _chapters = serverChapters;
+            _loading = false;
+          });
+          return;
+        }
+      } catch (e) {
+        debugPrint('[Athena ChaptersDrawer] Error loading server chapters: $e');
+      }
+      if (mounted) setState(() => _loading = false);
+    }
+  }
+
+  @override
   Widget build(BuildContext context) {
-    // Extract unique chapters / sections
-    final sections = <Map<String, dynamic>>[];
-    for (int i = 0; i < feedItems.length; i++) {
-      final it = feedItems[i];
-      if (it.isReadingChunk) {
-        final sec = it.sectionTitle?.trim();
-        if (sec != null && sec.isNotEmpty) {
-          if (sections.isEmpty || sections.last['title'] != sec) {
-            sections.add({
-              'index': i,
-              'title': sec,
-              'sequence': it.sequence,
-              'page': it.pageReference ?? 'Page ?',
-            });
+    final theme = widget.theme;
+    final List<Map<String, dynamic>> displayedSections = [];
+
+    if (_chapters.isNotEmpty) {
+      for (final ch in _chapters) {
+        final title = ch['title']?.toString() ?? 'Chapter';
+        final seq = (ch['chunk_sequence'] as num?)?.toInt() ?? 1;
+        final level = (ch['level'] as num?)?.toInt() ?? 1;
+        final page = ch['page']?.toString() ??
+            (ch['page_reference']?.toString() ?? '');
+
+        int targetIdx = widget.feedItems.indexWhere(
+            (it) => it.isReadingChunk && (it.sequence ?? 0) >= seq);
+        if (targetIdx < 0) targetIdx = 0;
+
+        displayedSections.add({
+          'index': targetIdx,
+          'title': title,
+          'level': level,
+          'page': page.isNotEmpty
+              ? (page.startsWith('Page') ? page : 'Page $page')
+              : '',
+        });
+      }
+    } else {
+      for (int i = 0; i < widget.feedItems.length; i++) {
+        final it = widget.feedItems[i];
+        if (it.isReadingChunk) {
+          final sec = it.sectionTitle?.trim();
+          if (sec != null && sec.isNotEmpty) {
+            if (displayedSections.isEmpty ||
+                displayedSections.last['title'] != sec) {
+              displayedSections.add({
+                'index': i,
+                'title': sec,
+                'level': 1,
+                'page': it.pageReference ?? '',
+              });
+            }
           }
         }
       }
@@ -64,7 +133,7 @@ class ChaptersDrawer extends StatelessWidget {
                   ),
                   const SizedBox(height: 6),
                   Text(
-                    title,
+                    widget.title,
                     maxLines: 2,
                     overflow: TextOverflow.ellipsis,
                     style: TextStyle(
@@ -78,46 +147,61 @@ class ChaptersDrawer extends StatelessWidget {
               ),
             ),
             const Divider(height: 1),
+            if (_loading)
+              const LinearProgressIndicator(minHeight: 2)
+            else
+              const SizedBox.shrink(),
             Expanded(
-              child: sections.isEmpty
+              child: displayedSections.isEmpty
                   ? Center(
                       child: Text(
                         'Continuous full text without explicit chapters.',
-                        style: TextStyle(color: theme.textMutedColor, fontSize: 13),
+                        style: TextStyle(
+                            color: theme.textMutedColor, fontSize: 13),
                       ),
                     )
                   : ListView.separated(
                       padding: const EdgeInsets.symmetric(vertical: 8),
-                      itemCount: sections.length,
-                      separatorBuilder: (_, __) => const Divider(height: 1, indent: 20),
+                      itemCount: displayedSections.length,
+                      separatorBuilder: (_, __) =>
+                          const Divider(height: 1, indent: 20),
                       itemBuilder: (context, idx) {
-                        final s = sections[idx];
+                        final s = displayedSections[idx];
                         final secTitle = s['title'] as String;
                         final page = s['page'] as String;
                         final targetIndex = s['index'] as int;
+                        final level = (s['level'] as int?) ?? 1;
+                        final indent = (level - 1) * 14.0;
 
-                        return ListTile(
-                          title: Text(
-                            secTitle,
-                            style: TextStyle(
-                              fontFamily: AppTheme.fontUI,
-                              fontSize: 13.5,
-                              fontWeight: FontWeight.w600,
-                              color: theme.textColor,
+                        return Padding(
+                          padding: EdgeInsets.only(left: indent),
+                          child: ListTile(
+                            title: Text(
+                              secTitle,
+                              style: TextStyle(
+                                fontFamily: AppTheme.fontUI,
+                                fontSize: level > 1 ? 12.5 : 13.5,
+                                fontWeight: level == 1
+                                    ? FontWeight.w600
+                                    : FontWeight.w500,
+                                color: theme.textColor,
+                              ),
                             ),
+                            trailing: page.isNotEmpty
+                                ? Text(
+                                    page,
+                                    style: TextStyle(
+                                      fontFamily: AppTheme.fontMono,
+                                      fontSize: 11,
+                                      color: theme.accentColor,
+                                    ),
+                                  )
+                                : null,
+                            onTap: () {
+                              Navigator.of(context).pop();
+                              widget.onSelectIndex(targetIndex);
+                            },
                           ),
-                          trailing: Text(
-                            page,
-                            style: TextStyle(
-                              fontFamily: AppTheme.fontMono,
-                              fontSize: 11,
-                              color: theme.accentColor,
-                            ),
-                          ),
-                          onTap: () {
-                            Navigator.of(context).pop();
-                            onSelectIndex(targetIndex);
-                          },
                         );
                       },
                     ),
@@ -128,4 +212,3 @@ class ChaptersDrawer extends StatelessWidget {
     );
   }
 }
-

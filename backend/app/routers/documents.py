@@ -493,15 +493,12 @@ def generate_card_for_chunk_endpoint(
             )
         ).all()
         if not concepts:
-            raw_concepts = extract_concepts(chunk.raw_text, chunk.sequence)
-            for rc in raw_concepts:
-                c_obj = Concept(
-                    id=rc.get("id") or str(uuid.uuid4()),
-                    document_id=id,
-                    name=rc.get("name", "Concept"),
-                    salience=rc.get("salience", 0.7),
-                    chunk_id=chunk.id,
-                )
+            extracted_concepts = extract_concepts(
+                canonical_text=doc.canonical_text if doc else chunk.raw_text,
+                chunks=[chunk],
+                document_id=id,
+            )
+            for c_obj in extracted_concepts:
                 session.add(c_obj)
                 concepts.append(c_obj)
             session.commit()
@@ -533,11 +530,13 @@ def generate_card_for_chunk_endpoint(
     fallback_card = ContextCard(
         document_id=id,
         source_chunk_id=chunk.id,
+        concept_name=topic,
         card_type="explain",
         title=f"REAL-WORLD STUDY: {topic}",
         body=f"Grounded analysis verified against canonical source text. Key quote: \"{quote}\"",
         why_here="Grounded factual anchor from authentic source material.",
         exact_quote=quote,
+        canonical_sha256=doc.original_checksum if doc else None,
         support_status="fully_supported",
         generation_mode="fact_check_synthesis",
         verified=True,
@@ -605,6 +604,14 @@ def delete_document(id: str, session: Session = Depends(get_session)) -> Dict[st
     ledger_path = RAW_DIR / f"{id}_ledger.json"
     if ledger_path.exists():
         ledger_path.unlink()
+
+    # Evict document from marginalia pipeline if active
+    try:
+        from app.services.marginalia.pipeline import pipeline_instance
+        if pipeline_instance:
+            pipeline_instance.evict_document(id)
+    except Exception as pipe_err:
+        logger.debug("Pipeline eviction error for %s: %s", id, pipe_err)
 
     return {"status": "deleted", "document_id": id}
 
@@ -739,6 +746,46 @@ def get_reader(
         "chunks": [it for it in items if it.get("type") == "reading_chunk"],
         "cards": all_cards,
     }
+
+
+@router.get("/{id}/tape")
+def get_document_tape(id: str, session: Session = Depends(get_session)):
+    """Returns application/octet-stream encoded binary tape of document chunks."""
+    doc = session.get(Document, id)
+    if not doc:
+        raise AppException("NOT_FOUND", status_code=404)
+
+    chunks = session.exec(
+        select(ReadingChunk).where(ReadingChunk.document_id == id).order_by(ReadingChunk.sequence)
+    ).all()
+
+    # Try Rust core binary tape encoder first
+    try:
+        from athena_rust_core import rust_encode_binary_tape
+        tape_bytes = rust_encode_binary_tape(
+            doc.id,
+            [c.id for c in chunks],
+            [c.sequence for c in chunks],
+            [c.raw_text for c in chunks],
+        )
+        return Response(content=tape_bytes, media_type="application/octet-stream")
+    except Exception as rust_err:
+        logger.debug("Rust binary tape encoding fallback: %s", rust_err)
+
+    # Pure Python binary tape fallback (ATHN magic header + 4-byte chunk count + offsets + raw payload)
+    import struct
+    payloads = [c.raw_text.encode("utf-8") for c in chunks]
+    header = b"ATHN\x01\x00\x00\x00"  # Magic + version 1
+    count = len(chunks)
+    index_entries = []
+    current_offset = len(header) + 4 + (count * 12)  # seq(4) + offset(4) + len(4)
+    for i, p in enumerate(payloads):
+        index_entries.append(struct.pack("<III", chunks[i].sequence, current_offset, len(p)))
+        current_offset += len(p)
+
+    tape = header + struct.pack("<I", count) + b"".join(index_entries) + b"".join(payloads)
+    return Response(content=tape, media_type="application/octet-stream")
+
 
 
 @router.get("/{id}/search")

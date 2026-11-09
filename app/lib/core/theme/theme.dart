@@ -113,6 +113,12 @@ class AppTheme {
   static const String fontReading = 'Newsreader';
   static const String fontUI = 'Geist';
   static const String fontMono = 'JetBrains Mono';
+  static const List<String> fontMonoFallbacks = [
+    'Menlo',
+    'Consolas',
+    'Courier New',
+    'monospace',
+  ];
   static const String fontSerif = 'Newsreader';
 
   static ThemeData get lightTheme {

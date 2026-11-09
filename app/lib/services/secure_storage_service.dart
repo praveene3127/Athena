@@ -18,6 +18,7 @@ class SecureStorageService {
   static const _aiKeyNames = {
     'athena_ai_primary_api_key',
     'athena_ai_fallback_api_key',
+    'athena_ai_secondary_api_key',
   };
 
   final FlutterSecureStorage _storage = const FlutterSecureStorage(

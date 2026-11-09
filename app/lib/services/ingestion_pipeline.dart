@@ -3,6 +3,7 @@ import 'dart:convert';
 import 'dart:io' show File;
 import 'dart:isolate';
 import 'dart:math';
+import 'dart:typed_data';
 import 'package:archive/archive.dart';
 import 'package:crypto/crypto.dart';
 import 'package:flutter/foundation.dart';
@@ -256,9 +257,8 @@ class DocumentIngestionPipeline {
           final reconstructedSha256 =
               sha256.convert(utf8.encode(reconstructedText)).toString();
           final bool integrityVerified =
-              (canonicalSha256 == message.canonicalSha256 ||
-                  reconstructedSha256 == message.canonicalSha256 ||
-                  canonicalSha256 == reconstructedSha256);
+              reconstructedText == canonicalStr &&
+              reconstructedSha256 == canonicalSha256;
 
           return IngestionResult(
             canonicalText:
@@ -557,7 +557,6 @@ class DocumentIngestionPipeline {
       // 5. Windowed Reflow, Chunking & Incremental Batch Emission (H-5, P0-01, P0-05)
       const int chunkWindowPages = 16;
       int chunkSeq = 1;
-      int totalCharOffset = 0;
       final fullCanonical = StringBuffer();
       final allChunks = <Map<String, Object?>>[];
       String? currentCarryOver;
@@ -663,23 +662,42 @@ class DocumentIngestionPipeline {
           currentCarryOver = null;
         }
 
-        final windowCanonical = windowBuffer.toString().trim();
+        var windowCanonical = windowBuffer.toString().trim();
         List<Map<String, Object?>> windowChunks = const [];
 
         if (windowCanonical.isNotEmpty) {
+          final bool needsWindowSep = fullCanonical.isNotEmpty;
+          if (needsWindowSep) {
+            fullCanonical.write('\n\n');
+            // If prefixing separator to fullCanonical, also prefix to windowCanonical
+            // and shift spans so chunking is 100% byte-exact and contiguous!
+            windowCanonical = '\n\n$windowCanonical';
+            for (final span in windowSpans) {
+              final s = span['start'] as int? ?? 0;
+              final e = span['end'] as int? ?? 0;
+              span['start'] = s + 2;
+              span['end'] = e + 2;
+            }
+          }
+
+          final int currentWindowOffset = fullCanonical.length - (needsWindowSep ? windowCanonical.length : 0);
+
           windowChunks = LosslessChunker().build(
             documentId: params.docId,
             canonicalText: windowCanonical,
             spans: windowSpans,
             initialSequence: chunkSeq,
-            offsetDelta: totalCharOffset,
+            offsetDelta: currentWindowOffset,
           );
 
+          if (!needsWindowSep) {
+            fullCanonical.write(windowCanonical);
+          } else {
+            // Already wrote \n\n, now write remainder of windowCanonical
+            fullCanonical.write(windowCanonical.substring(2));
+          }
+
           chunkSeq += windowChunks.length;
-          totalCharOffset +=
-              windowCanonical.length + (fullCanonical.isNotEmpty ? 2 : 0);
-          if (fullCanonical.isNotEmpty) fullCanonical.write('\n\n');
-          fullCanonical.write(windowCanonical);
           allChunks.addAll(windowChunks);
         }
 
@@ -1996,9 +2014,8 @@ class DocumentIngestionPipeline {
           final reconstructedSha256 =
               sha256.convert(utf8.encode(reconstructedText)).toString();
           final bool integrityVerified =
-              (canonicalSha256 == message.canonicalSha256 ||
-                  reconstructedSha256 == message.canonicalSha256 ||
-                  canonicalSha256 == reconstructedSha256);
+              reconstructedText == canonicalStr &&
+              reconstructedSha256 == canonicalSha256;
 
           return IngestionResult(
             canonicalText:
@@ -2076,6 +2093,9 @@ class DocumentIngestionPipeline {
             _normalizeEpubPath(file.name): file,
       };
 
+      // DRM verification
+      _checkEpubDrm(files);
+
       final containerBytes = files['META-INF/container.xml']?.content;
       if (containerBytes is! List<int>) {
         params.sendPort.send(const _WorkerErrorEvent(
@@ -2083,7 +2103,7 @@ class DocumentIngestionPipeline {
         ));
         return;
       }
-      final container = XmlDocument.parse(utf8.decode(containerBytes));
+      final container = XmlDocument.parse(decodeXmlBytes(containerBytes));
       final rootfile = container
           .findAllElements('rootfile')
           .firstOrNull
@@ -2103,7 +2123,7 @@ class DocumentIngestionPipeline {
         ));
         return;
       }
-      final package = XmlDocument.parse(utf8.decode(opfBytes));
+      final package = XmlDocument.parse(decodeXmlBytes(opfBytes));
 
       final manifest = <String, ({String href, String properties})>{};
       for (final item in package.findAllElements('item')) {
@@ -2144,7 +2164,7 @@ class DocumentIngestionPipeline {
         final contentBytes = files[resolvedPath]?.content;
         if (contentBytes is! List<int>) continue;
 
-        final htmlContent = utf8.decode(contentBytes, allowMalformed: true);
+        final htmlContent = decodeXmlBytes(contentBytes);
         final sectionTitle = _extractEpubHeading(htmlContent);
         final role = _resolveEpubSectionRole(
           href: href,
@@ -2283,11 +2303,14 @@ class DocumentIngestionPipeline {
           _normalizeEpubPath(file.name): file,
     };
 
+    // DRM verification
+    _checkEpubDrm(files);
+
     final containerBytes = files['META-INF/container.xml']?.content;
     if (containerBytes is! List<int>) {
       throw Exception('Malformed EPUB: missing container.xml');
     }
-    final container = XmlDocument.parse(utf8.decode(containerBytes));
+    final container = XmlDocument.parse(decodeXmlBytes(containerBytes));
     final rootfile = container
         .findAllElements('rootfile')
         .firstOrNull
@@ -2297,7 +2320,7 @@ class DocumentIngestionPipeline {
     final opfPath = _normalizeEpubPath(rootfile);
     final opfBytes = files[opfPath]?.content;
     if (opfBytes is! List<int>) throw Exception('Malformed EPUB: missing OPF');
-    final package = XmlDocument.parse(utf8.decode(opfBytes));
+    final package = XmlDocument.parse(decodeXmlBytes(opfBytes));
 
     final manifest = <String, ({String href, String properties})>{};
     for (final item in package.findAllElements('item')) {
@@ -2333,7 +2356,7 @@ class DocumentIngestionPipeline {
       final contentBytes = files[resolvedPath]?.content;
       if (contentBytes is! List<int>) continue;
 
-      final htmlContent = utf8.decode(contentBytes, allowMalformed: true);
+      final htmlContent = decodeXmlBytes(contentBytes);
       final sectionTitle = _extractEpubHeading(htmlContent);
       final role = _resolveEpubSectionRole(
         href: href,
@@ -2449,6 +2472,72 @@ class DocumentIngestionPipeline {
     );
   }
 
+  /// Check if EPUB archive contains DRM encryption or rights management
+  static void _checkEpubDrm(Map<String, ArchiveFile> files) {
+    if (files.containsKey('META-INF/encryption.xml')) {
+      final encBytes = files['META-INF/encryption.xml']?.content;
+      if (encBytes is List<int>) {
+        final encXml = utf8.decode(encBytes, allowMalformed: true);
+        // Exclude pure font-obfuscation algorithms (IDPF / Adobe font mangling)
+        if (encXml.contains('<EncryptedData') &&
+            !encXml.contains('http://www.idpf.org/2008/embedding') &&
+            !encXml.contains('http://ns.adobe.com/pdf/enc/font')) {
+          throw const AppError(
+            code: 'DRM_PROTECTED',
+            message: 'This EPUB is DRM-protected and cannot be read.',
+          );
+        }
+      }
+    }
+    if (files.containsKey('META-INF/rights.xml')) {
+      throw const AppError(
+        code: 'DRM_PROTECTED',
+        message: 'This EPUB is DRM-protected and cannot be read.',
+      );
+    }
+  }
+
+  /// Decode XML or XHTML byte content with BOM and XML declaration encoding detection
+  static String decodeXmlBytes(List<int> bytes) {
+    if (bytes.isEmpty) return '';
+    // Check BOM
+    if (bytes.length >= 2) {
+      if (bytes[0] == 0xFF && bytes[1] == 0xFE) {
+        // UTF-16 LE
+        final uint16 = Uint16List.view(Uint8List.fromList(bytes.sublist(2)).buffer);
+        return String.fromCharCodes(uint16);
+      } else if (bytes[0] == 0xFE && bytes[1] == 0xFF) {
+        // UTF-16 BE
+        final swapped = Uint8List(bytes.length - 2);
+        for (int i = 2; i < bytes.length; i += 2) {
+          if (i + 1 < bytes.length) {
+            swapped[i - 2] = bytes[i + 1];
+            swapped[i - 1] = bytes[i];
+          }
+        }
+        final uint16 = Uint16List.view(swapped.buffer);
+        return String.fromCharCodes(uint16);
+      }
+    }
+
+    // Try standard UTF-8 first
+    try {
+      final text = utf8.decode(bytes);
+      return text;
+    } catch (_) {
+      // Check XML header for encoding="..."
+      final headProbe = latin1.decode(bytes.sublist(0, min(bytes.length, 256)));
+      final encMatch = RegExp(r'encoding=["\x27]([^"\x27]+)["\x27]', caseSensitive: false).firstMatch(headProbe);
+      if (encMatch != null) {
+        final enc = encMatch.group(1)!.toLowerCase();
+        if (enc.contains('latin') || enc.contains('1252') || enc.contains('iso-8859')) {
+          return latin1.decode(bytes);
+        }
+      }
+      return utf8.decode(bytes, allowMalformed: true);
+    }
+  }
+
   static String? _extractEpubHeading(String html) {
     final hMatch = RegExp(r'<h[1-3][^>]*>(.*?)</h[1-3]>', caseSensitive: false)
         .firstMatch(html);
@@ -2459,29 +2548,30 @@ class DocumentIngestionPipeline {
     return null;
   }
 
-  static String decodeHtmlForTest(String html) => _decodeEpubHtmlToProse(html);
-
-  static SectionRole resolveEpubSectionRoleForTest({
-    required String href,
-    required String properties,
-    String? htmlContent,
-    String? sectionTitle,
-  }) =>
-      _resolveEpubSectionRole(
-        href: href,
-        properties: properties,
-        htmlContent: htmlContent,
-        sectionTitle: sectionTitle,
-      );
-
-  static String _decodeEpubHtmlToProse(String html) {
+  /// Clean, DOM/tag-aware HTML-to-prose decoder (EPUB inline-tag fidelity).
+  static String decodeEpubHtmlToProse(String html) {
     if (html.isEmpty) return '';
 
-    // 1. Strip script, style, and head blocks
-    final content = html
+    // 1. Strip script, style, head, svg, nav, and aside blocks
+    var content = html
         .replaceAll(RegExp(r'<style[^>]*>[\s\S]*?</style>', caseSensitive: false), ' ')
         .replaceAll(RegExp(r'<script[^>]*>[\s\S]*?</script>', caseSensitive: false), ' ')
-        .replaceAll(RegExp(r'<head[^>]*>[\s\S]*?</head>', caseSensitive: false), ' ');
+        .replaceAll(RegExp(r'<head[^>]*>[\s\S]*?</head>', caseSensitive: false), ' ')
+        .replaceAll(RegExp(r'<svg[^>]*>[\s\S]*?</svg>', caseSensitive: false), ' ')
+        .replaceAll(RegExp(r'<nav[^>]*>[\s\S]*?</nav>', caseSensitive: false), ' ')
+        .replaceAll(RegExp(r'<aside[^>]*>[\s\S]*?</aside>', caseSensitive: false), ' ');
+
+    // 2. Strip footnote callouts: <sup>...</sup> when <= 4 chars or containing noteref
+    content = content.replaceAllMapped(
+      RegExp(r'<sup[^>]*>([\s\S]*?)</sup>', caseSensitive: false),
+      (m) {
+        final inner = m.group(1)!;
+        if (inner.contains('noteref') || inner.replaceAll(RegExp(r'<[^>]+>'), '').trim().length <= 4) {
+          return '';
+        }
+        return inner;
+      },
+    );
 
     final buf = StringBuffer();
     int lastChar1 = -1;
@@ -2502,8 +2592,8 @@ class DocumentIngestionPipeline {
     final tagOrTextRegex = RegExp(r'(<[^>]+>)|([^<]+)');
     const blockTags = {
       'p', 'div', 'h1', 'h2', 'h3', 'h4', 'h5', 'h6', 'li',
-      'blockquote', 'hr', 'br', 'tr', 'section', 'article',
-      'header', 'footer', 'table', 'dl', 'dt', 'dd'
+      'blockquote', 'hr', 'tr', 'section', 'article',
+      'header', 'footer', 'table', 'dl', 'dt', 'dd', 'pre'
     };
 
     for (final match in tagOrTextRegex.allMatches(content)) {
@@ -2514,8 +2604,9 @@ class DocumentIngestionPipeline {
         final nameMatch = RegExp(r'^</?([a-zA-Z0-9]+)').firstMatch(tag);
         if (nameMatch != null) {
           final tagName = nameMatch.group(1)!.toLowerCase();
-          if (blockTags.contains(tagName)) {
-            // O(1) trailing newline check - zero string copies
+          if (tagName == 'br') {
+            writeStr('\n');
+          } else if (blockTags.contains(tagName)) {
             if (lastChar2 != -1) {
               if (lastChar1 == 0x0A && lastChar2 == 0x0A) {
                 // already double newline
@@ -2526,7 +2617,7 @@ class DocumentIngestionPipeline {
               }
             }
           }
-          // Inline tags (span, em, i, a, b, strong, sub, sup, code, etc.) emit NOTHING
+          // Inline tags (span, em, i, a, b, strong, sub, sup, code, u, small, mark, font, q, cite, abbr, dfn, kbd, samp, var, time, bdi, bdo, wbr) emit NOTHING
         }
       } else if (text != null) {
         writeStr(decodeHtmlEntities(text));
@@ -2536,6 +2627,26 @@ class DocumentIngestionPipeline {
     final decoded = buf.toString();
     return sanitizeProseSpacing(decoded);
   }
+
+  static String decodeHtmlForTest(String html) => decodeEpubHtmlToProse(html);
+
+  static void checkEpubDrmForTest(Map<String, ArchiveFile> files) =>
+      _checkEpubDrm(files);
+
+  static SectionRole resolveEpubSectionRoleForTest({
+    required String href,
+    required String properties,
+    String? htmlContent,
+    String? sectionTitle,
+  }) =>
+      _resolveEpubSectionRole(
+        href: href,
+        properties: properties,
+        htmlContent: htmlContent,
+        sectionTitle: sectionTitle,
+      );
+
+  static String _decodeEpubHtmlToProse(String html) => decodeEpubHtmlToProse(html);
 
   /// Full HTML entity decoder (F06, F34.6)
   /// Decodes named HTML entities (&eacute;, &uuml;, &mdash;, &shy;, etc.) and decimal/hex numeric entities.

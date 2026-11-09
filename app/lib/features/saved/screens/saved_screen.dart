@@ -305,6 +305,52 @@ class _SavedScreenState extends ConsumerState<SavedScreen> {
     }
   }
 
+  Future<void> _exportMarkdown(List<SavedItem> items) async {
+    if (items.isEmpty) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('No saved notes to export')),
+      );
+      return;
+    }
+    final buffer = StringBuffer();
+    buffer.writeln('# Athena Saved Marginalia & Notes\n');
+    buffer.writeln(
+        'Exported on ${DateTime.now().toUtc().toIso8601String().split('T').first}\n');
+
+    for (final item in items) {
+      buffer.writeln(
+          '## ${item.title.isNotEmpty ? item.title : 'Saved Passage'}');
+      buffer.writeln(
+          '*From: ${item.documentTitle} · ${item.pageReference}*\n');
+      if (item.whyHere != null && item.whyHere!.isNotEmpty) {
+        buffer.writeln('> **Context:** ${item.whyHere}\n');
+      }
+      buffer.writeln('${item.body}\n');
+      if (item.citations.isNotEmpty) {
+        buffer.writeln('**Citations:**');
+        for (final cit in item.citations) {
+          final t = cit['title'] ?? 'Source';
+          final u = cit['url'] ?? '';
+          final p = cit['publisher'] ?? '';
+          buffer.writeln('- [$t]($u) — *$p*');
+        }
+        buffer.writeln('');
+      }
+      buffer.writeln('---\n');
+    }
+
+    final md = buffer.toString();
+    await Clipboard.setData(ClipboardData(text: md));
+    if (mounted) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content:
+              Text('Copied ${items.length} notes as Markdown to clipboard!'),
+        ),
+      );
+    }
+  }
+
   @override
   Widget build(BuildContext context) {
     final savedAsync = ref.watch(savedCardsProvider);
@@ -354,6 +400,18 @@ class _SavedScreenState extends ConsumerState<SavedScreen> {
           ),
         ),
         actions: [
+          IconButton(
+            icon: Icon(
+              Icons.file_download_outlined,
+              color: isDark ? const Color(0xFFCCCCCC) : AppTheme.ink,
+              size: 21,
+            ),
+            tooltip: 'Export Notes (.md)',
+            onPressed: () {
+              final items = savedAsync.value ?? [];
+              _exportMarkdown(items);
+            },
+          ),
           IconButton(
             icon: Icon(
               Icons.delete_sweep_outlined,

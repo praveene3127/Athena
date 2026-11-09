@@ -46,6 +46,26 @@ const _kProviderOptions = [
     description: 'Direct Anthropic console API key',
   ),
   _ProviderOption(
+    id: 'deepseek',
+    name: 'DeepSeek',
+    description: 'Direct DeepSeek API key for V3 & R1 reasoning models',
+  ),
+  _ProviderOption(
+    id: 'mistral',
+    name: 'Mistral AI',
+    description: 'European frontier models via Mistral API',
+  ),
+  _ProviderOption(
+    id: 'together',
+    name: 'Together AI',
+    description: 'High-throughput open source models via Together platform',
+  ),
+  _ProviderOption(
+    id: 'nvidia',
+    name: 'NVIDIA NIM',
+    description: 'Enterprise accelerated inference via NVIDIA build cloud',
+  ),
+  _ProviderOption(
     id: 'custom',
     name: 'Custom Endpoint',
     description: 'Self-hosted vLLM, Ollama, or OpenAI-compatible API',
@@ -102,6 +122,20 @@ class _BYOKSettingsSheetState extends State<BYOKSettingsSheet> {
   final _serverUrlController = TextEditingController();
   final _pairingTokenController = TextEditingController();
 
+  // Fallback AI Engine state
+  bool _expandFallback = false;
+  String _fallbackProvider = 'groq';
+  String? _fallbackSelectedModel;
+  final _fallbackKeyController = TextEditingController();
+  final _fallbackBaseUrlController = TextEditingController();
+  List<AIModelOption> _fallbackModels = [];
+  bool _testingFallback = false;
+  bool? _fallbackTestOk;
+  String? _fallbackTestMessage;
+  bool _fallbackProviderMenuOpen = false;
+  bool _fallbackModelMenuOpen = false;
+  bool _obscureFallbackKey = true;
+
   List<AIModelOption> _models = [];
   bool? _testOk;
   String? _testMessage;
@@ -127,6 +161,8 @@ class _BYOKSettingsSheetState extends State<BYOKSettingsSheet> {
     _baseUrlController.dispose();
     _serverUrlController.dispose();
     _pairingTokenController.dispose();
+    _fallbackKeyController.dispose();
+    _fallbackBaseUrlController.dispose();
     super.dispose();
   }
 
@@ -149,6 +185,17 @@ class _BYOKSettingsSheetState extends State<BYOKSettingsSheet> {
       final serverUrl = await SecureStorageService.instance.getBackendUrl();
       final pairingToken = await SecureStorageService.instance.getPairingToken();
 
+      // Fallback config
+      final savedFallbackProvider = prefs.getString('athena_ai_fallback_provider') ??
+          (config.fallbackProvider?.isNotEmpty == true ? config.fallbackProvider! : 'groq');
+      final savedFallbackKey = await SecureStorageService.instance
+              .getAIKey('athena_ai_fallback_api_key') ??
+          '';
+      final savedFallbackModel = prefs.getString('athena_ai_fallback_model') ??
+          config.fallbackModel;
+      final savedFallbackBaseUrl = prefs.getString('athena_ai_fallback_base_url') ??
+          (config.fallbackBaseUrl ?? '');
+
       setState(() {
         _provider = savedProvider;
         _keyController.text = savedKey;
@@ -160,6 +207,15 @@ class _BYOKSettingsSheetState extends State<BYOKSettingsSheet> {
         _models = savedModel != null && savedModel.isNotEmpty
             ? [AIModelOption(id: savedModel, name: savedModel)]
             : [];
+
+        _fallbackProvider = savedFallbackProvider;
+        _fallbackKeyController.text = savedFallbackKey;
+        _fallbackBaseUrlController.text = savedFallbackBaseUrl;
+        _fallbackSelectedModel = savedFallbackModel;
+        _fallbackModels = savedFallbackModel != null && savedFallbackModel.isNotEmpty
+            ? [AIModelOption(id: savedFallbackModel, name: savedFallbackModel)]
+            : [];
+
         _loading = false;
       });
     } catch (e) {
@@ -188,11 +244,17 @@ class _BYOKSettingsSheetState extends State<BYOKSettingsSheet> {
     );
 
     if (!mounted) return;
+    final isOk = res['ok'] == true;
+    final code = res['code']?.toString();
+    final msg = res['message']?.toString() ??
+        (isOk ? 'Connected successfully!' : 'Connection failed');
+    final formattedMessage =
+        (!isOk && code != null && code.isNotEmpty) ? '[$code] $msg' : msg;
+
     setState(() {
       _testingServer = false;
-      _serverTestOk = res['ok'] == true;
-      _serverTestMessage = res['message']?.toString() ??
-          (res['ok'] == true ? 'Connected successfully!' : 'Connection failed');
+      _serverTestOk = isOk;
+      _serverTestMessage = formattedMessage;
     });
   }
 
@@ -284,6 +346,68 @@ class _BYOKSettingsSheetState extends State<BYOKSettingsSheet> {
     }
   }
 
+  Future<void> _testFallbackConnection() async {
+    final key = _fallbackKeyController.text.trim();
+    if (key.isEmpty && _fallbackProvider != 'custom') {
+      setState(() {
+        _fallbackTestOk = false;
+        _fallbackTestMessage =
+            'Please enter an API key for fallback provider';
+      });
+      return;
+    }
+    setState(() {
+      _testingFallback = true;
+      _fallbackTestOk = null;
+      _fallbackTestMessage = null;
+    });
+    try {
+      final baseUrl = _fallbackBaseUrlController.text.trim().isNotEmpty
+          ? _fallbackBaseUrlController.text.trim()
+          : null;
+
+      final res = await _api.testAIConnection(
+        provider: _fallbackProvider,
+        apiKey: key.isNotEmpty ? key : null,
+        model: _fallbackSelectedModel,
+        baseUrl: baseUrl,
+      );
+
+      final liveModels = await _api.fetchModels(
+        provider: _fallbackProvider,
+        apiKey: key.isNotEmpty ? key : null,
+        baseUrl: baseUrl,
+      );
+
+      if (mounted) {
+        final ok = (res['ok'] == true || res['valid'] == true);
+        final rawMsg = res['message']?.toString();
+        setState(() {
+          _testingFallback = false;
+          _fallbackTestOk = ok;
+          _fallbackTestMessage = ok
+              ? 'Fallback connected! Loaded ${liveModels.length} live models.'
+              : (rawMsg ?? 'Fallback test failed.');
+          if (liveModels.isNotEmpty) {
+            _fallbackModels = liveModels;
+            if (_fallbackSelectedModel == null ||
+                !_fallbackModels.any((m) => m.id == _fallbackSelectedModel)) {
+              _fallbackSelectedModel = liveModels.first.id;
+            }
+          }
+        });
+      }
+    } catch (e) {
+      if (mounted) {
+        setState(() {
+          _testingFallback = false;
+          _fallbackTestOk = false;
+          _fallbackTestMessage = 'Check failed: $e';
+        });
+      }
+    }
+  }
+
   Future<void> _saveConfig() async {
     setState(() => _saving = true);
     final key = _keyController.text.trim();
@@ -295,6 +419,14 @@ class _BYOKSettingsSheetState extends State<BYOKSettingsSheet> {
         primaryApiKey: key.isNotEmpty ? key : null,
         primaryModel: _selectedModel,
         primaryBaseUrl: baseUrl.isNotEmpty ? baseUrl : null,
+        fallbackProvider: _fallbackProvider,
+        fallbackApiKey: _fallbackKeyController.text.trim().isNotEmpty
+            ? _fallbackKeyController.text.trim()
+            : null,
+        fallbackModel: _fallbackSelectedModel,
+        fallbackBaseUrl: _fallbackBaseUrlController.text.trim().isNotEmpty
+            ? _fallbackBaseUrlController.text.trim()
+            : null,
       );
       await SecureStorageService.instance
           .setBackendUrl(_serverUrlController.text.trim());
@@ -431,7 +563,7 @@ class _BYOKSettingsSheetState extends State<BYOKSettingsSheet> {
                               borderRadius: BorderRadius.circular(10),
                             ),
                             child: Icon(
-                              Icons.auto_awesome,
+                              Icons.tune_rounded,
                               size: 18,
                               color: isDark
                                   ? const Color(0xFF2DD4BF)
@@ -988,6 +1120,385 @@ class _BYOKSettingsSheetState extends State<BYOKSettingsSheet> {
                         ),
                         const SizedBox(height: 14),
                       ],
+
+                      // Fallback AI Engine (Auto-Failover) Collapsible Section (Audit Batch 3 P1-08)
+                      Material(
+                        color: Colors.transparent,
+                        child: Theme(
+                          data: Theme.of(context).copyWith(
+                            dividerColor: Colors.transparent,
+                            splashColor: Colors.transparent,
+                          ),
+                          child: ExpansionTile(
+                            initiallyExpanded: _expandFallback,
+                            onExpansionChanged: (val) =>
+                                setState(() => _expandFallback = val),
+                            tilePadding: EdgeInsets.zero,
+                            childrenPadding: const EdgeInsets.only(bottom: 12),
+                            title: Row(
+                              children: [
+                                Icon(Icons.shield_outlined,
+                                    size: 16,
+                                    color: isDark
+                                        ? const Color(0xFF2DD4BF)
+                                        : const Color(0xFF2D6A4F)),
+                                const SizedBox(width: 8),
+                                Expanded(
+                                  child: Text(
+                                    'Fallback AI Engine (Auto-Failover)',
+                                    maxLines: 1,
+                                    overflow: TextOverflow.ellipsis,
+                                    style: TextStyle(
+                                      fontFamily: AppTheme.fontUI,
+                                      fontSize: 13,
+                                      fontWeight: FontWeight.w600,
+                                      color: isDark
+                                          ? const Color(0xFFE0E0E0)
+                                          : AppTheme.ink,
+                                    ),
+                                  ),
+                                ),
+                              ],
+                            ),
+                            children: [
+                              Text(
+                                'Secondary provider used automatically when primary hits quota or rate limits.',
+                                style: TextStyle(
+                                  fontFamily: AppTheme.fontUI,
+                                  fontSize: 12,
+                                  color: isDark
+                                      ? AppTheme.darkTextMuted
+                                      : AppTheme.textMuted,
+                                ),
+                              ),
+                              const SizedBox(height: 10),
+                              // Fallback Provider Selector Card (Zero DropdownButton)
+                              Container(
+                                decoration: BoxDecoration(
+                                  color: isDark
+                                      ? const Color(0xFF1E1E1E)
+                                      : Colors.white,
+                                  borderRadius: BorderRadius.circular(12),
+                                  border: Border.all(color: borderColor),
+                                ),
+                                child: Column(
+                                  children: [
+                                    InkWell(
+                                      onTap: () => setState(() =>
+                                          _fallbackProviderMenuOpen =
+                                              !_fallbackProviderMenuOpen),
+                                      borderRadius: BorderRadius.circular(12),
+                                      child: Padding(
+                                        padding: const EdgeInsets.symmetric(
+                                            horizontal: 14, vertical: 12),
+                                        child: Row(
+                                          children: [
+                                            Expanded(
+                                              child: Text(
+                                                _kProviderOptions
+                                                    .firstWhere((p) =>
+                                                        p.id ==
+                                                        _fallbackProvider)
+                                                    .name,
+                                                style: TextStyle(
+                                                  fontFamily: AppTheme.fontUI,
+                                                  fontSize: 13,
+                                                  fontWeight: FontWeight.w600,
+                                                  color: isDark
+                                                      ? Colors.white
+                                                      : AppTheme.ink,
+                                                ),
+                                              ),
+                                            ),
+                                            Icon(
+                                              _fallbackProviderMenuOpen
+                                                  ? Icons
+                                                      .keyboard_arrow_up_rounded
+                                                  : Icons
+                                                      .keyboard_arrow_down_rounded,
+                                              size: 20,
+                                              color: isDark
+                                                  ? const Color(0xFF888888)
+                                                  : AppTheme.textMuted,
+                                            ),
+                                          ],
+                                        ),
+                                      ),
+                                    ),
+                                    if (_fallbackProviderMenuOpen) ...[
+                                      const Divider(height: 1),
+                                      ..._kProviderOptions.map((opt) {
+                                        final isSel =
+                                            opt.id == _fallbackProvider;
+                                        return InkWell(
+                                          onTap: () {
+                                            setState(() {
+                                              _fallbackProvider = opt.id;
+                                              _fallbackProviderMenuOpen = false;
+                                              _fallbackModels = [];
+                                              _fallbackSelectedModel = null;
+                                            });
+                                          },
+                                          child: Container(
+                                            padding: const EdgeInsets.symmetric(
+                                                horizontal: 14, vertical: 10),
+                                            color: isSel
+                                                ? (isDark
+                                                    ? const Color(0xFF282828)
+                                                    : const Color(0xFFEAE6DF))
+                                                : Colors.transparent,
+                                            child: Row(
+                                              children: [
+                                                Expanded(
+                                                  child: Text(
+                                                    opt.name,
+                                                    style: TextStyle(
+                                                      fontFamily:
+                                                          AppTheme.fontUI,
+                                                      fontSize: 13,
+                                                      fontWeight: isSel
+                                                          ? FontWeight.w600
+                                                          : FontWeight.normal,
+                                                      color: isDark
+                                                          ? Colors.white
+                                                          : AppTheme.ink,
+                                                    ),
+                                                  ),
+                                                ),
+                                                if (isSel)
+                                                  Icon(Icons.check_rounded,
+                                                      size: 16,
+                                                      color: isDark
+                                                          ? const Color(
+                                                              0xFF2DD4BF)
+                                                          : const Color(
+                                                              0xFF2D6A4F)),
+                                              ],
+                                            ),
+                                          ),
+                                        );
+                                      }),
+                                    ],
+                                  ],
+                                ),
+                              ),
+                              const SizedBox(height: 10),
+                              // Fallback API Key
+                              TextField(
+                                controller: _fallbackKeyController,
+                                obscureText: _obscureFallbackKey,
+                                autocorrect: false,
+                                decoration: _buildInputDecoration(
+                                  isDark,
+                                  hintText: 'Enter fallback API key...',
+                                  suffixIcon: IconButton(
+                                    icon: Icon(
+                                      _obscureFallbackKey
+                                          ? Icons.visibility_outlined
+                                          : Icons.visibility_off_outlined,
+                                      size: 18,
+                                      color: isDark
+                                          ? const Color(0xFF9E9E9E)
+                                          : AppTheme.textMuted,
+                                    ),
+                                    onPressed: () => setState(() =>
+                                        _obscureFallbackKey =
+                                            !_obscureFallbackKey),
+                                  ),
+                                ),
+                                style: TextStyle(
+                                  fontFamily: AppTheme.fontMono,
+                                  fontSize: 13,
+                                  color: isDark
+                                      ? Colors.white
+                                      : AppTheme.textPrimary,
+                                ),
+                              ),
+                              if (_fallbackProvider == 'custom') ...[
+                                const SizedBox(height: 10),
+                                TextField(
+                                  controller: _fallbackBaseUrlController,
+                                  keyboardType: TextInputType.url,
+                                  autocorrect: false,
+                                  decoration: _buildInputDecoration(
+                                    isDark,
+                                    hintText: 'http://localhost:11434/v1',
+                                  ),
+                                  style: TextStyle(
+                                    fontFamily: AppTheme.fontUI,
+                                    fontSize: 13,
+                                    color: isDark
+                                        ? Colors.white
+                                        : AppTheme.textPrimary,
+                                  ),
+                                ),
+                              ],
+                              const SizedBox(height: 10),
+                              // Check Fallback Connection Button
+                              ElevatedButton(
+                                onPressed: _testingFallback
+                                    ? null
+                                    : _testFallbackConnection,
+                                style: ElevatedButton.styleFrom(
+                                  backgroundColor: isDark
+                                      ? const Color(0xFF2DD4BF)
+                                      : const Color(0xFF2D6A4F),
+                                  foregroundColor: Colors.white,
+                                  elevation: 0,
+                                  shape: RoundedRectangleBorder(
+                                    borderRadius: BorderRadius.circular(10),
+                                  ),
+                                  padding:
+                                      const EdgeInsets.symmetric(vertical: 10),
+                                ),
+                                child: _testingFallback
+                                    ? const SizedBox(
+                                        height: 16,
+                                        width: 16,
+                                        child: CircularProgressIndicator(
+                                          strokeWidth: 2,
+                                          color: Colors.white,
+                                        ),
+                                      )
+                                    : const Text(
+                                        'Check Fallback Connection',
+                                        style: TextStyle(
+                                          fontFamily: AppTheme.fontUI,
+                                          fontSize: 13,
+                                          fontWeight: FontWeight.w600,
+                                        ),
+                                      ),
+                              ),
+                              if (_fallbackTestMessage != null) ...[
+                                const SizedBox(height: 8),
+                                Text(
+                                  _fallbackTestMessage!,
+                                  style: TextStyle(
+                                    fontFamily: AppTheme.fontMono,
+                                    fontSize: 11,
+                                    color: _fallbackTestOk == true
+                                        ? (isDark
+                                            ? const Color(0xFF2DD4BF)
+                                            : const Color(0xFF2D6A4F))
+                                        : Colors.redAccent,
+                                  ),
+                                ),
+                              ],
+                              if (_fallbackModels.isNotEmpty) ...[
+                                const SizedBox(height: 10),
+                                Container(
+                                  decoration: BoxDecoration(
+                                    color: isDark
+                                        ? const Color(0xFF1E1E1E)
+                                        : Colors.white,
+                                    borderRadius: BorderRadius.circular(12),
+                                    border: Border.all(color: borderColor),
+                                  ),
+                                  child: Column(
+                                    children: [
+                                      InkWell(
+                                        onTap: () => setState(() =>
+                                            _fallbackModelMenuOpen =
+                                                !_fallbackModelMenuOpen),
+                                        borderRadius: BorderRadius.circular(12),
+                                        child: Padding(
+                                          padding: const EdgeInsets.symmetric(
+                                              horizontal: 14, vertical: 12),
+                                          child: Row(
+                                            children: [
+                                              Expanded(
+                                                child: Text(
+                                                  _fallbackSelectedModel ??
+                                                      'Select Fallback Model',
+                                                  style: TextStyle(
+                                                    fontFamily:
+                                                        AppTheme.fontMono,
+                                                    fontSize: 13,
+                                                    fontWeight: FontWeight.w600,
+                                                    color: isDark
+                                                        ? Colors.white
+                                                        : AppTheme.ink,
+                                                  ),
+                                                ),
+                                              ),
+                                              Icon(
+                                                _fallbackModelMenuOpen
+                                                    ? Icons
+                                                        .keyboard_arrow_up_rounded
+                                                    : Icons
+                                                        .keyboard_arrow_down_rounded,
+                                                size: 20,
+                                                color: isDark
+                                                    ? const Color(0xFF888888)
+                                                    : AppTheme.textMuted,
+                                              ),
+                                            ],
+                                          ),
+                                        ),
+                                      ),
+                                      if (_fallbackModelMenuOpen) ...[
+                                        const Divider(height: 1),
+                                        ..._fallbackModels.map((m) {
+                                          final isSel =
+                                              m.id == _fallbackSelectedModel;
+                                          return InkWell(
+                                            onTap: () {
+                                              setState(() {
+                                                _fallbackSelectedModel = m.id;
+                                                _fallbackModelMenuOpen = false;
+                                              });
+                                            },
+                                            child: Container(
+                                              padding:
+                                                  const EdgeInsets.symmetric(
+                                                      horizontal: 14,
+                                                      vertical: 10),
+                                              color: isSel
+                                                  ? (isDark
+                                                      ? const Color(0xFF282828)
+                                                      : const Color(0xFFEAE6DF))
+                                                  : Colors.transparent,
+                                              child: Row(
+                                                children: [
+                                                  Expanded(
+                                                    child: Text(
+                                                      m.name,
+                                                      style: TextStyle(
+                                                        fontFamily:
+                                                            AppTheme.fontMono,
+                                                        fontSize: 12,
+                                                        fontWeight: isSel
+                                                            ? FontWeight.w600
+                                                            : FontWeight.normal,
+                                                        color: isDark
+                                                            ? Colors.white
+                                                            : AppTheme.ink,
+                                                      ),
+                                                    ),
+                                                  ),
+                                                  if (isSel)
+                                                    Icon(Icons.check_rounded,
+                                                        size: 16,
+                                                        color: isDark
+                                                            ? const Color(
+                                                                0xFF2DD4BF)
+                                                            : const Color(
+                                                                0xFF2D6A4F)),
+                                                ],
+                                              ),
+                                            ),
+                                          );
+                                        }),
+                                      ],
+                                    ],
+                                  ),
+                                ),
+                              ],
+                            ],
+                          ),
+                        ),
+                      ),
+                      const SizedBox(height: 14),
 
                       Material(
                         color: Colors.transparent,

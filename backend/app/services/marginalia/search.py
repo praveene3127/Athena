@@ -10,7 +10,7 @@ Combines:
 import math
 import re
 from collections import Counter
-from typing import Any, Dict, List, Tuple
+from typing import Any, Dict, List, Optional, Tuple
 
 try:
     from athena_rust_core import rust_hybrid_bm25_search as _rust_bm25_search
@@ -201,29 +201,35 @@ def reciprocal_rank_fusion(
     bm25_ranked: List[str],
     dense_ranked: List[str],
     k: int = 60,
+    fts5_ranked: Optional[List[str]] = None,
 ) -> List[Dict[str, Any]]:
     """
     Reciprocal Rank Fusion (RRF) with k=60 (§4 in Athena Research Blueprint).
-    RRF_score(d) = sum(1 / (k + rank_m(d))) for m in {bm25, dense}.
+    RRF_score(d) = sum(1 / (k + rank_m(d))) for m in {bm25, dense, fts5}.
     Returns items sorted descending by RRF score with rank provenance.
     """
     bm25_ranks = {doc_id: rank + 1 for rank, doc_id in enumerate(bm25_ranked)}
     dense_ranks = {doc_id: rank + 1 for rank, doc_id in enumerate(dense_ranked)}
+    fts5_ranks = {doc_id: rank + 1 for rank, doc_id in enumerate(fts5_ranked or [])}
 
-    all_docs = set(bm25_ranks.keys()) | set(dense_ranks.keys())
+    all_docs = set(bm25_ranks.keys()) | set(dense_ranks.keys()) | set(fts5_ranks.keys())
     fused: List[Dict[str, Any]] = []
 
     for doc_id in all_docs:
         b_rank = bm25_ranks.get(doc_id, 9999)
         d_rank = dense_ranks.get(doc_id, 9999)
+        f_rank = fts5_ranks.get(doc_id, 9999)
 
         score = (1.0 / (k + b_rank)) + (1.0 / (k + d_rank))
+        if fts5_ranked is not None:
+            score += (1.0 / (k + f_rank))
 
         fused.append({
             "doc_id": doc_id,
             "rrf_score": round(score, 6),
             "bm25_rank": b_rank if b_rank != 9999 else None,
             "dense_rank": d_rank if d_rank != 9999 else None,
+            "fts5_rank": f_rank if f_rank != 9999 else None,
         })
 
     fused.sort(key=lambda x: x["rrf_score"], reverse=True)
@@ -236,8 +242,9 @@ class HybridSearchService:
     Indexes a document's reading chunks and provides BM25 + Dense + RRF retrieval.
     """
 
-    def __init__(self, chunks: List[Any]):
+    def __init__(self, chunks: List[Any], document_id: Optional[str] = None):
         self.chunks = {c.id: c for c in chunks}
+        self.document_id = document_id or (chunks[0].document_id if chunks and hasattr(chunks[0], "document_id") else None)
         doc_tuples = [(c.id, c.raw_text) for c in chunks]
 
         self.bm25 = BM25Index()
@@ -257,7 +264,13 @@ class HybridSearchService:
         bm25_ids = [doc_id for doc_id, _ in bm25_results]
         dense_ids = [doc_id for doc_id, _ in dense_results]
 
-        fused = reciprocal_rank_fusion(bm25_ids, dense_ids, k=k_rrf)
+        fts5_ids = None
+        if self.document_id:
+            fts5_hits = search_fts5(self.document_id, query, top_k=top_k * 2)
+            if fts5_hits:
+                fts5_ids = [doc_id for doc_id, _ in fts5_hits]
+
+        fused = reciprocal_rank_fusion(bm25_ids, dense_ids, k=k_rrf, fts5_ranked=fts5_ids)
 
         top_candidates = fused[:top_k]
         results: List[Dict[str, Any]] = []

@@ -169,7 +169,7 @@ class ReaderBottomBar extends StatelessWidget {
               if (onGenerateCard != null)
                 IconButton(
                   icon: Icon(
-                    Icons.auto_awesome_rounded,
+                    Icons.menu_book_outlined,
                     color: theme.accentColor,
                     size: 18,
                   ),

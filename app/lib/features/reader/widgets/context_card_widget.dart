@@ -113,7 +113,7 @@ class ContextCardWidget extends StatelessWidget {
         upTitle.contains('PSYCHOLOGICAL LENS')) {
       return (
         label: 'THE HIDDEN MECHANISM',
-        icon: Icons.auto_awesome_outlined,
+        icon: Icons.menu_book_outlined,
         color: const Color(0xFFB45309), // Ochre #B45309
       );
     }
@@ -154,7 +154,7 @@ class ContextCardWidget extends StatelessWidget {
         combined.contains('LAW')) {
       return (
         label: 'THE HIDDEN MECHANISM',
-        icon: Icons.auto_awesome_outlined,
+        icon: Icons.menu_book_outlined,
         color: const Color(0xFFB45309),
       );
     }
@@ -781,7 +781,8 @@ class ContextCardWidget extends StatelessWidget {
         if (onAskAthena != null) ...[
           const SizedBox(width: 8),
           IconButton(
-            icon: Icon(Icons.auto_awesome, size: 18, color: theme.accentColor),
+            icon: Icon(Icons.chat_bubble_outline_rounded,
+                size: 18, color: theme.accentColor),
             tooltip: 'Ask Athena About This Fact',
             padding: EdgeInsets.zero,
             constraints: const BoxConstraints(minWidth: 32, minHeight: 32),

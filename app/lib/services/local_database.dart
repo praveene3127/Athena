@@ -47,7 +47,7 @@ class LocalDatabase {
     }
     return openDatabase(
       dbPath,
-      version: 2,
+      version: 3,
       onConfigure: (db) async {
         await db.execute('PRAGMA foreign_keys = ON');
         try {
@@ -60,117 +60,60 @@ class LocalDatabase {
         }
       },
       onUpgrade: (db, oldVersion, newVersion) async {
-        if (oldVersion < 2) {
-          try {
-            final docColumns =
-                await db.rawQuery('PRAGMA table_info(documents)');
-            final docColumnNames = docColumns
-                .map((row) => row['name'])
-                .whereType<String>()
-                .toSet();
-            if (!docColumnNames.contains('cards_generated')) {
-              await db.execute('ALTER TABLE documents ADD COLUMN cards_generated INTEGER DEFAULT 0');
+        try {
+          final docCols = (await db.rawQuery('PRAGMA table_info(documents)'))
+              .map((r) => r['name'])
+              .whereType<String>()
+              .toSet();
+          if (docCols.isNotEmpty) {
+            for (final col in [
+              ('cards_generated', 'INTEGER DEFAULT 0'),
+              ('current_chunk_index', 'INTEGER DEFAULT 0'),
+              ('current_chunk_id', 'TEXT'),
+              ('reading_mode', "TEXT DEFAULT 'feed'"),
+              ('author', "TEXT DEFAULT ''"),
+              ('format', "TEXT DEFAULT ''"),
+              ('processed_pages', 'INTEGER DEFAULT 0'),
+              ('chunk_count', 'INTEGER DEFAULT 0'),
+              ('total_words', 'INTEGER DEFAULT 0'),
+              ('total_characters', 'INTEGER DEFAULT 0'),
+              ('reading_time_minutes', 'INTEGER DEFAULT 0'),
+            ]) {
+              if (!docCols.contains(col.$1)) {
+                await db.execute('ALTER TABLE documents ADD COLUMN ${col.$1} ${col.$2}');
+              }
             }
-            if (!docColumnNames.contains('current_chunk_index')) {
-              await db.execute('ALTER TABLE documents ADD COLUMN current_chunk_index INTEGER DEFAULT 0');
-            }
-            if (!docColumnNames.contains('current_chunk_id')) {
-              await db.execute('ALTER TABLE documents ADD COLUMN current_chunk_id TEXT');
-            }
-            if (!docColumnNames.contains('reading_mode')) {
-              await db.execute('ALTER TABLE documents ADD COLUMN reading_mode TEXT DEFAULT \'feed\'');
-            }
-            if (!docColumnNames.contains('author')) {
-              await db.execute("ALTER TABLE documents ADD COLUMN author TEXT DEFAULT ''");
-            }
-            if (!docColumnNames.contains('format')) {
-              await db.execute("ALTER TABLE documents ADD COLUMN format TEXT DEFAULT ''");
-            }
-            if (!docColumnNames.contains('processed_pages')) {
-              await db.execute("ALTER TABLE documents ADD COLUMN processed_pages INTEGER DEFAULT 0");
-            }
-            if (!docColumnNames.contains('chunk_count')) {
-              await db.execute("ALTER TABLE documents ADD COLUMN chunk_count INTEGER DEFAULT 0");
-            }
-          } catch (e) {
-            debugPrint('Athena SQLite upgrade v2 notice: $e');
           }
+
+          final chunkCols = (await db.rawQuery('PRAGMA table_info(reading_chunks)'))
+              .map((r) => r['name'])
+              .whereType<String>()
+              .toSet();
+          if (chunkCols.isNotEmpty) {
+            if (!chunkCols.contains('simhash_hi')) {
+              await db.execute('ALTER TABLE reading_chunks ADD COLUMN simhash_hi INTEGER');
+            }
+            if (!chunkCols.contains('simhash_lo')) {
+              await db.execute('ALTER TABLE reading_chunks ADD COLUMN simhash_lo INTEGER');
+            }
+            if (!chunkCols.contains('section_role')) {
+              await db.execute("ALTER TABLE reading_chunks ADD COLUMN section_role TEXT DEFAULT 'chapter'");
+            }
+          }
+
+          final cardCols = (await db.rawQuery('PRAGMA table_info(context_cards)'))
+              .map((r) => r['name'])
+              .whereType<String>()
+              .toSet();
+          if (cardCols.isNotEmpty && !cardCols.contains('support_tier')) {
+            await db.execute("ALTER TABLE context_cards ADD COLUMN support_tier TEXT DEFAULT 'verified_external'");
+          }
+        } catch (e) {
+          debugPrint('Athena SQLite upgrade notice: $e');
         }
       },
       onOpen: (db) async {
         try {
-          final docColumns =
-              await db.rawQuery('PRAGMA table_info(documents)');
-          final docColumnNames = docColumns
-              .map((row) => row['name'])
-              .whereType<String>()
-              .toSet();
-          if (docColumnNames.isNotEmpty) {
-            if (!docColumnNames.contains('total_words')) {
-              await db.execute('ALTER TABLE documents ADD COLUMN total_words INTEGER DEFAULT 0');
-            }
-            if (!docColumnNames.contains('total_characters')) {
-              await db.execute('ALTER TABLE documents ADD COLUMN total_characters INTEGER DEFAULT 0');
-            }
-            if (!docColumnNames.contains('reading_time_minutes')) {
-              await db.execute('ALTER TABLE documents ADD COLUMN reading_time_minutes INTEGER DEFAULT 0');
-            }
-            if (!docColumnNames.contains('cards_generated')) {
-              await db.execute('ALTER TABLE documents ADD COLUMN cards_generated INTEGER DEFAULT 0');
-            }
-            if (!docColumnNames.contains('current_chunk_index')) {
-              await db.execute('ALTER TABLE documents ADD COLUMN current_chunk_index INTEGER DEFAULT 0');
-            }
-            if (!docColumnNames.contains('current_chunk_id')) {
-              await db.execute('ALTER TABLE documents ADD COLUMN current_chunk_id TEXT');
-            }
-            if (!docColumnNames.contains('reading_mode')) {
-              await db.execute('ALTER TABLE documents ADD COLUMN reading_mode TEXT DEFAULT \'feed\'');
-            }
-            if (!docColumnNames.contains('author')) {
-              await db.execute("ALTER TABLE documents ADD COLUMN author TEXT DEFAULT ''");
-            }
-            if (!docColumnNames.contains('format')) {
-              await db.execute("ALTER TABLE documents ADD COLUMN format TEXT DEFAULT ''");
-            }
-            if (!docColumnNames.contains('processed_pages')) {
-              await db.execute("ALTER TABLE documents ADD COLUMN processed_pages INTEGER DEFAULT 0");
-            }
-            if (!docColumnNames.contains('chunk_count')) {
-              await db.execute("ALTER TABLE documents ADD COLUMN chunk_count INTEGER DEFAULT 0");
-            }
-          }
-
-          final chunkColumns =
-              await db.rawQuery('PRAGMA table_info(reading_chunks)');
-          final columnNames = chunkColumns
-              .map((row) => row['name'])
-              .whereType<String>()
-              .toSet();
-          if (columnNames.isNotEmpty && !columnNames.contains('simhash_hi')) {
-            await db.execute(
-                'ALTER TABLE reading_chunks ADD COLUMN simhash_hi INTEGER');
-          }
-          if (columnNames.isNotEmpty && !columnNames.contains('simhash_lo')) {
-            await db.execute(
-                'ALTER TABLE reading_chunks ADD COLUMN simhash_lo INTEGER');
-          }
-          if (columnNames.isNotEmpty && !columnNames.contains('section_role')) {
-            await db.execute(
-                "ALTER TABLE reading_chunks ADD COLUMN section_role TEXT DEFAULT 'chapter'");
-          }
-          try {
-            final cardCols = (await db.rawQuery('PRAGMA table_info(context_cards)'))
-                .map((row) => row['name'] as String?)
-                .whereType<String>()
-                .toSet();
-            if (cardCols.isNotEmpty && !cardCols.contains('support_tier')) {
-              await db.execute(
-                  "ALTER TABLE context_cards ADD COLUMN support_tier TEXT DEFAULT 'verified_external'");
-            }
-          } catch (e) {
-            debugPrint('[Athena DB] Migration support_tier notice: $e');
-          }
           await db.execute('''
             CREATE TABLE IF NOT EXISTS chunk_user_edits (
               chunk_id TEXT PRIMARY KEY,
@@ -906,10 +849,44 @@ class LocalDatabase {
         ? Map<String, dynamic>.from(docRows.first)
         : <String, dynamic>{};
 
-    final chunkRows = await db.query('reading_chunks',
+    // Check if BinaryBookTape exists BEFORE querying SQLite for heavy chunk text
+    BinaryBookTape? openTape;
+    if (!kIsWeb) {
+      try {
+        final dir = await getApplicationDocumentsDirectory();
+        final safeId = documentId.replaceAll(RegExp(r'[^A-Za-z0-9_-]'), '_');
+        final tapeFile = File(p.join(dir.path, '$safeId.athena.bin'));
+        if (await tapeFile.exists()) {
+          openTape = BinaryBookTape.fromBytes(await tapeFile.readAsBytes());
+        }
+      } catch (e) {
+        debugPrint('Athena BinaryBookTape early check notice: $e');
+      }
+    }
+
+    List<Map<String, Object?>> chunkRows;
+    if (openTape != null) {
+      // Query metadata columns ONLY - skip raw_text!
+      chunkRows = await db.query(
+        'reading_chunks',
+        columns: [
+          'id', 'document_id', 'sequence', 'section_title', 'section_role',
+          'source_pages_json', 'start_offset', 'end_offset', 'checksum',
+          'boundary_method', 'canonical_sha256'
+        ],
         where: 'document_id = ?',
         whereArgs: [documentId],
-        orderBy: 'sequence ASC');
+        orderBy: 'sequence ASC',
+      );
+    } else {
+      chunkRows = await db.query(
+        'reading_chunks',
+        where: 'document_id = ?',
+        whereArgs: [documentId],
+        orderBy: 'sequence ASC',
+      );
+    }
+
     var cardRows = await db.query('context_cards',
         where: 'document_id = ? AND dismissed = 0', whereArgs: [documentId]);
 
@@ -933,22 +910,20 @@ class LocalDatabase {
     }
 
     final chunks = chunkRows.map((r) => Map<String, dynamic>.from(r)).toList();
-    if (!kIsWeb && chunks.isNotEmpty) {
-      try {
-        final dir = await getApplicationDocumentsDirectory();
-        final safeId = documentId.replaceAll(RegExp(r'[^A-Za-z0-9_-]'), '_');
-        final tapeFile = File(p.join(dir.path, '$safeId.athena.bin'));
-        if (await tapeFile.exists()) {
-          final tape = BinaryBookTape.fromBytes(await tapeFile.readAsBytes());
-          if (tape.chunkCount == chunks.length) {
-            for (var i = 0; i < chunks.length; i++) {
-              chunks[i]['raw_text'] = tape.getChunkText(i);
-            }
-          }
-        }
-      } catch (e) {
-        debugPrint('Athena BinaryBookTape read fallback: $e');
+    if (openTape != null && openTape.chunkCount == chunks.length) {
+      for (var i = 0; i < chunks.length; i++) {
+        chunks[i]['raw_text'] = openTape.getChunkText(i);
       }
+    } else if (openTape != null && openTape.chunkCount != chunks.length) {
+      // Mismatch fallback: reload with raw_text from SQLite
+      final fullRows = await db.query(
+        'reading_chunks',
+        where: 'document_id = ?',
+        whereArgs: [documentId],
+        orderBy: 'sequence ASC',
+      );
+      chunks.clear();
+      chunks.addAll(fullRows.map((r) => Map<String, dynamic>.from(r)));
     }
 
     final cards = cardRows.map((r) {
