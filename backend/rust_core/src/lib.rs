@@ -70,10 +70,10 @@ static DEHYPHEN_RE: LazyLock<Regex> = LazyLock::new(|| {
     Regex::new(r"\b([A-Za-z]+)-\s+([a-z]+)\b").unwrap()
 });
 static FN_PUNCT_RE: LazyLock<Regex> = LazyLock::new(|| {
-    Regex::new(r"([a-zA-Z\)])([;,.!?])\d{1,3}(\s|$|[)\]\'\u{2019}\u{201d}])").unwrap()
+    Regex::new(r#"([a-zA-Z\)])([;,.!?])\d{1,3}(\s|$|[)\]'"\u{2019}\u{201d}])"#).unwrap()
 });
 static FN_WORD_RE: LazyLock<Regex> = LazyLock::new(|| {
-    Regex::new(r"\b([a-zA-Z]{3,})(\d{1,2})(\s|$|[)\]\"\'\u{2019}\u{201d}.,;:!?])").unwrap()
+    Regex::new(r#"\b([a-zA-Z]{3,})(\d{1,2})(\s|$|[)\]'"\u{2019}\u{201d}.,;:!?])"#).unwrap()
 });
 static PUNCT_SPACE_RE: LazyLock<Regex> = LazyLock::new(|| {
     Regex::new(r"([;:,!?])([A-Za-z])").unwrap()

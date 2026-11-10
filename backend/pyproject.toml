@@ -26,6 +26,7 @@ dependencies = [
     "yake>=0.7.3",
     "python-dotenv>=1.0.1",
     "wordninja>=2.0.0",
+    "cryptography>=42.0.0",
     "pytest>=9.1.1",
 ]
 

@@ -104,8 +104,8 @@ class BM25Index:
                 denominator = tf + self.k1 * (1.0 - self.b + self.b * (doc_len / (self.avg_doc_len or 1.0)))
                 scores[i] += idf * (numerator / denominator)
 
-        # Return sorted by score descending
-        results = [(self.doc_ids[i], scores[i]) for i in range(self.num_docs)]
+        # Return sorted by score descending, filtering non-positive scores
+        results = [(self.doc_ids[i], scores[i]) for i in range(self.num_docs) if scores[i] > 0.0]
         results.sort(key=lambda x: x[1], reverse=True)
         return results
 
@@ -193,6 +193,7 @@ class DenseRetriever:
                         dot += v * q_vec[k]
             scores.append((doc_id, max(0.0, dot)))
 
+        scores = [(doc_id, dot) for (doc_id, dot) in scores if dot > 0.05]
         scores.sort(key=lambda x: x[1], reverse=True)
         return scores
 
@@ -213,6 +214,8 @@ def reciprocal_rank_fusion(
     fts5_ranks = {doc_id: rank + 1 for rank, doc_id in enumerate(fts5_ranked or [])}
 
     all_docs = set(bm25_ranks.keys()) | set(dense_ranks.keys()) | set(fts5_ranks.keys())
+    if not all_docs:
+        return []
     fused: List[Dict[str, Any]] = []
 
     for doc_id in all_docs:
@@ -269,6 +272,9 @@ class HybridSearchService:
             fts5_hits = search_fts5(self.document_id, query, top_k=top_k * 2)
             if fts5_hits:
                 fts5_ids = [doc_id for doc_id, _ in fts5_hits]
+
+        if not bm25_ids and not dense_ids and not fts5_ids:
+            return []
 
         fused = reciprocal_rank_fusion(bm25_ids, dense_ids, k=k_rrf, fts5_ranked=fts5_ids)
 

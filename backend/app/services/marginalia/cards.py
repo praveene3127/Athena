@@ -125,6 +125,11 @@ def _fetch_multi_source_evidence(
                     abst = " ".join(word for _, word in pos_words)[:400]
                 t = w.get("display_name") or w.get("title") or "Empirical Study"
                 y = w.get("publication_year") or ""
+                try:
+                    if y and int(y) > 2026:
+                        continue
+                except (ValueError, TypeError):
+                    pass
                 c = w.get("cited_by_count") or 0
                 doi = w.get("doi") or w.get("id") or "https://openalex.org"
                 ext = abst or t
@@ -162,6 +167,11 @@ def _fetch_multi_source_evidence(
                 c = item.get("is-referenced-by-count") or 0
                 pub_parts = item.get("published", {}).get("date-parts", [[None]])
                 pub = pub_parts[0][0] or "" if pub_parts and pub_parts[0] else ""
+                try:
+                    if pub and int(pub) > 2026:
+                        continue
+                except (ValueError, TypeError):
+                    pass
                 abst = item.get("abstract") or ""
                 abst_clean = re.sub(r"<[^>]+>", "", abst).strip()[:400]
                 ext = abst_clean or t
@@ -186,6 +196,11 @@ def _fetch_multi_source_evidence(
             for p in data.get("data", []):
                 t = p.get("title")
                 y = p.get("year") or ""
+                try:
+                    if y and int(y) > 2026:
+                        continue
+                except (ValueError, TypeError):
+                    pass
                 c = p.get("citationCount") or 0
                 u = p.get("url") or "https://semanticscholar.org"
                 a = p.get("abstract") or ""

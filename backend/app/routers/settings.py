@@ -58,11 +58,13 @@ class SaveAIConfigRequest(BaseModel):
     primary_api_key: Optional[str] = None
     primary_model: Optional[str] = None
     primary_base_url: Optional[str] = None
+    clear_primary_key: bool = False
 
     fallback_provider: Optional[str] = None
     fallback_api_key: Optional[str] = None
     fallback_model: Optional[str] = None
     fallback_base_url: Optional[str] = None
+    clear_fallback_key: bool = False
 
 
 @router.get("/providers")
@@ -79,6 +81,27 @@ async def list_providers():
     return {"providers": providers}
 
 
+def _match_saved_credential(saved: Optional[AISettings], provider: str, base_url: Optional[str]) -> Optional[str]:
+    if not saved:
+        return None
+    p_norm = provider.lower()
+    b_norm = (base_url or "").rstrip("/")
+
+    # Check primary
+    if (saved.primary_provider or "").lower() == p_norm:
+        saved_b = (saved.primary_base_url or "").rstrip("/")
+        if not b_norm or saved_b == b_norm:
+            return decrypt_secret(saved.primary_api_key)
+
+    # Check fallback
+    if (saved.fallback_provider or "").lower() == p_norm:
+        saved_b = (saved.fallback_base_url or "").rstrip("/")
+        if not b_norm or saved_b == b_norm:
+            return decrypt_secret(saved.fallback_api_key)
+
+    return None
+
+
 @router.post("/fetch-models")
 async def fetch_models(payload: FetchModelsRequest, session: Session = Depends(get_session)):
     """Dynamically queries the provider's live models catalog API."""
@@ -86,13 +109,11 @@ async def fetch_models(payload: FetchModelsRequest, session: Session = Depends(g
     if payload.base_url:
         validate_provider_http_url(payload.base_url, allow_local=(payload.provider.lower() == "custom"))
     # If key wasn't supplied or is masked placeholder, check saved DB setting
-    if not api_key or "..." in api_key:
+    if not api_key or "..." in api_key or "••••" in api_key:
         saved = session.exec(select(AISettings).where(AISettings.id == "global")).first()
-        if saved:
-            if saved.primary_provider == payload.provider:
-                api_key = decrypt_secret(saved.primary_api_key)
-            elif saved.fallback_provider == payload.provider:
-                api_key = decrypt_secret(saved.fallback_api_key)
+        matched = _match_saved_credential(saved, payload.provider, payload.base_url)
+        if matched:
+            api_key = matched
 
     models = await fetch_provider_models(
         provider=payload.provider,
@@ -108,13 +129,11 @@ async def test_connection(payload: TestConnectionRequest, session: Session = Dep
     api_key = payload.api_key
     if payload.base_url:
         validate_provider_http_url(payload.base_url, allow_local=(payload.provider.lower() == "custom"))
-    if not api_key or "..." in api_key:
+    if not api_key or "..." in api_key or "••••" in api_key:
         saved = session.exec(select(AISettings).where(AISettings.id == "global")).first()
-        if saved:
-            if saved.primary_provider == payload.provider:
-                api_key = decrypt_secret(saved.primary_api_key)
-            elif saved.fallback_provider == payload.provider:
-                api_key = decrypt_secret(saved.fallback_api_key)
+        matched = _match_saved_credential(saved, payload.provider, payload.base_url)
+        if matched:
+            api_key = matched
 
     result = await test_provider_model(
         provider=payload.provider,
@@ -186,20 +205,53 @@ async def save_ai_config(
         validate_provider_http_url(payload.fallback_base_url, allow_local=((payload.fallback_provider or "").lower() == "custom"))
 
     # Primary provider & key update
-    saved.primary_provider = payload.primary_provider
-    if payload.primary_api_key and "..." not in payload.primary_api_key and "••••" not in payload.primary_api_key:
+    p_changed = (saved.primary_provider or "").lower() != payload.primary_provider.lower()
+    p_url_changed = (saved.primary_base_url or "").rstrip("/") != (payload.primary_base_url or "").rstrip("/")
+    new_p_key = bool(
+        payload.primary_api_key
+        and payload.primary_api_key.strip()
+        and "..." not in payload.primary_api_key
+        and "••••" not in payload.primary_api_key
+    )
+
+    if payload.clear_primary_key:
+        saved.primary_api_key = None
+    elif new_p_key:
         saved.primary_api_key = encrypt_secret(payload.primary_api_key.strip())
+    elif p_changed or p_url_changed:
+        # Provider or endpoint changed without supplying a new key -> clear secret to avoid cross-endpoint leakage
+        saved.primary_api_key = None
+
+    saved.primary_provider = payload.primary_provider
     saved.primary_model = payload.primary_model or ""
     saved.primary_base_url = payload.primary_base_url
 
     # Fallback provider & key update
-    saved.fallback_provider = payload.fallback_provider
-    if payload.fallback_api_key and "..." not in payload.fallback_api_key and "••••" not in payload.fallback_api_key:
-        saved.fallback_api_key = encrypt_secret(payload.fallback_api_key.strip())
-    elif not payload.fallback_provider:
+    if not payload.fallback_provider:
+        saved.fallback_provider = None
         saved.fallback_api_key = None
-    saved.fallback_model = payload.fallback_model
-    saved.fallback_base_url = payload.fallback_base_url
+        saved.fallback_model = None
+        saved.fallback_base_url = None
+    else:
+        fb_changed = (saved.fallback_provider or "").lower() != payload.fallback_provider.lower()
+        fb_url_changed = (saved.fallback_base_url or "").rstrip("/") != (payload.fallback_base_url or "").rstrip("/")
+        new_fb_key = bool(
+            payload.fallback_api_key
+            and payload.fallback_api_key.strip()
+            and "..." not in payload.fallback_api_key
+            and "••••" not in payload.fallback_api_key
+        )
+
+        if payload.clear_fallback_key:
+            saved.fallback_api_key = None
+        elif new_fb_key:
+            saved.fallback_api_key = encrypt_secret(payload.fallback_api_key.strip())
+        elif fb_changed or fb_url_changed:
+            saved.fallback_api_key = None
+
+        saved.fallback_provider = payload.fallback_provider
+        saved.fallback_model = payload.fallback_model
+        saved.fallback_base_url = payload.fallback_base_url
     saved.updated_at = utc_now()
 
     session.add(saved)

@@ -32,6 +32,16 @@ def _migrate_columns():
     """Adds missing columns dynamically to existing SQLite tables."""
     from sqlalchemy import text
     with engine.begin() as conn:
+        # Check documents columns
+        doc_cols = {r[1] for r in conn.execute(text("PRAGMA table_info(documents)")).fetchall()}
+        if doc_cols:
+            if "extracted_text_sha256" not in doc_cols:
+                conn.execute(text("ALTER TABLE documents ADD COLUMN extracted_text_sha256 TEXT DEFAULT NULL"))
+            if "canonical_sha256" not in doc_cols:
+                conn.execute(text("ALTER TABLE documents ADD COLUMN canonical_sha256 TEXT DEFAULT NULL"))
+            if "repairs_count" not in doc_cols:
+                conn.execute(text("ALTER TABLE documents ADD COLUMN repairs_count INTEGER DEFAULT 0"))
+
         # Check reading_chunks columns
         rc_cols = {r[1] for r in conn.execute(text("PRAGMA table_info(reading_chunks)")).fetchall()}
         if rc_cols:
@@ -45,6 +55,12 @@ def _migrate_columns():
         if cc_cols:
             if "exact_quote" not in cc_cols:
                 conn.execute(text("ALTER TABLE context_cards ADD COLUMN exact_quote TEXT DEFAULT NULL"))
+            if "document_title" not in cc_cols:
+                conn.execute(text("ALTER TABLE context_cards ADD COLUMN document_title TEXT DEFAULT NULL"))
+            if "section_title" not in cc_cols:
+                conn.execute(text("ALTER TABLE context_cards ADD COLUMN section_title TEXT DEFAULT NULL"))
+            if "page_reference" not in cc_cols:
+                conn.execute(text("ALTER TABLE context_cards ADD COLUMN page_reference TEXT DEFAULT NULL"))
             if "support_status" not in cc_cols:
                 conn.execute(text("ALTER TABLE context_cards ADD COLUMN support_status TEXT DEFAULT 'fully_supported'"))
             if "support_tier" not in cc_cols:

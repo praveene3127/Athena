@@ -102,19 +102,8 @@ FeedBuildResult buildFeedResult({
     }
   }
 
-  // 4. Handle remaining unassigned cards:
-  // Deterministically place at eligible spacing intervals so no valid card is ever dropped
-  final unassignedCards = <ReaderItem>[];
-  for (final card in rawCards) {
-    if (!assignedCardIds.contains(card.id)) unassignedCards.add(card);
-  }
-  for (final entry in dynamicCardsBySeq.entries) {
-    if (!assignedCardIds.contains(entry.value.id) && !unassignedCards.any((c) => c.id == entry.value.id)) {
-      unassignedCards.add(entry.value);
-    }
-  }
-
-  int unassignedIdx = 0;
+  // 4. Build feed items strictly anchored to matching chunks
+  // Orphan cards without matching chunk anchors are quarantined and never misassigned
   final feedItems = <ReaderItem>[];
 
   for (final chunk in chunks) {
@@ -129,23 +118,6 @@ FeedBuildResult buildFeedResult({
         if (!dismissedCardIds.contains(card.id)) {
           feedItems.add(card);
         }
-      }
-    } else if (showContextCards &&
-               unassignedIdx < unassignedCards.length &&
-               (seq % minChunkGapBetweenCards == 0 || seq == minChunkGapBetweenCards - 1)) {
-      final card = unassignedCards[unassignedIdx++];
-      if (!dismissedCardIds.contains(card.id)) {
-        feedItems.add(card);
-      }
-    }
-  }
-
-  // Fallback for any trailing unassigned cards so none are lost
-  if (showContextCards) {
-    while (unassignedIdx < unassignedCards.length) {
-      final card = unassignedCards[unassignedIdx++];
-      if (!dismissedCardIds.contains(card.id) && !feedItems.any((c) => c.id == card.id)) {
-        feedItems.add(card);
       }
     }
   }

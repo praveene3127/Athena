@@ -1,11 +1,14 @@
 import 'dart:typed_data';
 import 'dart:async';
 import 'dart:convert';
+import 'dart:io';
 
 import 'package:archive/archive.dart';
+import 'package:crypto/crypto.dart';
 import 'package:cross_file/cross_file.dart';
 import 'package:dio/dio.dart';
 import 'package:flutter/foundation.dart' show kIsWeb, debugPrint;
+import 'package:path_provider/path_provider.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:xml/xml.dart';
 
@@ -102,6 +105,8 @@ String extractEpubText(List<int> bytes) {
       if (text.isNotEmpty) parts.add(sanitizeProseSpacing(text));
     }
     return parts.join('\n\n').trim();
+  } on AppError {
+    rethrow;
   } catch (e) {
     debugPrint('[Athena] EPUB spine parsing failed: $e');
     return '';
@@ -438,7 +443,6 @@ class ApiClient {
     }
 
     // 2. On-device standalone extraction and lossless chunking via unified DocumentIngestionPipeline
-    final docId = 'doc_${DateTime.now().millisecondsSinceEpoch}';
     final cleanTitle = fileName.replaceAll(RegExp(r'\.[a-zA-Z0-9]+$'), '');
 
     // Resolve bytes from fileStream if neither filePath nor fileBytes was provided
@@ -455,11 +459,48 @@ class ApiClient {
       }
     }
 
+    String docId;
+    String? persistentPath = filePath;
+    if (!kIsWeb) {
+      try {
+        List<int>? resolvedBytes = bytes;
+        if ((resolvedBytes == null || resolvedBytes.isEmpty) && filePath != null && filePath.isNotEmpty) {
+          final f = File(filePath);
+          if (f.existsSync()) {
+            resolvedBytes = f.readAsBytesSync();
+          }
+        }
+        if (resolvedBytes != null && resolvedBytes.isNotEmpty) {
+          final fileSha = sha256.convert(resolvedBytes).toString();
+          docId = 'doc_${fileSha.substring(0, 16)}';
+          final appDocDir = await getApplicationDocumentsDirectory();
+          final ext = fileName.contains('.') ? '.${fileName.split('.').last}' : '.pdf';
+          final booksDir = Directory('${appDocDir.path}/books');
+          if (!booksDir.existsSync()) {
+            booksDir.createSync(recursive: true);
+          }
+          final destFile = File('${booksDir.path}/$docId$ext');
+          if (!destFile.existsSync() || destFile.lengthSync() != resolvedBytes.length) {
+            destFile.writeAsBytesSync(resolvedBytes, flush: true);
+          }
+          persistentPath = destFile.path;
+          bytes = resolvedBytes;
+        } else {
+          docId = 'doc_${DateTime.now().millisecondsSinceEpoch}';
+        }
+      } catch (e) {
+        debugPrint('[Athena] File persist notice: $e');
+        docId = 'doc_${DateTime.now().millisecondsSinceEpoch}';
+      }
+    } else {
+      docId = 'doc_${DateTime.now().millisecondsSinceEpoch}';
+    }
+
     return _uploadStreamedOnDevice(
       docId: docId,
       fileName: fileName,
       cleanTitle: cleanTitle,
-      filePath: filePath,
+      filePath: persistentPath,
       fileBytes: bytes,
       onProgress: onProgress,
     );
@@ -540,7 +581,7 @@ class ApiClient {
           try {
             await LocalDatabase.instance.updateDocumentProgress(
               docId,
-              status: canFastStart ? 'ready' : 'processing',
+              status: canFastStart ? 'partially_readable' : 'processing',
               stage: 'extracting',
               stageLabel: stageMsg,
               percent: pctInt,
@@ -591,11 +632,12 @@ class ApiClient {
     final totalPages = result.pageCount;
     final canonicalStr = result.canonicalText;
 
-    if (canonicalStr.trim().isEmpty || allChunks.isEmpty) {
-      const err = AppError(
-        code: 'SCANNED_NOT_SUPPORTED',
-        message:
-            'No readable text could be extracted from this document. Scanned image-only files are not supported on-device.',
+    if (canonicalStr.trim().isEmpty || allChunks.isEmpty || !result.integrityVerified) {
+      final err = AppError(
+        code: !result.integrityVerified ? 'INTEGRITY_FAILED' : 'SCANNED_NOT_SUPPORTED',
+        message: !result.integrityVerified
+            ? 'Canonical SHA-256 reconstruction mismatch'
+            : 'No readable text could be extracted from this document. Scanned image-only files are not supported on-device.',
       );
       try {
         await LocalDatabase.instance.updateDocumentProgress(
@@ -609,7 +651,7 @@ class ApiClient {
       } catch (e) {
         debugPrint('[Athena Error] Failed updating doc status on empty text: $e');
       }
-      throw err;
+      return docId;
     }
 
     // Step C: Mark 'ready' and 100% immediately! Never block reader on network cards (H-1 / P0-04)
@@ -663,12 +705,25 @@ class ApiClient {
       if (doc != null) {
         final filePath = doc['file_path'] as String?;
         final fileName = doc['filename'] as String? ?? 'document.pdf';
+        final cleanTitle = (doc['title'] as String?) ??
+            fileName.replaceAll(RegExp(r'\.[a-zA-Z0-9]+$'), '');
+        await LocalDatabase.instance.clearDocumentContent(id);
         if (filePath != null &&
             filePath.isNotEmpty &&
             !filePath.startsWith('local://')) {
-          final xfile = XFile(filePath);
-          final length = await xfile.length();
-          unawaited(uploadDocument(null, length, fileName, filePath: filePath));
+          final file = File(filePath);
+          List<int>? bytes;
+          if (file.existsSync()) {
+            bytes = file.readAsBytesSync();
+          }
+          unawaited(_uploadStreamedOnDevice(
+            docId: id,
+            fileName: fileName,
+            cleanTitle: cleanTitle,
+            filePath: filePath,
+            fileBytes: bytes,
+            onProgress: null,
+          ));
           return;
         }
       }
@@ -984,10 +1039,15 @@ class ApiClient {
               'citations_json': map['citations_json']?.toString() ??
                   jsonEncode(map['citations'] ?? []),
               'exact_quote': map['exact_quote']?.toString(),
-              'support_status': 'fully_supported',
+              'support_status':
+                  map['support_status']?.toString() ?? 'unverified',
+              'support_tier':
+                  map['support_tier']?.toString() ?? 'internal_extractive',
               'canonical_sha256': map['canonical_sha256']?.toString() ?? '',
-              'generation_mode': 'grounded',
-              'verified': 1,
+              'generation_mode':
+                  map['generation_mode']?.toString() ?? 'grounded',
+              'verified':
+                  (map['verified'] == 1 || map['verified'] == true) ? 1 : 0,
               'saved': (map['saved'] == true || map['saved'] == 1) ? 1 : 0,
               'dismissed':
                   (map['dismissed'] == true || map['dismissed'] == 1) ? 1 : 0,
@@ -1755,7 +1815,7 @@ class ApiClient {
           }
         }
       } else {
-        // OpenAI-compatible providers: groq, deepseek, openrouter, openai, custom
+        // OpenAI-compatible providers: groq, deepseek, openrouter, openai, mistral, together, nvidia, custom
         String compUrl;
         if (provider == 'groq') {
           compUrl = 'https://api.groq.com/openai/v1/chat/completions';
@@ -1765,10 +1825,27 @@ class ApiClient {
           compUrl = 'https://openrouter.ai/api/v1/chat/completions';
         } else if (provider == 'deepseek') {
           compUrl = 'https://api.deepseek.com/v1/chat/completions';
+        } else if (provider == 'mistral') {
+          compUrl = 'https://api.mistral.ai/v1/chat/completions';
+        } else if (provider == 'together') {
+          compUrl = 'https://api.together.xyz/v1/chat/completions';
+        } else if (provider == 'nvidia') {
+          compUrl = 'https://integrate.api.nvidia.com/v1/chat/completions';
+        } else if (provider == 'custom') {
+          final cleanBase = (baseUrl ?? '').trim();
+          if (cleanBase.isEmpty) {
+            throw const AppError(
+              code: 'INVALID_CONFIG',
+              message: 'Custom provider requires a valid Base URL',
+            );
+          }
+          final b = sanitizeProviderUrl(cleanBase);
+          compUrl = b.endsWith('/chat/completions') ? b : '$b/chat/completions';
         } else {
-          final b = sanitizeProviderUrl(baseUrl ?? 'https://api.openai.com/v1');
-          compUrl =
-              b.endsWith('/chat/completions') ? b : '$b/chat/completions';
+          throw AppError(
+            code: 'UNSUPPORTED_PROVIDER',
+            message: 'Unsupported provider configuration: $provider',
+          );
         }
 
         if (model.isEmpty) {
@@ -2003,7 +2080,12 @@ class ApiClient {
           receiveTimeout: const Duration(seconds: 6),
         ));
         final mResp = await client.get(
-            'https://generativelanguage.googleapis.com/v1beta/models?key=$cleanKey');
+          'https://generativelanguage.googleapis.com/v1beta/models',
+          options: Options(headers: {
+            'Accept': 'application/json',
+            'x-goog-api-key': cleanKey,
+          }),
+        );
         if (mResp.statusCode == 200 && mResp.data is Map) {
           final rawModels = (mResp.data as Map)['models'] as List? ?? [];
           final List<AIModelOption> models = [];
@@ -2091,9 +2173,11 @@ class ApiClient {
       late final String modelsUrl;
       late final Map<String, dynamic> headers;
       if (providerKey == 'gemini') {
-        modelsUrl =
-            'https://generativelanguage.googleapis.com/v1beta/models?key=$key';
-        headers = {'Accept': 'application/json'};
+        modelsUrl = 'https://generativelanguage.googleapis.com/v1beta/models';
+        headers = {
+          'Accept': 'application/json',
+          'x-goog-api-key': key,
+        };
       } else if (providerKey == 'anthropic') {
         modelsUrl = 'https://api.anthropic.com/v1/models';
         headers = {
@@ -2107,8 +2191,25 @@ class ApiClient {
           'openai' => 'https://api.openai.com/v1',
           'openrouter' => 'https://openrouter.ai/api/v1',
           'deepseek' => 'https://api.deepseek.com/v1',
-          _ => sanitizeProviderUrl(baseUrl ?? 'https://api.openai.com/v1'),
+          'mistral' => 'https://api.mistral.ai/v1',
+          'together' => 'https://api.together.xyz/v1',
+          'nvidia' => 'https://integrate.api.nvidia.com/v1',
+          'custom' => sanitizeProviderUrl(baseUrl ?? ''),
+          _ => throw AppError(
+            code: 'UNSUPPORTED_PROVIDER',
+            message: 'Unsupported provider configuration: $providerKey',
+          ),
         };
+        if (providerKey == 'custom' && rawRoot.isEmpty) {
+          return {
+            'ok': false,
+            'valid': false,
+            'status': 'error',
+            'latency_ms': 0,
+            'message': 'Custom provider requires a valid Base URL',
+            'models': <Map<String, dynamic>>[]
+          };
+        }
         final root = sanitizeProviderUrl(rawRoot);
         modelsUrl = root.endsWith('/models') ? root : '$root/models';
         headers = {
@@ -2327,9 +2428,36 @@ class ApiClient {
         ),
       );
       if (response.statusCode == 200) {
+        if (token.isNotEmpty) {
+          try {
+            await testDio.get(
+              '$targetUrl/api/settings/ai-config',
+              options: Options(
+                headers: {
+                  'Accept': 'application/json',
+                  'X-Athena-Pairing-Token': token,
+                },
+              ),
+            );
+          } on DioException catch (authErr) {
+            if (authErr.response?.statusCode == 401 ||
+                authErr.response?.statusCode == 403) {
+              return {
+                'ok': false,
+                'code': 'INVALID_PAIRING_TOKEN',
+                'message':
+                    'Pairing token rejected (${authErr.response?.statusCode}). Enter the Pairing Token shown in your desktop terminal.',
+              };
+            }
+          }
+        }
+        final data = response.data is Map ? response.data as Map : {};
+        final isConfigured = data['llm_configured'] == true;
         return {
           'ok': true,
-          'message': 'Connected to Companion Server ($targetUrl).',
+          'message': isConfigured
+              ? 'Connected to Companion Server ($targetUrl).'
+              : 'Companion Connected · AI Not Configured',
           'data': response.data,
         };
       }

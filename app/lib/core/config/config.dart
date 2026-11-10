@@ -102,15 +102,17 @@ class AppConfig {
   static Future<void> setPairingToken(String token) async {
     final sanitized = token.trim();
     _pairingToken = sanitized;
-    try {
-      final prefs = await SharedPreferences.getInstance();
-      if (sanitized.isEmpty) {
-        await prefs.remove('athena_pairing_token');
-      } else {
-        await prefs.setString('athena_pairing_token', sanitized);
+    if (kIsWeb) {
+      try {
+        final prefs = await SharedPreferences.getInstance();
+        if (sanitized.isEmpty) {
+          await prefs.remove('athena_pairing_token');
+        } else {
+          await prefs.setString('athena_pairing_token', sanitized);
+        }
+      } catch (e) {
+        debugPrint('Athena caught error: $e');
       }
-    } catch (e) {
-      debugPrint('Athena caught error: $e');
     }
   }
 

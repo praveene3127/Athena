@@ -83,8 +83,22 @@ class SecureStorageService {
     } catch (e) {
       // Keystore read fallback
     }
-    final prefs = await SharedPreferences.getInstance();
-    return prefs.getString(_pairingTokenKey) ?? AppConfig.pairingToken;
+    if (kIsWeb) {
+      final prefs = await SharedPreferences.getInstance();
+      return prefs.getString(_pairingTokenKey) ?? AppConfig.pairingToken;
+    }
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      final legacy = prefs.getString(_pairingTokenKey);
+      if (legacy != null && legacy.trim().isNotEmpty) {
+        await _storage.write(key: _pairingTokenKey, value: legacy.trim());
+        await prefs.remove(_pairingTokenKey);
+        return legacy.trim();
+      }
+    } catch (e) {
+      debugPrint('Athena pairing migration notice: $e');
+    }
+    return AppConfig.pairingToken;
   }
 
   /// Saves the pairing token to secure storage and runtime AppConfig.
@@ -98,6 +112,14 @@ class SecureStorageService {
       }
     } catch (e) {
       debugPrint('Athena secure pairing token write notice: $e');
+    }
+    if (!kIsWeb) {
+      try {
+        final prefs = await SharedPreferences.getInstance();
+        await prefs.remove(_pairingTokenKey);
+      } catch (e) {
+        debugPrint('Athena plaintext token cleanup notice: $e');
+      }
     }
     await AppConfig.setPairingToken(sanitized);
   }
@@ -206,6 +228,28 @@ class SecureStorageService {
     try {
       final res = await dio.get('$sanitizedUrl/api/health');
       if (res.statusCode == 200 && res.data is Map) {
+        final token = testToken ?? await getPairingToken();
+        if (token.isNotEmpty) {
+          try {
+            await dio.get(
+              '$sanitizedUrl/api/settings/ai-config',
+              options: Options(
+                headers: {
+                  'Accept': 'application/json',
+                  'X-Athena-Pairing-Token': token,
+                },
+              ),
+            );
+          } on DioException catch (authErr) {
+            if (authErr.response?.statusCode == 401 || authErr.response?.statusCode == 403) {
+              return (
+                success: false,
+                llmConfigured: false,
+                message: 'Pairing token rejected (${authErr.response?.statusCode}).'
+              );
+            }
+          }
+        }
         final data = res.data as Map<String, dynamic>;
         final isConfigured = data['llm_configured'] == true;
         return (
@@ -213,7 +257,7 @@ class SecureStorageService {
           llmConfigured: isConfigured,
           message: isConfigured
               ? 'Connected successfully. Gemini AI is configured on the backend.'
-              : 'Connected. Backend is online, but Gemini API key is not yet set in backend/.env.'
+              : 'Companion Connected · AI Not Configured'
         );
       }
       return (

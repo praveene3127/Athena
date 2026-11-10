@@ -89,6 +89,29 @@ KNOWN_TECHNICAL_WORDS: Set[str] = {
     "schoolteacher", "breakthrough", "overthinking", "withstanding",
     "thanksgiving", "housekeeping", "afterthought", "withholding",
     "nevertheless", "furthermore", "notwithstanding",
+    # Academic, biological, chemical and scientific terms
+    "phosphorylation", "electroencephalography", "immunohistochemistry",
+    "counterrevolutionary", "deoxyribonucleic",
+}
+
+# Scientific & academic suffixes protected from dictionary word splitting
+KNOWN_TECHNICAL_SUFFIXES: Tuple[str, ...] = (
+    "ation", "ology", "ography", "genesis", "plasticity", "vascular",
+    "receptor", "kinase", "polymerase", "transcriptase", "phosphatase",
+    "peptide", "protein", "cellular", "synaptic", "neural", "synthesis",
+    "analysis", "chromatography", "spectrometry", "electrophoresis",
+    "immunohistochemistry", "phosphorylation", "encephalography", "deoxyribonucleic",
+)
+
+# Protected brands and tech terms from splitting and footnote stripping
+PROTECTED_BRANDS: Set[str] = {
+    "youtube", "javascript", "pymupdf", "postgresql", "fastapi", "openai",
+    "deepmind", "tensorflow", "pytorch", "github", "linkedin", "chatgpt",
+    "playwright", "typescript", "sqlite", "flutter",
+}
+
+DISALLOWED_SHORT_FRAGMENTS: Set[str] = {
+    "yl", "ic", "al", "er", "or", "ed", "ing", "ous", "ive", "in", "de", "re", "ex",
 }
 
 # Protected alphanumeric tokens and brands from footnote number stripping (FP-4)
@@ -135,7 +158,9 @@ COMMON_ENGLISH_BIGRAMS: Set[str] = {
 def is_valid_single_word(w: str) -> bool:
     """Returns True if w is a recognized valid single word (dictionary, prefixed, suffixed, or literary/technical)."""
     w_low = w.lower()
-    if w_low in LOADED_ENGLISH_WORDS:
+    if w_low in LOADED_ENGLISH_WORDS or w_low in PROTECTED_BRANDS:
+        return True
+    if any(w_low.endswith(sfx) for sfx in KNOWN_TECHNICAL_SUFFIXES) and len(w_low) >= 9:
         return True
     try:
         import wordninja
@@ -332,9 +357,8 @@ def extract_clean_book_title(
     combined_front = "\n".join(front_matter_texts[:8])
 
     patterns = [
-        r"(The\s+Meditations\s+of\s+(?:the\s+Emperor\s+)?Marcus\s+Aurelius(?:\s+Antoninus)?)",
-        r"(The\s+Subtle\s+Art\s+of\s+Not\s+Giving\s+a\s+F\*ck)",
-        r"(The\s+[A-Z][a-zA-Z\s]{4,40}(?:of|and|for)\s+[A-Z][a-zA-Z\s]{4,40})",
+        r"(?:^|\n)\s*([A-Z][a-zA-Z\s]{2,40}(?:of|and|for|in|on|to)\s+[A-Z][a-zA-Z\s]{2,40})",
+        r"(?:^|\n)\s*([A-Z][A-Za-z0-9\s,\-':]{4,60})(?:\n|$)",
     ]
     for pat in patterns:
         m = re.search(pat, combined_front, re.IGNORECASE)
@@ -357,10 +381,11 @@ def extract_clean_book_title(
         clean_fn = re.sub(r"_\d{4}_|\(\d{4}\)", "", clean_fn)
         parts = [p.strip() for p in clean_fn.split("-") if p.strip()]
         for p in parts:
-            if "meditations" in p.lower() or len(p.split()) >= 3:
+            if len(p.split()) >= 2 or len(p) >= 6:
                 p_clean = re.sub(r"[_\-]+", " ", p).strip()
                 p_clean = re.sub(r"\s+", " ", p_clean)
-                return p_clean.title()
+                if len(p_clean) >= 3:
+                    return p_clean.title()
 
     return raw_title or "Untitled Document"
 
@@ -424,7 +449,7 @@ def split_fused_kerning_words(text: str) -> str:
     def _split_camel(m: re.Match) -> str:
         full = m.group(0)
         low = full.lower()
-        if low in PROTECTED_ALPHANUMERIC or low in KNOWN_TECHNICAL_WORDS:
+        if low in PROTECTED_ALPHANUMERIC or low in KNOWN_TECHNICAL_WORDS or low in PROTECTED_BRANDS:
             return full
         for pfx in SURNAME_PREFIXES:
             if low.startswith(pfx) and len(full) > len(pfx) and full[len(pfx)].isupper():
@@ -470,12 +495,27 @@ def split_fused_kerning_words(text: str) -> str:
         is_all_caps = core.isupper() and len(core) > 1
         is_capitalized = bool(core and core[0].isupper() and not is_all_caps)
 
-        if not core or is_all_caps or len(core) < 12 or is_valid_single_word(core):
+        if (
+            not core
+            or is_all_caps
+            or len(core) < 12
+            or is_valid_single_word(core)
+            or core.lower() in PROTECTED_BRANDS
+            or any(core.lower().endswith(sfx) for sfx in KNOWN_TECHNICAL_SUFFIXES)
+        ):
             rebuilt.append(raw_w)
             continue
 
         parts = wordninja.split(core)
         if len(parts) == 2 and parts[1].lower() in derivational_suffixes:
+            rebuilt.append(raw_w)
+            continue
+
+        if (
+            any(len(p) <= 1 for p in parts)
+            or any(len(p) <= 2 and p.lower() not in VALID_SHORT_WORDS for p in parts)
+            or any(p.lower() in DISALLOWED_SHORT_FRAGMENTS for p in parts)
+        ):
             rebuilt.append(raw_w)
             continue
 

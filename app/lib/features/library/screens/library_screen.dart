@@ -1094,6 +1094,15 @@ class _LibraryScreenState extends ConsumerState<LibraryScreen>
 
       if (mounted) {
         if (AppConfig.isStandaloneMobile) {
+          final doc = await LocalDatabase.instance.getDocument(docId);
+          if (!mounted) return;
+          if (doc != null && doc['status'] == 'failed') {
+            final errCode =
+                doc['error_code'] as String? ?? 'EXTRACTION_FAILED';
+            final errMsg =
+                doc['error_message'] as String? ?? 'Document extraction failed';
+            throw AppError(code: errCode, message: errMsg);
+          }
           context.push('/reader/$docId');
         } else {
           context.push('/processing/$docId');

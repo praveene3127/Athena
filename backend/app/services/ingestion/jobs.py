@@ -133,6 +133,11 @@ def process_document_job(doc_id: str) -> None:
             doc.canonical_text = extracted["canonical_text"]
             doc.spans_json = json.dumps(extracted["spans"])
             doc.layout_warning = extracted["layout_warning"]
+            raw_path = extracted.get("raw_text_path")
+            if raw_path and Path(raw_path).exists():
+                import hashlib
+                doc.extracted_text_sha256 = hashlib.sha256(Path(raw_path).read_bytes()).hexdigest()
+            doc.repairs_count = len(extracted.get("repair_ledger") or [])
             session.add(doc)
             session.commit()
 
@@ -249,6 +254,8 @@ def process_document_job(doc_id: str) -> None:
             doc.integrity_verified = True
             doc.original_checksum = integrity_result["original_checksum"]
             doc.reconstructed_checksum = integrity_result["reconstructed_checksum"]
+            doc.canonical_sha256 = integrity_result["original_checksum"]
+            doc.status = "ready"  # Immediately readable upon integrity verification
             session.add(doc)
             session.commit()
 
@@ -363,7 +370,11 @@ def _run_isolated_document_job(doc_id: str) -> None:
     )
     try:
         worker.start()
-        worker.join()
+        worker.join(timeout=300)
+        if worker.is_alive():
+            logger.error("Book worker for %s timed out after 300s, terminating", doc_id)
+            worker.terminate()
+            worker.join(timeout=5)
         exit_code = worker.exitcode
         worker.close()
         if exit_code == 0:

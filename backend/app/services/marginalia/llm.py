@@ -85,7 +85,6 @@ def verify_grounding(body: str, extract: str) -> bool:
             return False
 
     # 2. Capitalized words not at sentence start
-    # Split body into sentences
     sentences = re.split(r"(?<=[.!?])\s+", body.strip())
     extract_lower = extract.lower()
 
@@ -98,6 +97,43 @@ def verify_grounding(body: str, extract: str) -> bool:
             if word[0].isupper() and word.lower() not in extract_lower:
                 logger.info(f"Grounding check failed: word '{word}' not in extract.")
                 return False
+
+    # 3. Negation polarity check
+    negation_pattern = re.compile(r"\b(not|never|no|neither|nor|failed\s+to|denied|refused|without)\b", re.I)
+    extract_has_negation = bool(negation_pattern.search(extract))
+
+    # 4. Directional entity relation (S-V-O) & inverted claim checks
+    entity_tokens = [w for w in re.findall(r"\b[A-Z][a-z]{2,}\b", body) if w.lower() in extract_lower]
+    unique_entities = []
+    for ent in entity_tokens:
+        if ent not in unique_entities:
+            unique_entities.append(ent)
+
+    if len(unique_entities) >= 2:
+        for i in range(len(unique_entities) - 1):
+            ent_a = unique_entities[i]
+            ent_b = unique_entities[i + 1]
+
+            for sentence in sentences:
+                pos_a_body = sentence.find(ent_a)
+                pos_b_body = sentence.find(ent_b)
+                if pos_a_body != -1 and pos_b_body != -1 and pos_a_body < pos_b_body:
+                    # Inverted directional relation check
+                    all_a_pos = [m.start() for m in re.finditer(re.escape(ent_a), extract)]
+                    all_b_pos = [m.start() for m in re.finditer(re.escape(ent_b), extract)]
+                    if all_a_pos and all_b_pos and max(all_b_pos) < min(all_a_pos):
+                        span = sentence[pos_a_body:pos_b_body]
+                        if not re.search(r"\b(?:by|from|after|under)\b", span, re.I):
+                            logger.info(
+                                "Grounding check failed: inverted relation between '%s' and '%s'.",
+                                ent_a, ent_b
+                            )
+                            return False
+
+                # Contradictory negation polarity check on entity pair
+                if (pos_a_body != -1 and pos_b_body != -1) and negation_pattern.search(sentence) and not extract_has_negation:
+                    logger.info("Grounding check failed: contradictory negation polarity on key entities.")
+                    return False
 
     return True
 
@@ -160,7 +196,7 @@ class AnthropicAdapter:
         if resp.status_code != 200:
             raise openai.APIStatusError(
                 message=f"Anthropic error {resp.status_code}: {resp.text}",
-                response=None,
+                response=resp,
                 body=None,
             )
         data = resp.json()
@@ -180,6 +216,9 @@ class AnthropicAdapter:
                 self.choices = [_SimpleChoice(t)]
 
         return _SimpleResponse(text)
+
+
+AnthropicClient = AnthropicAdapter
 
 
 def create_provider_client(provider: str, api_key: str, base_url: Optional[str] = None):
@@ -742,11 +781,9 @@ class LLMService:
 
             try:
                 if ep_type == "gemini":
-                    models_to_try = [ep_model]
-                    if self.model and self.model not in models_to_try:
-                        models_to_try.insert(0, self.model)
-                    if "gemini-2.0-flash" not in models_to_try:
-                        models_to_try.append("gemini-2.0-flash")
+                    models_to_try = [m for m in [self.model, ep_model] if m]
+                    if not models_to_try:
+                        models_to_try = [ep_model]
 
                     last_err = None
                     for candidate_model in models_to_try:
@@ -1015,11 +1052,9 @@ class LLMService:
             ep_model = ep.get("model") or self.model or ""
             try:
                 if ep_type == "gemini":
-                    models_to_try = [ep_model]
-                    if self.model and self.model not in models_to_try:
-                        models_to_try.insert(0, self.model)
-                    if "gemini-2.0-flash" not in models_to_try:
-                        models_to_try.append("gemini-2.0-flash")
+                    models_to_try = [m for m in [self.model, ep_model] if m]
+                    if not models_to_try:
+                        models_to_try = [ep_model]
 
                     last_err = None
                     raw_content = ""

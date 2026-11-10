@@ -142,11 +142,22 @@ class LocalDatabase {
               created_at INTEGER
             )
           ''');
-          await db.execute(
-              'CREATE VIRTUAL TABLE IF NOT EXISTS reading_chunks_fts USING fts5('
-              'chunk_id UNINDEXED, document_id UNINDEXED, raw_text, section_title, tokenize=\'unicode61\')');
+          try {
+            await db.execute(
+                'CREATE VIRTUAL TABLE IF NOT EXISTS reading_chunks_fts USING fts5('
+                'chunk_id UNINDEXED, document_id UNINDEXED, raw_text, section_title, tokenize=\'unicode61\')');
+          } catch (e) {
+            debugPrint('[Athena LocalDatabase] FTS5 init notice: $e');
+            try {
+              await db.execute(
+                  'CREATE VIRTUAL TABLE IF NOT EXISTS reading_chunks_fts USING fts4('
+                  'chunk_id, document_id, raw_text, section_title)');
+            } catch (e2) {
+              debugPrint('[Athena LocalDatabase] FTS4 init notice: $e2');
+            }
+          }
         } catch (e) {
-          debugPrint('Athena FTS5 init notice: $e');
+          debugPrint('Athena DB init notice: $e');
         }
       },
       onCreate: (db, version) async {
@@ -643,7 +654,42 @@ class LocalDatabase {
         }
       }
     } catch (e) {
-      debugPrint('Athena FTS5 search query notice: $e');
+      debugPrint('[Athena LocalDatabase] FTS5 search query notice: $e');
+      // FTS4 fallback without bm25
+      try {
+        if (tokens.isNotEmpty) {
+          final expression = tokens
+              .map((token) => '"${token.replaceAll('"', '""')}"*')
+              .join(' AND ');
+          final ftsRows = await db.rawQuery('''
+            SELECT c.*
+            FROM reading_chunks_fts f
+            JOIN reading_chunks c ON c.id = f.chunk_id
+            WHERE f.document_id = ? AND reading_chunks_fts MATCH ?
+            LIMIT ?
+          ''', [documentId, expression, limit]);
+          if (ftsRows.isNotEmpty) {
+            return ftsRows.map((r) => Map<String, dynamic>.from(r)).toList();
+          }
+        }
+      } catch (e2) {
+        debugPrint('[Athena LocalDatabase] FTS4 search query notice: $e2');
+      }
+    }
+
+    if (tokens.isNotEmpty) {
+      final whereClauses = tokens.map((_) => 'LOWER(raw_text) LIKE ?').join(' AND ');
+      final whereArgs = <Object?>[
+        documentId,
+        ...tokens.map((t) => '%${t.toLowerCase()}%'),
+        limit,
+      ];
+      final rows = await db.rawQuery('''
+        SELECT * FROM reading_chunks
+        WHERE document_id = ? AND $whereClauses
+        ORDER BY sequence ASC LIMIT ?
+      ''', whereArgs);
+      return rows.map((r) => Map<String, dynamic>.from(r)).toList();
     }
 
     final rows = await db.rawQuery('''
@@ -666,6 +712,7 @@ class LocalDatabase {
     'citations_json',
     'exact_quote',
     'support_status',
+    'support_tier',
     'canonical_sha256',
     'generation_mode',
     'verified',
@@ -728,7 +775,7 @@ class LocalDatabase {
           sanitized['citations_json'] ?? '[]',
           sanitized['exact_quote'],
           sanitized['support_status'] ?? 'unverified',
-          sanitized['support_tier'] ?? 'verified_external',
+          sanitized['support_tier'] ?? 'internal_extractive',
           sanitized['canonical_sha256'] ?? '',
           sanitized['generation_mode'] ?? 'grounded',
           sanitized['verified'] ?? 0,
@@ -792,6 +839,52 @@ class LocalDatabase {
         if (await tape.exists()) await tape.delete();
       } catch (e) {
         debugPrint('Athena BinaryBookTape cleanup notice: $e');
+      }
+    }
+  }
+
+  Future<void> clearDocumentContent(String id) async {
+    final db = await database;
+    await db.transaction((txn) async {
+      try {
+        await txn.rawDelete(
+            'DELETE FROM reading_chunks_fts WHERE document_id = ?', [id]);
+      } catch (e) {
+        debugPrint('[Athena LocalDatabase] FTS clear notice: $e');
+      }
+      await txn.delete('reading_chunks',
+          where: 'document_id = ?', whereArgs: [id]);
+      await txn.delete('context_cards',
+          where: 'document_id = ? AND saved = 0', whereArgs: [id]);
+      await txn.delete('chunk_user_edits',
+          where: 'document_id = ?', whereArgs: [id]);
+      await txn.delete('document_pages',
+          where: 'document_id = ?', whereArgs: [id]);
+      await txn.update(
+        'documents',
+        {
+          'status': 'processing',
+          'stage': 'upload',
+          'stage_label': 'Restarting ingestion...',
+          'percent': 0,
+          'chunk_count': 0,
+          'cards_generated': 0,
+          'canonical_text': null,
+          'error_message': null,
+          'error_code': null,
+        },
+        where: 'id = ?',
+        whereArgs: [id],
+      );
+    });
+    if (!kIsWeb) {
+      try {
+        final dir = await getApplicationDocumentsDirectory();
+        final safeId = id.replaceAll(RegExp(r'[^A-Za-z0-9_-]'), '_');
+        final tape = File(p.join(dir.path, '$safeId.athena.bin'));
+        if (await tape.exists()) await tape.delete();
+      } catch (e) {
+        debugPrint('Athena BinaryBookTape clear notice: $e');
       }
     }
   }
@@ -1008,55 +1101,9 @@ class LocalDatabase {
       }
     }
 
-    // Interleave any remaining unassigned cards every 3 chunks so no card is orphaned
-    final unassigned =
-        cards.where((c) => !assignedCardIds.contains(c['id'])).toList();
-    if (unassigned.isNotEmpty && items.isNotEmpty) {
-      int cardIdx = 0;
-      for (int i = 0; i < items.length && cardIdx < unassigned.length; i++) {
-        if (items[i]['type'] == 'reading_chunk') {
-          final seq = items[i]['sequence'] as int? ?? 1;
-          if (seq % 3 == 0 || seq == 2) {
-            final card = unassigned[cardIdx++];
-            List citations = [];
-            if (card['citations_json'] != null) {
-              try {
-                citations =
-                    jsonDecode(card['citations_json'] as String) as List;
-              } catch (e) {
-                debugPrint('Athena caught error: $e');
-              }
-            }
-            items.insert(i + 1, {
-              'type': 'context_card',
-              'id': card['id'],
-              'insert_after': items[i]['id'],
-              'source_chunk_id': card['source_chunk_id'] ?? items[i]['id'],
-              'sequence': seq,
-              'concept_name': card['concept_name'],
-              'card_type': card['card_type'] ?? 'context',
-              'title': card['title'] ?? '',
-              'body': card['body'] ?? '',
-              'why_here': card['why_here'] ?? '',
-              'exact_quote': card['exact_quote'],
-              'support_status': card['support_status'] ?? 'unverified',
-              'support_tier': card['support_tier'] ?? 'verified_external',
-              'verified': card['verified'] == 1,
-              'generation_mode': card['generation_mode'] ?? 'grounded',
-              'is_speculative_draft':
-                  card['generation_mode'] == 'speculative_draft',
-              'saved': card['saved'] == 1,
-              'citations': citations,
-            });
-            i++; // skip over inserted card
-          }
-        }
-      }
-    }
-
     if (!docMap.containsKey('integrity')) {
       docMap['integrity'] = {
-        'verified': true,
+        'verified': docMap['integrity_verified'] == 1,
         'chunk_count': chunks.length,
       };
     }

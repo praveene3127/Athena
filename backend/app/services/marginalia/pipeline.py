@@ -625,17 +625,8 @@ class ReadAheadPipeline:
                             break
                     raw_body = " ".join(trimmed) or sentences[0]
 
-                    # Format into active editorial category (100% declarative fact, zero Q&A, zero ||REVEAL||)
-                    if active_slot == 0:
-                        final_body = f"Empirical investigations into {concept.name} reveal documented experimental findings: {raw_body}"
-                    elif active_slot == 1:
-                        final_body = f"In contrast to conventional assumptions, documented findings regarding {concept.name} demonstrate that {raw_body}"
-                    elif active_slot == 2:
-                        final_body = f"Archival records and primary historical sources document that {raw_body}"
-                    else:
-                        final_body = f"The underlying mechanism behind {concept.name} operates through documented behavioral and systemic dynamics: {raw_body}"
-
-                    final_body = final_body.replace("||REVEAL||", " ")
+                    # Clean and format body cleanly without fake template frames
+                    final_body = raw_body.replace("||REVEAL||", " ")
                     final_body = re.sub(r"^(?:Question|Q):\s*.*?\n+(?:Answer|A|Evidence|Finding|Result):\s*", "", final_body, flags=re.I)
                     final_body = re.sub(r"\s+", " ", final_body).strip()
 

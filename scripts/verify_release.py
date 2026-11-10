@@ -298,61 +298,60 @@ def gate_5_api_matrix():
     from fastapi.testclient import TestClient
     from app.main import app
 
-    client = TestClient(app)
+    with TestClient(app) as client:
+        # 1. Health check
+        res = client.get("/api/health")
+        if res.status_code != 200:
+            fail_gate(5, "API Matrix", f"/api/health returned HTTP {res.status_code}")
+        data = res.json()
+        if data.get("status") != "ok" or data.get("database") not in ("ok", "reachable"):
+            fail_gate(5, "API Matrix", f"/api/health invalid payload: {data}")
+        print(f"  + /api/health: OK (DB: {data.get('database')}, Model: {data.get('model_status')})")
 
-    # 1. Health check
-    res = client.get("/api/health")
-    if res.status_code != 200:
-        fail_gate(5, "API Matrix", f"/api/health returned HTTP {res.status_code}")
-    data = res.json()
-    if data.get("status") != "ok" or data.get("database") not in ("ok", "reachable"):
-        fail_gate(5, "API Matrix", f"/api/health invalid payload: {data}")
-    print(f"  + /api/health: OK (DB: {data.get('database')}, Model: {data.get('model_status')})")
+        # 2. Documents root
+        res = client.get("/api/documents")
+        if res.status_code != 200 or not isinstance(res.json(), list):
+            fail_gate(5, "API Matrix", f"/api/documents failed: {res.status_code}")
+        print(f"  + GET /api/documents: OK (returned list)")
 
-    # 2. Documents root
-    res = client.get("/api/documents")
-    if res.status_code != 200 or not isinstance(res.json(), list):
-        fail_gate(5, "API Matrix", f"/api/documents failed: {res.status_code}")
-    print(f"  + GET /api/documents: OK (returned list)")
+        # 3. 404 contracts for nonexistent documents
+        nonexistent_id = "nonexistent_doc_release_gate_test"
 
-    # 3. 404 contracts for nonexistent documents
-    nonexistent_id = "nonexistent_doc_release_gate_test"
+        # 3a. Force ingest nonexistent
+        res = client.post(f"/api/documents/{nonexistent_id}/force-ingest")
+        if res.status_code != 404:
+            fail_gate(5, "API Matrix", f"Force ingest nonexistent doc returned {res.status_code}, expected 404")
+        print(f"  + POST /api/documents/{nonexistent_id}/force-ingest: 404 (Expected)")
 
-    # 3a. Force ingest nonexistent
-    res = client.post(f"/api/documents/{nonexistent_id}/force-ingest")
-    if res.status_code != 404:
-        fail_gate(5, "API Matrix", f"Force ingest nonexistent doc returned {res.status_code}, expected 404")
-    print(f"  + POST /api/documents/{nonexistent_id}/force-ingest: 404 (Expected)")
+        # 3b. Vibe check nonexistent
+        res = client.post(f"/api/documents/{nonexistent_id}/vibe-check", json={"chunk_index": 1})
+        if res.status_code != 404:
+            fail_gate(5, "API Matrix", f"Vibe check nonexistent doc returned {res.status_code}, expected 404")
+        print(f"  + POST /api/documents/{nonexistent_id}/vibe-check: 404 (Expected)")
 
-    # 3b. Vibe check nonexistent
-    res = client.post(f"/api/documents/{nonexistent_id}/vibe-check", json={"chunk_index": 1})
-    if res.status_code != 404:
-        fail_gate(5, "API Matrix", f"Vibe check nonexistent doc returned {res.status_code}, expected 404")
-    print(f"  + POST /api/documents/{nonexistent_id}/vibe-check: 404 (Expected)")
+        # 3c. Delete nonexistent
+        res = client.delete(f"/api/documents/{nonexistent_id}")
+        if res.status_code != 404:
+            fail_gate(5, "API Matrix", f"Delete nonexistent doc returned {res.status_code}, expected 404")
+        print(f"  + DELETE /api/documents/{nonexistent_id}: 404 (Expected)")
 
-    # 3c. Delete nonexistent
-    res = client.delete(f"/api/documents/{nonexistent_id}")
-    if res.status_code != 404:
-        fail_gate(5, "API Matrix", f"Delete nonexistent doc returned {res.status_code}, expected 404")
-    print(f"  + DELETE /api/documents/{nonexistent_id}: 404 (Expected)")
+        # 4. Context token header security on /api/ask/local
+        ask_payload = {
+            "document_id": "test_doc",
+            "chunk_id": "test_chunk",
+            "question": "What is the key takeaway?",
+            "passage_text": "This is a test passage for release gate validation.",
+        }
+        res = client.post("/api/ask/local", json=ask_payload)
+        if res.status_code not in (401, 403):
+            fail_gate(5, "API Matrix", f"/api/ask/local without context token header returned {res.status_code}, expected 401/403")
+        print(f"  + POST /api/ask/local without header: {res.status_code} (Unauthorized - Expected)")
 
-    # 4. Context token header security on /api/ask/local
-    ask_payload = {
-        "document_id": "test_doc",
-        "chunk_id": "test_chunk",
-        "question": "What is the key takeaway?",
-        "passage_text": "This is a test passage for release gate validation.",
-    }
-    res = client.post("/api/ask/local", json=ask_payload)
-    if res.status_code not in (401, 403):
-        fail_gate(5, "API Matrix", f"/api/ask/local without context token header returned {res.status_code}, expected 401/403")
-    print(f"  + POST /api/ask/local without header: {res.status_code} (Unauthorized - Expected)")
-
-    # 5. Query token must NOT be accepted (header only)
-    res = client.post("/api/ask/local?token=bogus_query_token", json=ask_payload)
-    if res.status_code not in (401, 403):
-        fail_gate(5, "API Matrix", f"/api/ask/local with query token bypassed header check: {res.status_code}")
-    print(f"  + POST /api/ask/local with query token rejected: {res.status_code} (Header Enforced)")
+        # 5. Query token must NOT be accepted (header only)
+        res = client.post("/api/ask/local?token=bogus_query_token", json=ask_payload)
+        if res.status_code not in (401, 403):
+            fail_gate(5, "API Matrix", f"/api/ask/local with query token bypassed header check: {res.status_code}")
+        print(f"  + POST /api/ask/local with query token rejected: {res.status_code} (Header Enforced)")
 
     pass_gate(5, "API Matrix & Security Contract")
 
@@ -414,6 +413,10 @@ def gate_8_invariants():
     log_gate(8, "Core Invariants: Lossless Chunking & Card Quote Anchoring")
 
     from app.services.chunker import chunk_document
+    from app.db import get_session
+    from app.models import Document, ReadingChunk
+    from fastapi.testclient import TestClient
+    from app.main import app
 
     sample_corpora = [
         "Single sentence that should constitute a single chunk without any alteration.",
@@ -435,15 +438,73 @@ def gate_8_invariants():
             )
         print(f"  + Sample {idx} (len={len(text)}): Reconstructed exactly across {len(chunks)} chunks.")
 
-    # Exact-quote anchoring contract check
-    # Any card created in Athena must satisfy: card.exact_quote in chunk.text
-    dummy_chunk_text = "The quick brown fox jumps over the lazy dog in the late afternoon sun."
-    valid_quote = "the lazy dog"
-    invalid_quote = "the hyperactive dog"
+    with TestClient(app) as client:
+        # Create a test document and chunk in SQLite to test real POST /api/cards/quote and /tape endpoints
+        from app.db import engine
+        from sqlmodel import Session
 
-    assert valid_quote in dummy_chunk_text, "Anchor quote must be exact substring"
-    assert invalid_quote not in dummy_chunk_text, "Invalid quote must be rejected"
-    print("  + Exact-quote anchoring invariant validated.")
+        with Session(engine) as session:
+            test_doc = Document(
+                id="doc_release_gate_test",
+                filename="gate_test.txt",
+                title="Gate Test Document",
+                status="ready",
+                chunk_count=1,
+            )
+            test_chunk = ReadingChunk(
+                id="chunk_release_gate_test",
+                document_id="doc_release_gate_test",
+                sequence=1,
+                raw_text="The quick brown fox jumps over the lazy dog in the late afternoon sun.",
+                source_pages_json="[1]",
+                start_offset=0,
+                end_offset=len("The quick brown fox jumps over the lazy dog in the late afternoon sun."),
+                checksum="chk_release_gate",
+                boundary_method="sentence",
+                canonical_sha256="testsha256",
+            )
+            session.merge(test_doc)
+            session.merge(test_chunk)
+            session.commit()
+
+        # Real POST /api/cards/quote validation:
+        # 1. Valid quote substring -> 200 OK
+        valid_res = client.post(
+            "/api/cards/quote",
+            json={
+                "document_id": "doc_release_gate_test",
+                "chunk_id": "chunk_release_gate_test",
+                "exact_quote": "the lazy dog",
+                "body": "User noted this excerpt about the lazy dog.",
+            },
+        )
+        if valid_res.status_code != 200:
+            fail_gate(8, "Core Invariants", f"POST /api/cards/quote with valid substring failed: {valid_res.status_code} {valid_res.text}")
+        print("  + Real POST /api/cards/quote verified with valid substring anchor (200 OK).")
+
+        # 2. Invalid quote substring -> 422 Unprocessable Entity
+        invalid_res = client.post(
+            "/api/cards/quote",
+            json={
+                "document_id": "doc_release_gate_test",
+                "chunk_id": "chunk_release_gate_test",
+                "exact_quote": "the hyperactive cat",
+                "body": "Hallucinated excerpt that does not exist in chunk.",
+            },
+        )
+        if invalid_res.status_code != 422:
+            fail_gate(8, "Core Invariants", f"POST /api/cards/quote with non-existent quote was not rejected with 422: {invalid_res.status_code}")
+        print("  + Real POST /api/cards/quote rejected non-verbatim quote (422 QUOTE_NOT_IN_CHUNK).")
+
+        # 3. Binary tape header check: magic bytes b"ATHN\x00\x00\x00\x01"
+        tape_res = client.get("/api/documents/doc_release_gate_test/tape")
+        if tape_res.status_code != 200:
+            fail_gate(8, "Core Invariants", f"GET /api/documents/.../tape failed: {tape_res.status_code}")
+        tape_bytes = tape_res.content
+        expected_magic = b"ATHN\x00\x00\x00\x01"
+        if not tape_bytes.startswith(expected_magic):
+            fail_gate(8, "Core Invariants", f"Binary tape magic header mismatch! Expected prefix {expected_magic!r}, got {tape_bytes[:8]!r}")
+        print("  + Binary tape header validated (magic: ATHN v1).")
 
     pass_gate(8, "Core Invariants")
 

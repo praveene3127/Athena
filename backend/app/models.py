@@ -27,6 +27,9 @@ class Document(SQLModel, table=True):
     integrity_verified: bool = Field(default=False)
     original_checksum: Optional[str] = None
     reconstructed_checksum: Optional[str] = None
+    extracted_text_sha256: Optional[str] = None
+    canonical_sha256: Optional[str] = None
+    repairs_count: int = Field(default=0)
     layout_warning: Optional[str] = None  # e.g. "multi_column" or None
     context_status: str = Field(default="pending")  # pending | ready | partial | unavailable
 
@@ -81,6 +84,9 @@ class ContextCard(SQLModel, table=True):
     why_here: str
     citations_json: str = "[]"  # list of citation dicts stored as TEXT
     exact_quote: Optional[str] = None  # Verbatim supporting quote from source chunk
+    document_title: Optional[str] = None
+    section_title: Optional[str] = None
+    page_reference: Optional[str] = None
     support_status: str = Field(default="fully_supported")  # fully_supported | partially_supported | unsupported | abstain
     support_tier: Optional[str] = Field(default="verified_external")  # verified_external | single_source | internal_extractive
     canonical_sha256: Optional[str] = None

@@ -119,6 +119,7 @@ class _ReaderScreenState extends ConsumerState<ReaderScreen>
           _syncProgressAndMergeCards(chunkSeq,
               chunkId: chunkId, feedIndex: index);
         }
+        _prefetchUpcomingCards(index);
       },
       onAiDwell: (index) async {
         if (index < 0 || index >= _cachedFeedItems.length) return;
@@ -318,6 +319,13 @@ class _ReaderScreenState extends ConsumerState<ReaderScreen>
   void _recomputeCachedFeed([ReaderData? data]) {
     final d = data ?? _lastReaderData;
     if (d == null) return;
+
+    final String? anchorItemId = (_cachedFeedItems.isNotEmpty &&
+            _currentIndex >= 0 &&
+            _currentIndex < _cachedFeedItems.length)
+        ? _cachedFeedItems[_currentIndex].id
+        : null;
+
     _cachedFeedItems = buildInterleavedFeed(
       rawItems: d.items,
       dynamicCardsBySeq: _cardsByChunkSeq,
@@ -329,6 +337,20 @@ class _ReaderScreenState extends ConsumerState<ReaderScreen>
     for (final it in _cachedFeedItems) {
       if (it.isReadingChunk) {
         _chunksById[it.id] = it;
+      }
+    }
+
+    if (anchorItemId != null && _cachedFeedItems.isNotEmpty) {
+      final newIdx = _cachedFeedItems.indexWhere((it) => it.id == anchorItemId);
+      if (newIdx != -1 && newIdx != _currentIndex) {
+        _currentIndex = newIdx;
+        if (_readingMode == 'feed' && _pageController.hasClients) {
+          WidgetsBinding.instance.addPostFrameCallback((_) {
+            if (_pageController.hasClients && mounted) {
+              _pageController.jumpToPage(newIdx);
+            }
+          });
+        }
       }
     }
   }
@@ -487,7 +509,6 @@ class _ReaderScreenState extends ConsumerState<ReaderScreen>
     final index = visible.first.index.clamp(0, _currentFeed.length - 1);
     if (index != _currentIndex) {
       setState(() => _currentIndex = index);
-      _prefetchUpcomingCards(index);
       _governor.onPageTurn(index);
 
       // Debounce flow scroll position saves (600ms)
@@ -536,7 +557,6 @@ class _ReaderScreenState extends ConsumerState<ReaderScreen>
   void _onPageChanged(int index) {
     setState(() => _currentIndex = index);
     _governor.onPageTurn(index);
-    _prefetchUpcomingCards(index);
   }
 
   void _jumpTo(int index, int total) {
@@ -575,6 +595,17 @@ class _ReaderScreenState extends ConsumerState<ReaderScreen>
 
   @override
   Widget build(BuildContext context) {
+    ref.listen<AsyncValue<ReaderData>>(
+      readerDataProvider(widget.documentId),
+      (previous, next) {
+        next.whenData((d) {
+          if (!identical(_lastReaderData, d)) {
+            _syncData(d);
+          }
+        });
+      },
+    );
+
     final readerAsync = ref.watch(readerDataProvider(widget.documentId));
     final theme = ReaderThemeConfig.getById(_themeId);
     final isDark = Theme.of(context).brightness == Brightness.dark;
@@ -584,7 +615,7 @@ class _ReaderScreenState extends ConsumerState<ReaderScreen>
       backgroundColor: theme.scaffoldBackground,
       drawer: readerAsync.maybeWhen(
         data: (d) {
-          if (!identical(_lastReaderData, d)) {
+          if (_lastReaderData == null) {
             _syncData(d);
           }
           return ChaptersDrawer(
@@ -664,7 +695,7 @@ class _ReaderScreenState extends ConsumerState<ReaderScreen>
               child: Text('Error loading reader: $e',
                   style: TextStyle(color: theme.textColor))),
           data: (data) {
-            if (!identical(_lastReaderData, data)) {
+            if (_lastReaderData == null) {
               _syncData(data);
             }
             final feedItems = _cachedFeedItems;

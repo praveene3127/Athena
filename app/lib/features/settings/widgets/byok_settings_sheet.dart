@@ -196,6 +196,7 @@ class _BYOKSettingsSheetState extends State<BYOKSettingsSheet> {
       final savedFallbackBaseUrl = prefs.getString('athena_ai_fallback_base_url') ??
           (config.fallbackBaseUrl ?? '');
 
+      if (!mounted) return;
       setState(() {
         _provider = savedProvider;
         _keyController.text = savedKey;
@@ -261,6 +262,7 @@ class _BYOKSettingsSheetState extends State<BYOKSettingsSheet> {
   Future<void> _pasteFromClipboard() async {
     HapticFeedback.selectionClick();
     final data = await Clipboard.getData(Clipboard.kTextPlain);
+    if (!mounted) return;
     if (data?.text != null && data!.text!.trim().isNotEmpty) {
       setState(() {
         _keyController.text = data.text!.trim();
@@ -412,6 +414,9 @@ class _BYOKSettingsSheetState extends State<BYOKSettingsSheet> {
     setState(() => _saving = true);
     final key = _keyController.text.trim();
     final baseUrl = _baseUrlController.text.trim();
+    final fallbackKey = _fallbackKeyController.text.trim();
+    final fallbackModel = _fallbackSelectedModel;
+    final hasFallback = fallbackKey.isNotEmpty || (fallbackModel != null && fallbackModel.isNotEmpty);
 
     try {
       await _api.saveAIConfig(
@@ -419,11 +424,9 @@ class _BYOKSettingsSheetState extends State<BYOKSettingsSheet> {
         primaryApiKey: key.isNotEmpty ? key : null,
         primaryModel: _selectedModel,
         primaryBaseUrl: baseUrl.isNotEmpty ? baseUrl : null,
-        fallbackProvider: _fallbackProvider,
-        fallbackApiKey: _fallbackKeyController.text.trim().isNotEmpty
-            ? _fallbackKeyController.text.trim()
-            : null,
-        fallbackModel: _fallbackSelectedModel,
+        fallbackProvider: hasFallback ? _fallbackProvider : null,
+        fallbackApiKey: fallbackKey.isNotEmpty ? fallbackKey : null,
+        fallbackModel: hasFallback ? fallbackModel : null,
         fallbackBaseUrl: _fallbackBaseUrlController.text.trim().isNotEmpty
             ? _fallbackBaseUrlController.text.trim()
             : null,

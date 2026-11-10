@@ -24,10 +24,12 @@ def check_rate_limit(client_ip: str = "unknown") -> bool:
     return limiter.allow(f"ask:{client_ip}", ASK_RATE_LIMIT)
 
 
+ASK_MAX_QUESTION_CHARS = 2000
+
 class AskRequest(BaseModel):
     document_id: str
     chunk_id: str
-    question: str = Field(max_length=2000)
+    question: str = Field(max_length=ASK_MAX_QUESTION_CHARS)
     passage_text: Optional[str] = Field(default=None, max_length=16000)
     selected_text: Optional[str] = Field(default=None, max_length=16000)
 
@@ -35,7 +37,7 @@ class AskRequest(BaseModel):
 class LocalAskRequest(BaseModel):
     document_id: str = Field(min_length=1, max_length=100)
     chunk_id: str = Field(min_length=1, max_length=150)
-    question: str = Field(min_length=1, max_length=2000)
+    question: str = Field(min_length=1, max_length=ASK_MAX_QUESTION_CHARS)
     passage_text: str = Field(min_length=1, max_length=16000)
     neighbors_text: str = Field(default="", max_length=32000)
     selected_text: Optional[str] = Field(default=None, max_length=16000)
@@ -89,16 +91,18 @@ def ask_about_passage(
                     clean_s = s
                     break
             return {
-                "status": "ok",
+                "status": "llm_not_configured",
+                "fallback": True,
                 "answer": f"From this passage: {clean_s}",
             }
         return {
-            "status": "not_configured",
+            "status": "llm_not_configured",
+            "fallback": True,
             "answer": None,
             "message": "Ask needs an AI key. Please configure your key in Settings (AI ENGINES).",
         }
 
-    # 3. Locate target chunk (robustly handles chunk IDs, card IDs, or document fallback)
+    # 3. Locate target chunk (robustly handles chunk IDs or card IDs)
     chunk = session.get(ReadingChunk, req.chunk_id)
     if not chunk or chunk.document_id != req.document_id:
         card = session.get(ContextCard, req.chunk_id)
@@ -106,6 +110,8 @@ def ask_about_passage(
             chunk = session.get(ReadingChunk, card.source_chunk_id)
 
     if not chunk or chunk.document_id != req.document_id:
+        if req.chunk_id:
+            raise AppException("NOT_FOUND", f"Chunk {req.chunk_id} not found in document {req.document_id}", status_code=404)
         chunk = session.exec(
             select(ReadingChunk)
             .where(ReadingChunk.document_id == req.document_id)

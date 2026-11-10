@@ -169,6 +169,14 @@ def repair_text(
 
         # 3. Explicit invisible characters
         if ch in INVISIBLE_MAP:
+            # Preserve ZWJ (\u200D) and ZWNJ (\u200C) when adjacent to complex scripts (Indic, Arabic, Cyrillic) or emoji
+            if ch in ("\u200c", "\u200d"):
+                prev_ch = text[i - 1] if i > 0 else ""
+                next_ch = text[i + 1] if i + 1 < n else ""
+                if (prev_ch and ord(prev_ch) > 0x024F) or (next_ch and ord(next_ch) > 0x024F):
+                    out_chars.append(ch)
+                    i += 1
+                    continue
             rep = INVISIBLE_MAP[ch]
             ledger.add(page, i, ch, rep, "invisible_char_rule")
             if rep:

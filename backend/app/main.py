@@ -7,7 +7,7 @@ import time
 from pathlib import Path
 from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import FileResponse, JSONResponse, HTMLResponse
+from fastapi.responses import FileResponse, JSONResponse, HTMLResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
 from starlette.exceptions import HTTPException as StarletteHTTPException
 
@@ -62,11 +62,23 @@ async def require_lan_pairing_token(request: Request, call_next):
     pairing_token = os.environ.get("ATHENA_PAIRING_TOKEN", "").strip()
     if pairing_token:
         client_host = getattr(request.client, "host", "") if request.client else ""
-        is_loopback = client_host in {"127.0.0.1", "::1", "localhost", "testclient"}
+        is_loopback = client_host in {"127.0.0.1", "::1", "localhost"}
+        has_proxy_indicator = bool(
+            request.headers.get("X-Forwarded-For")
+            or request.headers.get("CF-Connecting-IP")
+            or request.headers.get("X-Real-IP")
+            or os.environ.get("TUNNEL_URL")
+        )
+        if has_proxy_indicator:
+            is_loopback = False
+
         path = request.url.path
-        is_exempt = path in {"/api/health", "/api/pair-info", "/api/version", "/health", "/api"} or not path.startswith("/api/")
+        is_exempt = path in {"/pair", "/api/health", "/api/pair-info", "/api/version", "/health", "/api"} or not path.startswith("/api/")
         if not is_loopback and not is_exempt:
-            token = request.headers.get("X-Athena-Pairing-Token", "").strip()
+            token = (
+                request.headers.get("X-Athena-Pairing-Token", "").strip()
+                or request.cookies.get("athena_session_token", "").strip()
+            )
             import secrets
             if not token or not secrets.compare_digest(token, pairing_token):
                 return JSONResponse(
@@ -74,7 +86,7 @@ async def require_lan_pairing_token(request: Request, call_next):
                     content={
                         "error": {
                             "code": "UNAUTHORIZED_PAIRING",
-                            "message": "Valid X-Athena-Pairing-Token header is required for remote LAN access.",
+                            "message": "Valid X-Athena-Pairing-Token header or athena_session_token cookie is required for remote LAN access.",
                         }
                     },
                 )
@@ -235,6 +247,32 @@ def get_pair_info():
         "tunnel_url": tunnel_url,
         "pairing_required": bool(os.environ.get("ATHENA_PAIRING_TOKEN", "").strip()),
     }
+
+
+@app.get("/pair")
+def pair_device_browser(token: str = ""):
+    """Sets HttpOnly pairing session cookie for browser access and redirects to root."""
+    pairing_token = os.environ.get("ATHENA_PAIRING_TOKEN", "").strip()
+    if not pairing_token:
+        return RedirectResponse(url="/", status_code=303)
+
+    import secrets
+    clean_token = token.strip()
+    if not clean_token or not secrets.compare_digest(clean_token, pairing_token):
+        return JSONResponse(
+            status_code=401,
+            content={"error": {"code": "INVALID_PAIRING_TOKEN", "message": "Invalid pairing token."}},
+        )
+
+    response = RedirectResponse(url="/", status_code=303)
+    response.set_cookie(
+        key="athena_session_token",
+        value=clean_token,
+        httponly=True,
+        samesite="strict",
+        secure=False,
+    )
+    return response
 
 
 _ROOT_DIR = os.path.abspath(

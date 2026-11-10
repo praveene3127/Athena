@@ -136,8 +136,11 @@ async def fetch_provider_models(
     if provider_key == "custom":
         root_url = (base_url or cfg["base_url"]).rstrip("/")
         endpoint = f"{root_url}/models" if not root_url.endswith("/models") else root_url
+    elif base_url:
+        root_url = base_url.rstrip("/")
+        endpoint = f"{root_url}/models" if not root_url.endswith("/models") else root_url
     else:
-        endpoint = cfg.get("models_url") or f"{(base_url or cfg['base_url']).rstrip('/')}/models"
+        endpoint = cfg.get("models_url") or f"{cfg['base_url'].rstrip('/')}/models"
 
     headers = {"Accept": "application/json"}
     params = {}
@@ -321,8 +324,11 @@ async def test_provider_model(
 
     else:
         # OpenAI compatible: test models catalog first, then completion ping
-        root_url = (base_url or cfg["base_url"]).rstrip("/")
-        models_endpoint = cfg.get("models_url") or f"{root_url}/models"
+        if base_url:
+            root_url = base_url.rstrip("/")
+            models_endpoint = f"{root_url}/models" if not root_url.endswith("/models") else root_url
+        else:
+            models_endpoint = cfg.get("models_url") or f"{cfg['base_url'].rstrip('/')}/models"
         headers = {"Accept": "application/json"}
         if clean_key:
             headers["Authorization"] = f"Bearer {clean_key}"

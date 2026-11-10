@@ -67,6 +67,8 @@ class DocumentIngestionPipeline {
     required String fileName,
     String? filePath,
     List<int>? fileBytes,
+    int chunkWindowPages = 16,
+    Duration watchdogTimeout = const Duration(seconds: 90),
     void Function(double progress, String stageLabel)? onProgress,
     Future<void> Function(
       List<Map<String, Object?>> batchChunks,
@@ -108,6 +110,7 @@ class DocumentIngestionPipeline {
         fileName: fileName,
         filePath: hasPath ? filePath : null,
         fileBytes: hasBytes ? fileBytes : null,
+        watchdogTimeout: watchdogTimeout,
         onProgress: onProgress,
         onBatch: onBatch,
       );
@@ -133,6 +136,8 @@ class DocumentIngestionPipeline {
       fileName: fileName,
       filePath: hasPath ? filePath : null,
       fileBytes: hasBytes ? fileBytes : null,
+      chunkWindowPages: chunkWindowPages,
+      watchdogTimeout: watchdogTimeout,
       onProgress: onProgress,
       onBatch: onBatch,
     );
@@ -145,6 +150,8 @@ class DocumentIngestionPipeline {
     required String fileName,
     String? filePath,
     List<int>? fileBytes,
+    int chunkWindowPages = 16,
+    Duration watchdogTimeout = const Duration(seconds: 90),
     void Function(double progress, String stageLabel)? onProgress,
     Future<void> Function(
       List<Map<String, Object?>> batchChunks,
@@ -153,6 +160,7 @@ class DocumentIngestionPipeline {
       bool isFinalBatch,
     )? onBatch,
   }) async {
+    final completer = Completer<IngestionResult>();
     final receivePort = ReceivePort();
     final errorPort = ReceivePort();
     final exitPort = ReceivePort();
@@ -177,8 +185,16 @@ class DocumentIngestionPipeline {
 
     void resetWatchdog() {
       watchdogTimer?.cancel();
-      watchdogTimer = Timer(const Duration(seconds: 20), () async {
-        debugPrint('[Athena Ingestion] Watchdog triggered: 20s worker timeout');
+      watchdogTimer = Timer(watchdogTimeout, () async {
+        debugPrint('[Athena Ingestion] Watchdog triggered: ${watchdogTimeout.inSeconds}s worker timeout');
+        if (!completer.isCompleted) {
+          completer.completeError(
+            const AppError(
+              code: 'EXTRACTION_TIMEOUT',
+              message: 'Document extraction timed out.',
+            ),
+          );
+        }
         cleanup();
         try {
           await LocalDatabase.instance.updateDocumentProgress(
@@ -195,16 +211,30 @@ class DocumentIngestionPipeline {
       });
     }
 
-    errorPort.listen((errorData) {
-      receivePort.sendPort.send(_WorkerErrorEvent(
-        error: 'Extraction interrupted or out of memory: $errorData',
-      ));
+    errorPort.listen((dynamic errorData) {
+      if (!completer.isCompleted) {
+        completer.completeError(
+          AppError(
+            code: 'EXTRACTION_FAILED',
+            message: 'Extraction interrupted or out of memory: $errorData',
+          ),
+        );
+      }
+      cleanup();
     });
 
-    exitPort.listen((_) {
-      receivePort.sendPort.send(const _WorkerErrorEvent(
-        error: 'Worker isolate exited unexpectedly',
-      ));
+    exitPort.listen((dynamic _) {
+      Future.delayed(const Duration(milliseconds: 50), () {
+        if (!completer.isCompleted) {
+          completer.completeError(
+            const AppError(
+              code: 'EXTRACTION_FAILED',
+              message: 'Worker isolate exited unexpectedly',
+            ),
+          );
+        }
+        cleanup();
+      });
     });
 
     try {
@@ -216,6 +246,7 @@ class DocumentIngestionPipeline {
           filePath: filePath,
           bytes: fileBytes,
           sendPort: receivePort.sendPort,
+          chunkWindowPages: chunkWindowPages,
         ),
         onError: errorPort.sendPort,
         onExit: exitPort.sendPort,
@@ -224,79 +255,109 @@ class DocumentIngestionPipeline {
 
       resetWatchdog();
 
-      await for (final message in receivePort) {
-        resetWatchdog();
-        if (message is _WorkerProgressEvent) {
-          onProgress?.call(message.progress, message.stageLabel);
-        } else if (message is _WorkerBatchEvent) {
-          totalPages = message.totalPages;
-          allChunks.addAll(message.batchChunks);
-          if (message.batchCanonicalText.isNotEmpty) {
-            if (fullCanonical.isNotEmpty) fullCanonical.write('\n\n');
-            fullCanonical.write(message.batchCanonicalText);
-          }
+      receivePort.listen(
+        (dynamic message) async {
+          resetWatchdog();
+          if (message is _WorkerProgressEvent) {
+            onProgress?.call(message.progress, message.stageLabel);
+          } else if (message is _WorkerBatchEvent) {
+            totalPages = message.totalPages;
+            allChunks.addAll(message.batchChunks);
+            if (message.batchCanonicalText.isNotEmpty) {
+              fullCanonical.write(message.batchCanonicalText);
+            }
 
-          if (onBatch != null && message.batchChunks.isNotEmpty) {
-            await onBatch(
-              message.batchChunks,
-              message.processedPages,
-              message.totalPages,
-              message.isFinalBatch,
+            if (onBatch != null && message.batchChunks.isNotEmpty) {
+              watchdogTimer?.cancel();
+              try {
+                await onBatch(
+                  message.batchChunks,
+                  message.processedPages,
+                  message.totalPages,
+                  message.isFinalBatch,
+                );
+              } finally {
+                resetWatchdog();
+              }
+            }
+          } else if (message is _WorkerDoneEvent) {
+            cleanup();
+
+            final canonicalStr = fullCanonical.isNotEmpty
+                ? fullCanonical.toString()
+                : message.canonicalText;
+            final canonicalSha256 =
+                sha256.convert(utf8.encode(canonicalStr)).toString();
+
+            final reconstructedText = allChunks
+                .map((c) => (c['raw_text'] ?? '').toString())
+                .join('');
+            final reconstructedSha256 =
+                sha256.convert(utf8.encode(reconstructedText)).toString();
+            final bool integrityVerified =
+                reconstructedText == canonicalStr &&
+                reconstructedSha256 == canonicalSha256;
+
+            final result = IngestionResult(
+              canonicalText: canonicalStr,
+              canonicalSha256: canonicalSha256,
+              pageCount: message.pageCount > 0 ? message.pageCount : totalPages,
+              chunks: allChunks,
+              integrityVerified: integrityVerified,
+            );
+
+            if (!completer.isCompleted) {
+              completer.complete(result);
+            }
+          } else if (message is _WorkerErrorEvent) {
+            cleanup();
+            final err = AppError(
+              code: 'EXTRACTION_FAILED',
+              message: message.error,
+            );
+            try {
+              await LocalDatabase.instance.updateDocumentProgress(
+                docId,
+                status: 'failed',
+                stage: 'failed',
+                stageLabel: message.error,
+                errorMessage: message.error,
+                errorCode: 'EXTRACTION_FAILED',
+              );
+            } catch (e) {
+              debugPrint('[Athena Ingestion] DB worker error update notice: $e');
+            }
+            if (!completer.isCompleted) {
+              completer.completeError(err);
+            }
+          }
+        },
+        onError: (dynamic e) {
+          cleanup();
+          if (!completer.isCompleted) {
+            completer.completeError(
+              AppError(code: 'EXTRACTION_FAILED', message: e.toString()),
             );
           }
-        } else if (message is _WorkerDoneEvent) {
+        },
+        onDone: () {
           cleanup();
-
-          final canonicalStr = fullCanonical.toString().trim();
-          final canonicalSha256 =
-              sha256.convert(utf8.encode(canonicalStr)).toString();
-
-          final reconstructedText = allChunks
-              .map((c) => (c['raw_text'] ?? '').toString())
-              .join('');
-          final reconstructedSha256 =
-              sha256.convert(utf8.encode(reconstructedText)).toString();
-          final bool integrityVerified =
-              reconstructedText == canonicalStr &&
-              reconstructedSha256 == canonicalSha256;
-
-          return IngestionResult(
-            canonicalText:
-                canonicalStr.isNotEmpty ? canonicalStr : message.canonicalText,
-            canonicalSha256: message.canonicalSha256.isNotEmpty
-                ? message.canonicalSha256
-                : canonicalSha256,
-            pageCount: message.pageCount > 0 ? message.pageCount : totalPages,
-            chunks: allChunks,
-            integrityVerified: integrityVerified,
-          );
-        } else if (message is _WorkerErrorEvent) {
-          cleanup();
-          try {
-            await LocalDatabase.instance.updateDocumentProgress(
-              docId,
-              status: 'failed',
-              stage: 'failed',
-              stageLabel: message.error,
-              errorMessage: message.error,
-              errorCode: 'EXTRACTION_FAILED',
+          if (!completer.isCompleted) {
+            completer.completeError(
+              const AppError(
+                code: 'EXTRACTION_FAILED',
+                message: 'Worker isolate terminated without completing.',
+              ),
             );
-          } catch (e) {
-            debugPrint('[Athena Ingestion] DB worker error update notice: $e');
           }
-          throw AppError(
-            code: 'EXTRACTION_FAILED',
-            message: message.error,
-          );
-        }
-      }
-
-      throw const AppError(
-        code: 'EXTRACTION_INTERRUPTED',
-        message: 'Worker isolate terminated without completing.',
+        },
       );
-    } finally {
+
+      return await completer.future;
+    } catch (e) {
       cleanup();
+      if (e is AppError) rethrow;
+      throw AppError.fromException(e);
     }
   }
 
@@ -427,47 +488,29 @@ class DocumentIngestionPipeline {
         return;
       }
       final int totalPages = pdfDoc.pages.count;
-      var extractor = PdfTextExtractor(pdfDoc);
+      final extractor = PdfTextExtractor(pdfDoc);
       final bookmarks = _extractPdfBookmarks(pdfDoc);
 
       final pageLinesMap = <int, List<LineFragment>>{};
       final pageRawTextMap = <int, String>{};
 
       int cleanPageCount = 0;
-      const int windowSize = 25;
-      for (int startPage = 0; startPage < totalPages; startPage += windowSize) {
-        final endPage = (startPage + windowSize - 1).clamp(0, totalPages - 1);
-        final progressFraction = 0.05 + 0.55 * ((endPage + 1) / totalPages);
+      for (int p = 0; p < totalPages; p++) {
+        final progressFraction = 0.05 + 0.55 * ((p + 1) / totalPages);
         final pctInt = (progressFraction * 100).toInt();
-        final stageMsg =
-            'Extracting pages ${startPage + 1}–${endPage + 1} of $totalPages ($pctInt%)...';
-
         params.sendPort.send(_WorkerProgressEvent(
           progress: progressFraction,
-          stageLabel: stageMsg,
+          stageLabel: 'Extracting page ${p + 1} of $totalPages ($pctInt%)...',
         ));
 
-        // Dispose and reopen PdfDocument every 50 pages so Syncfusion's font/glyph caches never balloon RAM
-        if (startPage > 0 && startPage % 50 == 0) {
-          try {
-            pdfDoc?.dispose();
-          } catch (e) {
-            debugPrint('[Athena Ingestion] pdfDoc dispose error: $e');
-          }
-          pdfDoc = _openPdfDoc(params);
-          extractor = PdfTextExtractor(pdfDoc);
-        }
-
-        for (int p = startPage; p <= endPage; p++) {
-          final pageHeight = pdfDoc!.pages[p].size.height;
-          final lines = _extractHorizontalGroupedLines(extractor, p, pageHeight: pageHeight);
-          pageLinesMap[p + 1] = lines;
-          final rawText = lines.map((l) => l.text).join('\n');
-          pageRawTextMap[p + 1] = rawText;
-          if (rawText.trim().length >= 20 &&
-              computePageQuality(rawText).isAcceptable) {
-            cleanPageCount++;
-          }
+        final pageHeight = pdfDoc.pages[p].size.height;
+        final lines = _extractHorizontalGroupedLines(extractor, p, pageHeight: pageHeight);
+        pageLinesMap[p + 1] = lines;
+        final rawText = lines.map((l) => l.text).join('\n');
+        pageRawTextMap[p + 1] = rawText;
+        if (rawText.trim().length >= 20 &&
+            computePageQuality(rawText).isAcceptable) {
+          cleanPageCount++;
         }
       }
 
@@ -513,7 +556,7 @@ class DocumentIngestionPipeline {
       // 3. TocDetector & Heading discovery (FP-8, FP-9)
       final tocPages = <int>{};
       final tocTitles = <String>{};
-      final explicitHeadingMap = <int, String>{};
+      final explicitHeadingMap = <int, List<String>>{};
 
       for (int p = 1; p <= totalPages; p++) {
         final lines = cleanLinesMap[p] ?? const [];
@@ -538,8 +581,7 @@ class DocumentIngestionPipeline {
             bookmarkTitle: bookmarks[p],
             tocTitles: tocTitles,
           )) {
-            explicitHeadingMap[p] = l.text.trim();
-            break;
+            explicitHeadingMap.putIfAbsent(p, () => []).add(l.text.trim());
           }
         }
       }
@@ -555,7 +597,8 @@ class DocumentIngestionPipeline {
       );
 
       // 5. Windowed Reflow, Chunking & Incremental Batch Emission (H-5, P0-01, P0-05)
-      const int chunkWindowPages = 16;
+      final int chunkWindowPages =
+          params.chunkWindowPages > 0 ? params.chunkWindowPages : 16;
       int chunkSeq = 1;
       final fullCanonical = StringBuffer();
       final allChunks = <Map<String, Object?>>[];
@@ -603,9 +646,10 @@ class DocumentIngestionPipeline {
             lines = [...col1, ...col2, ...other];
           }
 
-          final pageHeading = explicitHeadingMap[p] ??
-              bookmarks[p] ??
-              (role != SectionRole.chapter ? role.displayLabel : null);
+          final pageHeading = (explicitHeadingMap[p]?.isNotEmpty ?? false)
+              ? explicitHeadingMap[p]!.first
+              : bookmarks[p] ??
+                  (role != SectionRole.chapter ? role.displayLabel : null);
 
           final reflowResult = reflowLinesIntoParagraphs(
             lines: lines,
@@ -668,9 +712,6 @@ class DocumentIngestionPipeline {
         if (windowCanonical.isNotEmpty) {
           final bool needsWindowSep = fullCanonical.isNotEmpty;
           if (needsWindowSep) {
-            fullCanonical.write('\n\n');
-            // If prefixing separator to fullCanonical, also prefix to windowCanonical
-            // and shift spans so chunking is 100% byte-exact and contiguous!
             windowCanonical = '\n\n$windowCanonical';
             for (final span in windowSpans) {
               final s = span['start'] as int? ?? 0;
@@ -680,7 +721,7 @@ class DocumentIngestionPipeline {
             }
           }
 
-          final int currentWindowOffset = fullCanonical.length - (needsWindowSep ? windowCanonical.length : 0);
+          final int currentWindowOffset = fullCanonical.length;
 
           windowChunks = LosslessChunker().build(
             documentId: params.docId,
@@ -690,12 +731,7 @@ class DocumentIngestionPipeline {
             offsetDelta: currentWindowOffset,
           );
 
-          if (!needsWindowSep) {
-            fullCanonical.write(windowCanonical);
-          } else {
-            // Already wrote \n\n, now write remainder of windowCanonical
-            fullCanonical.write(windowCanonical.substring(2));
-          }
+          fullCanonical.write(windowCanonical);
 
           chunkSeq += windowChunks.length;
           allChunks.addAll(windowChunks);
@@ -719,7 +755,7 @@ class DocumentIngestionPipeline {
         }
       }
 
-      final canonicalStr = fullCanonical.toString().trim();
+      final canonicalStr = fullCanonical.toString();
       final canonicalSha256 =
           sha256.convert(utf8.encode(canonicalStr)).toString();
 
@@ -1905,6 +1941,7 @@ class DocumentIngestionPipeline {
     required String fileName,
     String? filePath,
     List<int>? fileBytes,
+    Duration watchdogTimeout = const Duration(seconds: 90),
     void Function(double progress, String stageLabel)? onProgress,
     Future<void> Function(
       List<Map<String, Object?>> batchChunks,
@@ -1913,6 +1950,7 @@ class DocumentIngestionPipeline {
       bool isFinalBatch,
     )? onBatch,
   }) async {
+    final completer = Completer<IngestionResult>();
     final receivePort = ReceivePort();
     final errorPort = ReceivePort();
     final exitPort = ReceivePort();
@@ -1937,8 +1975,16 @@ class DocumentIngestionPipeline {
 
     void resetWatchdog() {
       watchdogTimer?.cancel();
-      watchdogTimer = Timer(const Duration(seconds: 20), () async {
-        debugPrint('[Athena Ingestion] EPUB Watchdog triggered: 20s worker timeout');
+      watchdogTimer = Timer(watchdogTimeout, () async {
+        debugPrint('[Athena Ingestion] EPUB Watchdog triggered: ${watchdogTimeout.inSeconds}s worker timeout');
+        if (!completer.isCompleted) {
+          completer.completeError(
+            const AppError(
+              code: 'EXTRACTION_TIMEOUT',
+              message: 'EPUB extraction timed out or stalled.',
+            ),
+          );
+        }
         cleanup();
         try {
           await LocalDatabase.instance.updateDocumentProgress(
@@ -1956,15 +2002,27 @@ class DocumentIngestionPipeline {
     }
 
     errorPort.listen((dynamic error) {
-      receivePort.sendPort.send(_WorkerErrorEvent(
-        error: 'Extraction interrupted or out of memory: $error',
-      ));
+      if (!completer.isCompleted) {
+        completer.completeError(
+          AppError(
+            code: 'EXTRACTION_FAILED',
+            message: 'Extraction interrupted or out of memory: $error',
+          ),
+        );
+      }
+      cleanup();
     });
 
     exitPort.listen((_) {
-      receivePort.sendPort.send(const _WorkerErrorEvent(
-        error: 'Worker isolate exited unexpectedly',
-      ));
+      if (!completer.isCompleted) {
+        completer.completeError(
+          const AppError(
+            code: 'EXTRACTION_INTERRUPTED',
+            message: 'Worker isolate exited unexpectedly',
+          ),
+        );
+      }
+      cleanup();
     });
 
     try {
@@ -1983,77 +2041,110 @@ class DocumentIngestionPipeline {
 
       resetWatchdog();
 
-      await for (final message in receivePort) {
-        resetWatchdog();
-        if (message is _WorkerProgressEvent) {
-          onProgress?.call(message.progress, message.stageLabel);
-        } else if (message is _WorkerBatchEvent) {
-          totalSections = message.totalPages;
-          allChunks.addAll(message.batchChunks);
-          if (message.batchCanonicalText.isNotEmpty) {
-            if (fullCanonical.isNotEmpty) fullCanonical.write('\n\n');
-            fullCanonical.write(message.batchCanonicalText);
+      receivePort.listen(
+        (dynamic message) async {
+          resetWatchdog();
+          if (message is _WorkerProgressEvent) {
+            onProgress?.call(message.progress, message.stageLabel);
+          } else if (message is _WorkerBatchEvent) {
+            totalSections = message.totalPages;
+            allChunks.addAll(message.batchChunks);
+            if (message.batchCanonicalText.isNotEmpty) {
+              if (fullCanonical.isNotEmpty) fullCanonical.write('\n\n');
+              fullCanonical.write(message.batchCanonicalText);
+            }
+            if (onBatch != null && message.batchChunks.isNotEmpty) {
+              watchdogTimer?.cancel();
+              try {
+                await onBatch(
+                  message.batchChunks,
+                  message.processedPages,
+                  message.totalPages,
+                  message.isFinalBatch,
+                );
+              } finally {
+                resetWatchdog();
+              }
+            }
+          } else if (message is _WorkerDoneEvent) {
+            cleanup();
+            final canonicalStr = fullCanonical.isNotEmpty
+                ? fullCanonical.toString()
+                : message.canonicalText;
+            final canonicalSha256 =
+                sha256.convert(utf8.encode(canonicalStr)).toString();
+
+            final reconstructedText = allChunks
+                .map((c) => (c['raw_text'] ?? '').toString())
+                .join('');
+            final reconstructedSha256 =
+                sha256.convert(utf8.encode(reconstructedText)).toString();
+            final bool integrityVerified =
+                reconstructedText == canonicalStr &&
+                reconstructedSha256 == canonicalSha256;
+
+            final result = IngestionResult(
+              canonicalText: canonicalStr,
+              canonicalSha256: message.canonicalSha256.isNotEmpty
+                  ? message.canonicalSha256
+                  : canonicalSha256,
+              pageCount: message.pageCount > 0 ? message.pageCount : totalSections,
+              chunks: allChunks,
+              integrityVerified: integrityVerified,
+            );
+
+            if (!completer.isCompleted) {
+              completer.complete(result);
+            }
+          } else if (message is _WorkerErrorEvent) {
+            cleanup();
+            final err = AppError(
+              code: 'EXTRACTION_FAILED',
+              message: message.error,
+            );
+            try {
+              await LocalDatabase.instance.updateDocumentProgress(
+                docId,
+                status: 'failed',
+                stage: 'failed',
+                stageLabel: message.error,
+                errorMessage: message.error,
+                errorCode: 'EXTRACTION_FAILED',
+              );
+            } catch (e) {
+              debugPrint('[Athena Ingestion] DB worker error update notice: $e');
+            }
+            if (!completer.isCompleted) {
+              completer.completeError(err);
+            }
           }
-          if (onBatch != null && message.batchChunks.isNotEmpty) {
-            await onBatch(
-              message.batchChunks,
-              message.processedPages,
-              message.totalPages,
-              message.isFinalBatch,
+        },
+        onError: (dynamic e) {
+          cleanup();
+          if (!completer.isCompleted) {
+            completer.completeError(
+              AppError(code: 'EXTRACTION_FAILED', message: e.toString()),
             );
           }
-        } else if (message is _WorkerDoneEvent) {
+        },
+        onDone: () {
           cleanup();
-          final canonicalStr = fullCanonical.toString().trim();
-          final canonicalSha256 =
-              sha256.convert(utf8.encode(canonicalStr)).toString();
-
-          final reconstructedText = allChunks
-              .map((c) => (c['raw_text'] ?? '').toString())
-              .join('');
-          final reconstructedSha256 =
-              sha256.convert(utf8.encode(reconstructedText)).toString();
-          final bool integrityVerified =
-              reconstructedText == canonicalStr &&
-              reconstructedSha256 == canonicalSha256;
-
-          return IngestionResult(
-            canonicalText:
-                canonicalStr.isNotEmpty ? canonicalStr : message.canonicalText,
-            canonicalSha256: message.canonicalSha256.isNotEmpty
-                ? message.canonicalSha256
-                : canonicalSha256,
-            pageCount: message.pageCount > 0 ? message.pageCount : totalSections,
-            chunks: allChunks,
-            integrityVerified: integrityVerified,
-          );
-        } else if (message is _WorkerErrorEvent) {
-          cleanup();
-          try {
-            await LocalDatabase.instance.updateDocumentProgress(
-              docId,
-              status: 'failed',
-              stage: 'failed',
-              stageLabel: message.error,
-              errorMessage: message.error,
-              errorCode: 'EXTRACTION_FAILED',
+          if (!completer.isCompleted) {
+            completer.completeError(
+              const AppError(
+                code: 'EXTRACTION_FAILED',
+                message: 'Worker isolate terminated without completing.',
+              ),
             );
-          } catch (e) {
-            debugPrint('[Athena Ingestion] DB worker error update notice: $e');
           }
-          throw AppError(
-            code: 'EXTRACTION_FAILED',
-            message: message.error,
-          );
-        }
-      }
-
-      throw const AppError(
-        code: 'EXTRACTION_INTERRUPTED',
-        message: 'Worker isolate terminated without completing.',
+        },
       );
-    } finally {
+
+      return await completer.future;
+    } catch (e) {
       cleanup();
+      if (e is AppError) rethrow;
+      throw AppError.fromException(e);
     }
   }
 
@@ -2769,6 +2860,7 @@ class _PdfWorkerParams {
   final String? filePath;
   final List<int>? bytes;
   final SendPort sendPort;
+  final int chunkWindowPages;
 
   const _PdfWorkerParams({
     required this.docId,
@@ -2776,6 +2868,7 @@ class _PdfWorkerParams {
     this.filePath,
     this.bytes,
     required this.sendPort,
+    this.chunkWindowPages = 16,
   });
 }
 
@@ -3348,7 +3441,7 @@ class StructureResolver {
     required Map<int, String> pageRawTextMap,
     required Map<int, String> bookmarks,
     required Set<int> tocPages,
-    required Map<int, String> explicitHeadingMap,
+    required Map<int, Object> explicitHeadingMap,
   }) {
     if (totalPages <= 0) return const [];
     const numStates = 5;
@@ -3360,9 +3453,11 @@ class StructureResolver {
       final rawText = (pageRawTextMap[pageNum] ?? '').toLowerCase();
       final words =
           rawText.split(RegExp(r'\s+')).where((w) => w.isNotEmpty).length;
-      final heading = explicitHeadingMap[pageNum]?.toLowerCase() ??
-          bookmarks[pageNum]?.toLowerCase() ??
-          '';
+      final Object? headingVal = explicitHeadingMap[pageNum];
+      final String heading = (headingVal is List
+              ? headingVal.join(' ')
+              : headingVal?.toString() ?? bookmarks[pageNum] ?? '')
+          .toLowerCase();
 
       final isToc = tocPages.contains(pageNum);
       final hasFrontMarkers = RegExp(
@@ -3524,9 +3619,11 @@ class StructureResolver {
       final pageNum = p + 1;
       final macro = statePath[p];
       final rawText = (pageRawTextMap[pageNum] ?? '').toLowerCase();
-      final heading = explicitHeadingMap[pageNum]?.toLowerCase() ??
-          bookmarks[pageNum]?.toLowerCase() ??
-          '';
+      final Object? headingVal = explicitHeadingMap[pageNum];
+      final String heading = (headingVal is List
+              ? headingVal.join(' ')
+              : headingVal?.toString() ?? bookmarks[pageNum] ?? '')
+          .toLowerCase();
 
       if (macro == 0) {
         if (rawText.contains('copyright') ||

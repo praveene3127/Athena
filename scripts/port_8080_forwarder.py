@@ -7,6 +7,7 @@ Allows start_athena.bat and browser bookmarks targeting 8080 to connect seamless
 
 import http.server
 import socketserver
+import sys
 import urllib.request
 import urllib.error
 
@@ -37,6 +38,7 @@ class ProxyHandler(http.server.BaseHTTPRequestHandler):
         content_len = int(self.headers.get("Content-Length", 0))
         data = self.rfile.read(content_len) if content_len > 0 else None
         headers = {k: v for k, v in self.headers.items() if k.lower() != "host"}
+        headers["X-Forwarded-For"] = self.client_address[0]
 
         req = urllib.request.Request(url, data=data, headers=headers, method=method)
         try:
@@ -68,9 +70,10 @@ class ProxyHandler(http.server.BaseHTTPRequestHandler):
 
 
 def main():
+    bind_ip = "0.0.0.0" if "--lan" in sys.argv else "127.0.0.1"
     socketserver.TCPServer.allow_reuse_address = True
-    with socketserver.TCPServer(("0.0.0.0", 8080), ProxyHandler) as httpd:
-        print("[Athena] Port 8080 forwarder running -> 127.0.0.1:8000")
+    with socketserver.TCPServer((bind_ip, 8080), ProxyHandler) as httpd:
+        print(f"[Athena] Port 8080 forwarder running ({bind_ip}:8080 -> 127.0.0.1:8000)")
         httpd.serve_forever()
 
 

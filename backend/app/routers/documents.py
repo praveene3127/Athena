@@ -10,7 +10,7 @@ import urllib.parse
 import uuid
 from typing import Any, Dict, List, Optional
 import httpx
-from fastapi import APIRouter, Depends, File, Request, UploadFile
+from fastapi import APIRouter, Depends, File, Query, Request, UploadFile
 from fastapi.responses import Response, StreamingResponse
 from pydantic import BaseModel
 from sqlmodel import Session, select
@@ -47,19 +47,25 @@ def _resolve_ordered_chunk(session: Session, document_id: str, *, chunk_id=None,
         chunk = session.exec(select(ReadingChunk).where(
             ReadingChunk.document_id == document_id, ReadingChunk.id == chunk_id
         )).first()
-        if chunk:
-            return chunk
+        if not chunk:
+            raise AppException("CHUNK_NOT_FOUND", f"Chunk {chunk_id} not found in document {document_id}", status_code=404)
+        return chunk
     if chunk_sequence is not None:
+        if chunk_sequence < 1:
+            raise AppException("INVALID_CHUNK_INDEX", "Chunk sequence must be >= 1", status_code=422)
         return session.exec(select(ReadingChunk).where(
             ReadingChunk.document_id == document_id, ReadingChunk.sequence == chunk_sequence
         )).first()
-    if index is None:
-        index = 0
-    if index < 0:
-        index = 0
+    if index is not None:
+        if index < 0:
+            raise AppException("INVALID_CHUNK_INDEX", "Chunk index must be >= 0", status_code=422)
+        return session.exec(
+            select(ReadingChunk).where(ReadingChunk.document_id == document_id)
+            .order_by(ReadingChunk.sequence.asc()).offset(index).limit(1)
+        ).first()
     return session.exec(
         select(ReadingChunk).where(ReadingChunk.document_id == document_id)
-        .order_by(ReadingChunk.sequence.asc()).offset(index).limit(1)
+        .order_by(ReadingChunk.sequence.asc()).limit(1)
     ).first()
 
 MAX_UPLOAD_SIZE = MAX_UPLOAD_SIZE_BYTES  # 500 MB bound to prevent disk exhaustion
@@ -296,7 +302,7 @@ def create_sample_document(session: Session = Depends(get_session)) -> Dict[str,
     doc = Document(
         id=doc_id,
         filename="sample.pdf",
-        title="Marcus Aurelius Meditations (Sample)",
+        title="Cellular Metabolism (Sample)",
         status="queued",
         stage="validating",
         percent=5,
@@ -434,9 +440,10 @@ def generate_card_for_chunk_endpoint(
     if not doc:
         raise AppException("NOT_FOUND", f"Document {id} not found", status_code=404)
 
+    target_seq = payload.chunk_sequence if payload.chunk_sequence is not None else payload.chunk_index
     chunk = _resolve_ordered_chunk(
-        session, id, chunk_id=payload.chunk_id, chunk_sequence=payload.chunk_sequence,
-        index=payload.feed_index if payload.feed_index is not None else payload.chunk_index,
+        session, id, chunk_id=payload.chunk_id, chunk_sequence=target_seq,
+        index=payload.feed_index,
     )
     chunk_idx = chunk.sequence if chunk else None
 
@@ -523,7 +530,7 @@ def generate_card_for_chunk_endpoint(
     except Exception as concept_err:
         logger.warning("Concept card generation failed for chunk %s: %s", chunk_idx, concept_err)
 
-    # 3. Deterministic guaranteed synthesis fallback (ensures 100% zero-fail)
+    # 3. Deterministic unverified extractive note fallback (honest, never fabricates verification or study status)
     quote = find_exact_quote(chunk.raw_text, "") or chunk.raw_text[:80].strip()
     words = [w for w in re.findall(r"[A-Z][a-z]+|[a-z]{4,}", chunk.raw_text) if len(w) > 3]
     topic = words[0].capitalize() if words else "Passage Context"
@@ -532,14 +539,15 @@ def generate_card_for_chunk_endpoint(
         source_chunk_id=chunk.id,
         concept_name=topic,
         card_type="explain",
-        title=f"REAL-WORLD STUDY: {topic}",
-        body=f"Grounded analysis verified against canonical source text. Key quote: \"{quote}\"",
-        why_here="Grounded factual anchor from authentic source material.",
+        title=f"Context Note: {topic}",
+        body=f"Key excerpt from the author's passage: \"{quote}\"",
+        why_here="Extracted anchor from the text passage for context.",
         exact_quote=quote,
         canonical_sha256=doc.original_checksum if doc else None,
-        support_status="fully_supported",
-        generation_mode="fact_check_synthesis",
-        verified=True,
+        support_status="unverified",
+        support_tier="internal_extractive",
+        generation_mode="internal_extractive",
+        verified=False,
     )
     session.add(fallback_card)
     session.commit()
@@ -553,7 +561,7 @@ def generate_card_for_chunk_endpoint(
 
 
 @router.delete("/{id}")
-def delete_document(id: str, session: Session = Depends(get_session)) -> Dict[str, str]:
+def delete_document(id: str, request: Request = None, session: Session = Depends(get_session)) -> Dict[str, str]:
     """Deletes document rows and physical disk files."""
     doc = session.get(Document, id)
     if not doc:
@@ -607,9 +615,15 @@ def delete_document(id: str, session: Session = Depends(get_session)) -> Dict[st
 
     # Evict document from marginalia pipeline if active
     try:
+        if request and hasattr(request, "app") and hasattr(request.app.state, "pipeline"):
+            p = getattr(request.app.state, "pipeline", None)
+            if p and hasattr(p, "evict_document"):
+                p.evict_document(id)
         from app.services.marginalia.pipeline import pipeline_instance
         if pipeline_instance:
             pipeline_instance.evict_document(id)
+    except Exception as e:
+        logger.debug("Pipeline eviction on delete error: %s", e)
     except Exception as pipe_err:
         logger.debug("Pipeline eviction error for %s: %s", id, pipe_err)
 
@@ -762,28 +776,47 @@ def get_document_tape(id: str, session: Session = Depends(get_session)):
     # Try Rust core binary tape encoder first
     try:
         from athena_rust_core import rust_encode_binary_tape
-        tape_bytes = rust_encode_binary_tape(
-            doc.id,
-            [c.id for c in chunks],
-            [c.sequence for c in chunks],
-            [c.raw_text for c in chunks],
-        )
+        texts = [c.raw_text for c in chunks]
+        pages = []
+        for c in chunks:
+            p = 1
+            if c.source_pages_json:
+                try:
+                    parsed = json.loads(c.source_pages_json)
+                    if parsed and isinstance(parsed, list):
+                        p = int(parsed[0])
+                except Exception:
+                    pass
+            pages.append(p)
+        simhash_lows = [0] * len(chunks)
+        tape_bytes = rust_encode_binary_tape(texts, pages, simhash_lows)
         return Response(content=tape_bytes, media_type="application/octet-stream")
     except Exception as rust_err:
         logger.debug("Rust binary tape encoding fallback: %s", rust_err)
 
-    # Pure Python binary tape fallback (ATHN magic header + 4-byte chunk count + offsets + raw payload)
+    # Pure Python binary tape fallback (ATHN v1 Big-Endian specification)
     import struct
     payloads = [c.raw_text.encode("utf-8") for c in chunks]
-    header = b"ATHN\x01\x00\x00\x00"  # Magic + version 1
     count = len(chunks)
+    total_utf8_bytes = sum(len(p) for p in payloads)
+    header = struct.pack(">4sIII", b"ATHN", 1, count, total_utf8_bytes)
     index_entries = []
-    current_offset = len(header) + 4 + (count * 12)  # seq(4) + offset(4) + len(4)
+    current_offset = 0
     for i, p in enumerate(payloads):
-        index_entries.append(struct.pack("<III", chunks[i].sequence, current_offset, len(p)))
-        current_offset += len(p)
+        p_len = len(p)
+        page = 1
+        if chunks[i].source_pages_json:
+            try:
+                parsed = json.loads(chunks[i].source_pages_json)
+                if parsed and isinstance(parsed, list):
+                    page = int(parsed[0])
+            except Exception:
+                pass
+        simhash_low = 0
+        index_entries.append(struct.pack(">IIII", current_offset, p_len, page, simhash_low))
+        current_offset += p_len
 
-    tape = header + struct.pack("<I", count) + b"".join(index_entries) + b"".join(payloads)
+    tape = header + b"".join(index_entries) + b"".join(payloads)
     return Response(content=tape, media_type="application/octet-stream")
 
 
@@ -897,22 +930,31 @@ async def sync_reading_progress(
     1. Saves exact reading position to SQLite WAL (syncs Web <-> Android).
     2. Triggers the Read-Ahead Priority Pipeline for [chunk_index, chunk_index + 16].
     """
+    doc = session.get(Document, id)
+    if not doc:
+        raise AppException("NOT_FOUND", f"Document {id} not found", status_code=404)
+
+    if payload.chunk_index is not None and payload.chunk_index < 1:
+        raise AppException("INVALID_CHUNK_INDEX", "chunk_index must be >= 1", status_code=422)
+    if payload.chunk_sequence is not None and payload.chunk_sequence < 1:
+        raise AppException("INVALID_CHUNK_INDEX", "chunk_sequence must be >= 1", status_code=422)
+
+    target_seq = payload.chunk_sequence if payload.chunk_sequence is not None else payload.chunk_index
     position = _resolve_ordered_chunk(
-        session, id, chunk_id=payload.chunk_id, chunk_sequence=payload.chunk_sequence,
-        index=payload.feed_index if payload.feed_index is not None else payload.chunk_index,
+        session, id, chunk_id=payload.chunk_id, chunk_sequence=target_seq,
+        index=payload.feed_index,
     )
     if not position:
-        if payload.chunk_id or payload.chunk_sequence is not None or payload.feed_index is not None:
-            raise AppException("NOT_FOUND", "Reading chunk not found", status_code=404)
         first_chunk = session.exec(
             select(ReadingChunk.id).where(ReadingChunk.document_id == id).limit(1)
         ).first()
         if first_chunk:
             raise AppException("NOT_FOUND", "Reading chunk not found", status_code=404)
-        # Compatibility for legacy documents with no materialized ReadingChunk rows.
-        effective_chunk_index = max(1, payload.chunk_index or 1)
+        # Compatibility for legacy/test documents with no materialized ReadingChunk rows.
+        effective_chunk_index = max(1, target_seq or 1)
     else:
         effective_chunk_index = position.sequence
+
     try:
         state = session.get(ReadingState, id)
         if not state:
@@ -930,7 +972,9 @@ async def sync_reading_progress(
             session.add(state)
         session.commit()
     except Exception as err:
+        session.rollback()
         logger.warning("Error persisting reading state: %s", err)
+        raise
 
     try:
         pipeline = getattr(request.app.state, "pipeline", None)
@@ -947,6 +991,9 @@ async def sync_reading_progress(
     ).all()
     in_flight = pipeline.get_in_flight_indices(id) if pipeline else []
 
+    min_seq = max(1, effective_chunk_index - 2)
+    max_seq = effective_chunk_index + 16
+
     cards_data = []
     for card in cards:
         citations = []
@@ -960,6 +1007,9 @@ async def sync_reading_progress(
             m = re.search(r"-c(\d+)$", card.source_chunk_id)
             if m:
                 seq_num = int(m.group(1))
+
+        if seq_num is not None and not (min_seq <= seq_num <= max_seq):
+            continue
 
         cards_data.append({
             "type": "context_card",
@@ -1042,7 +1092,7 @@ def get_document_chapters(
                 "id": ch.id,
                 "level": ch.level,
                 "title": ch.title,
-                "start_page": ch.start_page,
+                "start_page": max(1, ch.start_page if ch.start_page > 0 else 1),
                 "start_chunk_index": ch.start_chunk_index,
             }
             for ch in chapters
@@ -1081,7 +1131,7 @@ def get_document_chapters(
                 "id": chunk.id,
                 "level": 1,
                 "title": clean_title,
-                "start_page": max(0, page - 1),
+                "start_page": max(1, page),
                 "start_chunk_index": chunk.sequence,
             })
 
@@ -1105,7 +1155,7 @@ def get_document_chapters(
                 "id": f"sec-{chunk.sequence}",
                 "level": 1,
                 "title": f"Section {(i // step) + 1} (Chunk {chunk.sequence})",
-                "start_page": max(0, page - 1),
+                "start_page": max(1, page),
                 "start_chunk_index": chunk.sequence,
             })
         return detected
@@ -1115,7 +1165,9 @@ def get_document_chapters(
 
 @router.get("/{id}/export-markdown")
 def export_document_markdown(
-    id: str, session: Session = Depends(get_session)
+    id: str,
+    mode: str = Query("notes", pattern="^(notes|full)$"),
+    session: Session = Depends(get_session),
 ) -> Response:
     """Exports verified reading highlights and Google Search citations as clean Markdown."""
     import re
@@ -1132,59 +1184,100 @@ def export_document_markdown(
         select(ReadingChunk).where(ReadingChunk.document_id == id).order_by(ReadingChunk.sequence)
     ).all()
     chunk_map = {c.id: c for c in chunks}
+    cards_by_chunk: Dict[str, List[ContextCard]] = {}
+    for card in cards:
+        if card.source_chunk_id:
+            cards_by_chunk.setdefault(card.source_chunk_id, []).append(card)
+
+    safe_title = re.sub(r"[^a-zA-Z0-9_\-]+", "_", doc.title or "notes").strip("_")
+    filename_suffix = "full" if mode == "full" else "notes"
 
     md_lines = [
-        f"# {doc.title or doc.filename} — Reading Notes & Grounded Highlights",
+        f"# {doc.title or doc.filename} — {'Full Text & Marginalia' if mode == 'full' else 'Reading Notes & Grounded Highlights'}",
         f"*Exported from Athena on {utc_now().strftime('%Y-%m-%d %H:%M:%S UTC')}*",
         "",
         "---",
         "",
     ]
 
-    if not cards:
-        md_lines.append("No context cards saved yet.")
-    else:
-        for card in cards:
-            src_chunk = chunk_map.get(card.source_chunk_id)
-            seq_str = f"Chunk {src_chunk.sequence}" if src_chunk else "Passage"
+    if mode == "full":
+        for chunk in chunks:
             page_ref = ""
-            if src_chunk and src_chunk.source_pages_json:
+            if chunk.source_pages_json:
                 try:
-                    p_list = json.loads(src_chunk.source_pages_json)
+                    p_list = json.loads(chunk.source_pages_json)
                     if p_list:
                         page_ref = f" (Page {p_list[0]})"
                 except Exception:
                     pass
-
-            md_lines.append(f"## {card.title} — {seq_str}{page_ref}")
-            if card.exact_quote:
-                md_lines.append(f'> "{card.exact_quote}"')
-                md_lines.append("")
-            md_lines.append(f"{card.body}")
+            md_lines.append(f"### Passage {chunk.sequence}{page_ref}")
+            md_lines.append("")
+            md_lines.append(chunk.raw_text)
             md_lines.append("")
 
-            if card.citations_json:
-                try:
-                    citations = json.loads(card.citations_json)
-                    if citations:
-                        md_lines.append("**Verified Sources:**")
-                        for cit in citations:
-                            title = cit.get("title") or "Source"
-                            url = cit.get("url") or "#"
-                            pub = cit.get("publisher") or "Web"
-                            md_lines.append(f"- [{title} ({pub})]({url})")
-                        md_lines.append("")
-                except Exception:
-                    pass
+            chunk_cards = cards_by_chunk.get(chunk.id, [])
+            for card in chunk_cards:
+                md_lines.append(f"> **Context: {card.title}**")
+                if card.exact_quote:
+                    md_lines.append(f'> Anchor: *"{card.exact_quote}"*')
+                md_lines.append(f"> {card.body}")
+                if card.citations_json:
+                    try:
+                        citations = json.loads(card.citations_json)
+                        if citations:
+                            for cit in citations:
+                                title = cit.get("title") or "Source"
+                                url = cit.get("url") or "#"
+                                md_lines.append(f"> - [{title}]({url})")
+                    except Exception:
+                        pass
+                md_lines.append("")
             md_lines.append("---")
             md_lines.append("")
+    else:
+        if not cards:
+            md_lines.append("No context cards saved yet.")
+        else:
+            for card in cards:
+                src_chunk = chunk_map.get(card.source_chunk_id)
+                seq_str = f"Chunk {src_chunk.sequence}" if src_chunk else "Passage"
+                page_ref = ""
+                if src_chunk and src_chunk.source_pages_json:
+                    try:
+                        p_list = json.loads(src_chunk.source_pages_json)
+                        if p_list:
+                            page_ref = f" (Page {p_list[0]})"
+                    except Exception:
+                        pass
+
+                md_lines.append(f"## {card.title} — {seq_str}{page_ref}")
+                if card.exact_quote:
+                    md_lines.append(f'> "{card.exact_quote}"')
+                    md_lines.append("")
+                md_lines.append(f"{card.body}")
+                md_lines.append("")
+
+                if card.citations_json:
+                    try:
+                        citations = json.loads(card.citations_json)
+                        if citations:
+                            md_lines.append("**Verified Sources:**")
+                            for cit in citations:
+                                title = cit.get("title") or "Source"
+                                url = cit.get("url") or "#"
+                                pub = cit.get("publisher") or "Web"
+                                md_lines.append(f"- [{title} ({pub})]({url})")
+                            md_lines.append("")
+                    except Exception:
+                        pass
+                md_lines.append("---")
+                md_lines.append("")
 
     md_content = "\n".join(md_lines)
-    safe_title = re.sub(r"[^a-zA-Z0-9_\-]+", "_", doc.title or "notes").strip("_")
     return Response(
         content=md_content,
         media_type="text/markdown; charset=utf-8",
-        headers={"Content-Disposition": f'attachment; filename="{safe_title}_notes.md"'},
+        headers={"Content-Disposition": f'attachment; filename="{safe_title}_{filename_suffix}.md"'},
     )
 
 
@@ -1247,8 +1340,21 @@ async def get_chunk_vibe_check(
         .order_by(DocumentChapter.start_chunk_index.desc())
     ).first()
 
+    from app.config import settings, is_llm_configured
+    if not is_llm_configured():
+        sentences = [s.strip() for s in re.split(r"(?<=[.!?])\s+", target_chunk.raw_text) if s.strip()]
+        first_sentence = sentences[0] if sentences else target_chunk.raw_text[:120]
+        take = f"The core idea is that {first_sentence[0].lower() + first_sentence[1:] if len(first_sentence) > 1 else first_sentence}"
+        return {
+            "chunk_index": target_chunk.sequence,
+            "plain_take": take,
+            "simplified": take,
+            "analogy": None,
+            "fallback": True,
+            "status": "llm_not_configured",
+        }
+
     try:
-        from app.config import settings
         llm = LLMService()
         result = await asyncio.wait_for(
             asyncio.to_thread(
@@ -1268,6 +1374,7 @@ async def get_chunk_vibe_check(
             "plain_take": f"The core idea is that {first_sentence[0].lower() + first_sentence[1:] if len(first_sentence) > 1 else first_sentence}",
             "analogy": None,
             "fallback": True,
+            "status": "llm_not_configured",
         }
 
     take = result.get("plain_take", "A core theme from this passage.")
@@ -1277,5 +1384,6 @@ async def get_chunk_vibe_check(
         "simplified": take,
         "analogy": result.get("analogy"),
         "fallback": result.get("fallback", False),
+        "status": result.get("status", "ok"),
     }
 

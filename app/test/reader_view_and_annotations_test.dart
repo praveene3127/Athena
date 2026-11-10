@@ -93,14 +93,14 @@ void main() {
           body: 'Counterpoint: Alternative interpretations suggest non-linear responses.',
           exactQuote: 'historical evidence in action',
         ),
-        // One unassigned card to verify deterministic fallback
+        // One unassigned card to verify quarantine
         99: const ReaderItem(
           id: 'card_unassigned',
           type: 'context_card',
           insertAfter: 'unmatched_target_chunk',
           title: 'HISTORICAL CONTEXT: Classical Antecedents',
           body: 'Historical documentation confirms this pattern in early institutional models.',
-          exactQuote: 'Passage segment',
+          exactQuote: 'Unmatched non-existent excerpt',
         ),
       };
 
@@ -137,8 +137,8 @@ void main() {
         }
       }
 
-      // Verify unassigned card was deterministically placed, never dropped!
-      expect(feed.any((it) => it.id == 'card_unassigned'), isTrue);
+      // Verify unassigned card was quarantined, never misassigned!
+      expect(feed.any((it) => it.id == 'card_unassigned'), isFalse);
     });
 
     // -------------------------------------------------------------
