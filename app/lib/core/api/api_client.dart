@@ -7,6 +7,7 @@ import 'package:archive/archive.dart';
 import 'package:crypto/crypto.dart';
 import 'package:cross_file/cross_file.dart';
 import 'package:dio/dio.dart';
+import 'package:file_picker/file_picker.dart';
 import 'package:flutter/foundation.dart' show kIsWeb, debugPrint;
 import 'package:path_provider/path_provider.dart';
 import 'package:shared_preferences/shared_preferences.dart';
@@ -16,6 +17,7 @@ import 'package:athena/core/config/config.dart';
 import 'package:athena/core/api/lan_discovery.dart';
 import 'package:athena/core/errors.dart';
 import 'package:athena/models/ai_provider.dart';
+import 'package:athena/services/ingestion_job_coordinator.dart';
 import 'package:athena/services/ingestion_pipeline.dart';
 import 'package:athena/services/local_context_service.dart';
 import 'package:athena/services/local_database.dart';
@@ -463,15 +465,39 @@ class ApiClient {
     String? persistentPath = filePath;
     if (!kIsWeb) {
       try {
-        List<int>? resolvedBytes = bytes;
-        if ((resolvedBytes == null || resolvedBytes.isEmpty) && filePath != null && filePath.isNotEmpty) {
-          final f = File(filePath);
-          if (f.existsSync()) {
-            resolvedBytes = f.readAsBytesSync();
+        if (filePath != null && filePath.isNotEmpty) {
+          final sourceFile = File(filePath);
+          if (sourceFile.existsSync()) {
+            // Stream SHA-256 calculation without readAsBytesSync() into UI isolate RAM
+            final digest = await sha256.bind(sourceFile.openRead()).first;
+            final fileSha = digest.toString();
+            docId = 'doc_${fileSha.substring(0, 16)}';
+
+            final appDocDir = await getApplicationDocumentsDirectory();
+            final ext = fileName.contains('.') ? '.${fileName.split('.').last}' : '.pdf';
+            final booksDir = Directory('${appDocDir.path}/books');
+            if (!booksDir.existsSync()) {
+              booksDir.createSync(recursive: true);
+            }
+            final destFile = File('${booksDir.path}/$docId$ext');
+            if (!destFile.existsSync() || destFile.lengthSync() != sourceFile.lengthSync()) {
+              await sourceFile.copy(destFile.path);
+            }
+            persistentPath = destFile.path;
+
+            try {
+              await FilePicker.platform.clearTemporaryFiles();
+            } catch (e) {
+              debugPrint('[Athena Ingestion] FilePicker clear notice: $e');
+            }
+
+            // Pass file path only to worker, avoid keeping bytes in RAM
+            bytes = null;
+          } else {
+            docId = 'doc_${DateTime.now().millisecondsSinceEpoch}';
           }
-        }
-        if (resolvedBytes != null && resolvedBytes.isNotEmpty) {
-          final fileSha = sha256.convert(resolvedBytes).toString();
+        } else if (bytes != null && bytes.isNotEmpty) {
+          final fileSha = sha256.convert(bytes).toString();
           docId = 'doc_${fileSha.substring(0, 16)}';
           final appDocDir = await getApplicationDocumentsDirectory();
           final ext = fileName.contains('.') ? '.${fileName.split('.').last}' : '.pdf';
@@ -480,11 +506,11 @@ class ApiClient {
             booksDir.createSync(recursive: true);
           }
           final destFile = File('${booksDir.path}/$docId$ext');
-          if (!destFile.existsSync() || destFile.lengthSync() != resolvedBytes.length) {
-            destFile.writeAsBytesSync(resolvedBytes, flush: true);
+          if (!destFile.existsSync() || destFile.lengthSync() != bytes.length) {
+            await destFile.writeAsBytes(bytes, flush: true);
           }
           persistentPath = destFile.path;
-          bytes = resolvedBytes;
+          bytes = null;
         } else {
           docId = 'doc_${DateTime.now().millisecondsSinceEpoch}';
         }
@@ -494,6 +520,21 @@ class ApiClient {
       }
     } else {
       docId = 'doc_${DateTime.now().millisecondsSinceEpoch}';
+    }
+
+    // Never duplicate or wipe an existing document on re-import (F-B4)
+    if (!kIsWeb) {
+      final existing = await LocalDatabase.instance.getDocument(docId);
+      if (existing != null) {
+        final existingStatus = existing['status'] as String?;
+        if (existingStatus == 'ready') {
+          onProgress?.call(1.0, 'Ready to read');
+          return docId;
+        } else if (existingStatus == 'processing' || existingStatus == 'partially_readable' || existingStatus == 'paused') {
+          unawaited(IngestionJobCoordinator.instance.continueDocument(docId));
+          return docId;
+        }
+      }
     }
 
     return _uploadStreamedOnDevice(
@@ -565,10 +606,17 @@ class ApiClient {
         filePath: filePath,
         fileBytes: fileBytes,
         onProgress: handleProgress,
-        onBatch: (batchChunks, processedPages, totalPages, isFinalBatch) async {
-          await LocalDatabase.instance.insertChunksBatch(
+        onBatch: (batchChunks, processedPages, totalPages, isFinalBatch,
+            {carryOverText, lastCharOffset, lastSequence, profileJson}) async {
+          await LocalDatabase.instance.insertChunksBatchWithCheckpoint(
             batchChunks,
             isFinalBatch: isFinalBatch,
+            documentId: docId,
+            checkpointPage: processedPages,
+            chunkSequence: lastSequence ?? 0,
+            charOffset: lastCharOffset ?? 0,
+            carryOverText: carryOverText,
+            profileJson: profileJson,
           );
 
           final progressFraction =
@@ -576,7 +624,7 @@ class ApiClient {
           final pctInt = (progressFraction * 100).toInt();
           final stageMsg =
               'Extracting pages $processedPages of $totalPages ($pctInt%)...';
-          final bool canFastStart = (totalPages > 60 && processedPages >= 30);
+          final bool canFastStart = processedPages >= 16 || (totalPages > 60 && processedPages >= 30);
 
           try {
             await LocalDatabase.instance.updateDocumentProgress(
@@ -630,9 +678,8 @@ class ApiClient {
 
     final allChunks = result.chunks;
     final totalPages = result.pageCount;
-    final canonicalStr = result.canonicalText;
 
-    if (canonicalStr.trim().isEmpty || allChunks.isEmpty || !result.integrityVerified) {
+    if (result.totalCharacters == 0 || result.chunkCount == 0 || !result.integrityVerified) {
       final err = AppError(
         code: !result.integrityVerified ? 'INTEGRITY_FAILED' : 'SCANNED_NOT_SUPPORTED',
         message: !result.integrityVerified
@@ -655,8 +702,7 @@ class ApiClient {
     }
 
     // Step C: Mark 'ready' and 100% immediately! Never block reader on network cards (H-1 / P0-04)
-    final words =
-        canonicalStr.split(RegExp(r'\s+')).where((w) => w.isNotEmpty).length;
+    final words = result.totalWords;
     final readingTime = (words / 200).ceil().clamp(1, 9999);
 
     try {
@@ -668,9 +714,8 @@ class ApiClient {
         percent: 100,
         processedPage: totalPages,
         pageCount: totalPages,
-        canonicalText: canonicalStr,
         totalWords: words,
-        totalCharacters: canonicalStr.length,
+        totalCharacters: result.totalCharacters,
         readingTimeMinutes: readingTime,
         canonicalSha256: result.canonicalSha256,
         integrityVerified: result.integrityVerified ? 1 : 0,
@@ -684,9 +729,12 @@ class ApiClient {
     // Step D: Fast 100% local extractive notes (<= 8 cards, < 20ms, zero HTTP calls)
     try {
       final contextService = LocalContextService();
+      final previewChunks = allChunks.isNotEmpty
+          ? allChunks
+          : await LocalDatabase.instance.getChunks(docId, limit: 16);
       final fastCards = await contextService.buildFastInitialExtractiveCards(
         docId,
-        allChunks,
+        previewChunks,
         maxCards: 8,
       );
       if (fastCards.isNotEmpty) {
@@ -699,34 +747,20 @@ class ApiClient {
     return docId;
   }
 
-  Future<void> retryDocument(String id) async {
+  Future<void> continueDocument(String id) async {
     if (!kIsWeb && AppConfig.isStandaloneMobile) {
-      final doc = await LocalDatabase.instance.getDocument(id);
-      if (doc != null) {
-        final filePath = doc['file_path'] as String?;
-        final fileName = doc['filename'] as String? ?? 'document.pdf';
-        final cleanTitle = (doc['title'] as String?) ??
-            fileName.replaceAll(RegExp(r'\.[a-zA-Z0-9]+$'), '');
-        await LocalDatabase.instance.clearDocumentContent(id);
-        if (filePath != null &&
-            filePath.isNotEmpty &&
-            !filePath.startsWith('local://')) {
-          final file = File(filePath);
-          List<int>? bytes;
-          if (file.existsSync()) {
-            bytes = file.readAsBytesSync();
-          }
-          unawaited(_uploadStreamedOnDevice(
-            docId: id,
-            fileName: fileName,
-            cleanTitle: cleanTitle,
-            filePath: filePath,
-            fileBytes: bytes,
-            onProgress: null,
-          ));
-          return;
-        }
-      }
+      await IngestionJobCoordinator.instance.continueDocument(id);
+      return;
+    }
+  }
+
+  Future<void> retryDocument(String id, {bool redoFromScratch = false}) async {
+    if (!kIsWeb && AppConfig.isStandaloneMobile) {
+      await IngestionJobCoordinator.instance.retryDocument(
+        id,
+        redoFromScratch: redoFromScratch,
+      );
+      return;
     }
     if (AppConfig.apiBaseUrl.isEmpty) return;
     try {

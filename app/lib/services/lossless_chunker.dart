@@ -1844,10 +1844,14 @@ class LosslessChunker {
       }
       final rawText = canonicalText.substring(start, end);
       final seq = initialSequence + i;
+      final pages = _pagesForSpan(start, end, spans);
+      final firstPage = pages.isNotEmpty ? pages.first : 1;
       result.add({
         'id': '$documentId-c${seq.toString().padLeft(4, '0')}',
         'document_id': documentId,
         'sequence': seq,
+        'page_start': firstPage,
+        'page_number': firstPage,
         'section_title': atoms
             .skip(atomStart)
             .take(atomEnd - atomStart)
@@ -1861,7 +1865,7 @@ class LosslessChunker {
             .whereType<String>()
             .firstOrNull ?? 'chapter',
         'raw_text': rawText,
-        'source_pages_json': jsonEncode(_pagesForSpan(start, end, spans)),
+        'source_pages_json': jsonEncode(pages),
         'start_offset': start + offsetDelta,
         'end_offset': end + offsetDelta,
         'checksum': _sha256(rawText),

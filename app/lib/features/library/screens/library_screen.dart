@@ -93,11 +93,9 @@ class _LibraryScreenState extends ConsumerState<LibraryScreen>
     WidgetsBinding.instance.addObserver(this);
 
     if (!kIsWeb) {
-      LocalDatabase.instance.recoverStaleProcessingDocuments().then((_) {
-        if (mounted) ref.invalidate(documentsProvider);
-      }).catchError((e) {
-        debugPrint('[Athena Library] recoverStaleProcessingDocuments notice: $e');
-      });
+      // LocalDatabase.recoverStaleProcessingDocuments() is intentionally not called here
+      // to avoid corrupting active background jobs on screen mount (BG-02 / F-B3).
+      // Startup job recovery is safely handled once in main() via IngestionJobCoordinator.
     }
 
     _checkServerConnectionAndAutoDiscover();
@@ -1298,7 +1296,7 @@ class _LibraryScreenState extends ConsumerState<LibraryScreen>
   }
 
   Future<void> _openDocument(Document doc) async {
-    if (!doc.isReady) return;
+    if (!doc.isReadable) return;
 
     try {
       final client = ref.read(apiClientProvider);
@@ -1358,14 +1356,7 @@ class _LibraryScreenState extends ConsumerState<LibraryScreen>
       next.whenData((docs) {
         final hasProcessing = docs.any((d) => d.isProcessing);
         if (hasProcessing && _pollTimer == null) {
-          int pollCount = 0;
           _pollTimer = Timer.periodic(const Duration(milliseconds: 1500), (t) {
-            pollCount++;
-            if (pollCount > 40) {
-              t.cancel();
-              _pollTimer = null;
-              return;
-            }
             ref.invalidate(documentsProvider);
           });
         } else if (!hasProcessing && _pollTimer != null) {
@@ -2427,7 +2418,7 @@ class _DocumentTileState extends State<_DocumentTile> {
       onExit: (_) => setState(() => _isHovered = false),
       child: InkWell(
         onTap: () {
-          if (doc.isReady) {
+          if (doc.isReadable) {
             widget.onTap();
           } else {
             context.push('/processing/${doc.id}');
@@ -2626,6 +2617,54 @@ class _DocumentTileState extends State<_DocumentTile> {
                               tooltip: 'Retry',
                               onPressed: widget.onRetry,
                             ),
+                          if (doc.isPartiallyReadable && !doc.isReady) ...[
+                            const SizedBox(width: 8),
+                            InkWell(
+                              onTap: widget.onTap,
+                              borderRadius: BorderRadius.circular(16),
+                              child: Container(
+                                padding: const EdgeInsets.symmetric(
+                                    horizontal: 10, vertical: 6),
+                                decoration: BoxDecoration(
+                                  color: isDark
+                                      ? const Color(0xFF2DD4BF).withValues(alpha: 0.15)
+                                      : const Color(0xFF2D6A4F).withValues(alpha: 0.12),
+                                  borderRadius: BorderRadius.circular(16),
+                                  border: Border.all(
+                                    color: isDark
+                                        ? const Color(0xFF2DD4BF)
+                                        : const Color(0xFF2D6A4F),
+                                    width: 1,
+                                  ),
+                                ),
+                                child: Row(
+                                  mainAxisSize: MainAxisSize.min,
+                                  children: [
+                                    Text(
+                                      'READ NOW',
+                                      style: TextStyle(
+                                        fontFamily: AppTheme.fontUI,
+                                        color: isDark
+                                            ? const Color(0xFF2DD4BF)
+                                            : const Color(0xFF2D6A4F),
+                                        fontWeight: FontWeight.w700,
+                                        fontSize: 10,
+                                        letterSpacing: 0.6,
+                                      ),
+                                    ),
+                                    const SizedBox(width: 4),
+                                    Icon(
+                                      Icons.arrow_forward_rounded,
+                                      size: 12,
+                                      color: isDark
+                                          ? const Color(0xFF2DD4BF)
+                                          : const Color(0xFF2D6A4F),
+                                    ),
+                                  ],
+                                ),
+                              ),
+                            ),
+                          ],
                           if (doc.isReady) ...[
                             const SizedBox(width: 8),
 

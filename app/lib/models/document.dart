@@ -54,7 +54,9 @@ class Document {
   bool get isReady => status == 'ready';
   bool get isFailed => status == 'failed';
   bool get isUnsupported => status == 'unsupported';
-  bool get isProcessing => status == 'processing' || status == 'queued';
+  bool get isPartiallyReadable => status == 'partially_readable';
+  bool get isReadable => status == 'ready' || status == 'partially_readable';
+  bool get isProcessing => status == 'processing' || status == 'queued' || status == 'partially_readable';
 }
 
 /// Status polling response from GET /api/documents/{id}/status.
@@ -96,6 +98,8 @@ class DocumentStatus {
   bool get isReady => status == 'ready';
   bool get isFailed => status == 'failed';
   bool get isUnsupported => status == 'unsupported';
+  bool get isPartiallyReadable => status == 'partially_readable';
+  bool get isReadable => status == 'ready' || status == 'partially_readable';
   bool get isDone => isReady || isFailed || isUnsupported;
 }
 
@@ -256,7 +260,9 @@ class ReaderItem {
 class ReaderData {
   final String docId;
   final String title;
+  final String status;
   final int pageCount;
+  final int? processedPages;
   final String? layoutWarning;
   final String? contextStatus;
   final bool integrityVerified;
@@ -272,7 +278,9 @@ class ReaderData {
   const ReaderData({
     required this.docId,
     required this.title,
+    this.status = 'ready',
     required this.pageCount,
+    this.processedPages,
     this.layoutWarning,
     this.contextStatus,
     required this.integrityVerified,
@@ -307,7 +315,10 @@ class ReaderData {
     return ReaderData(
       docId: doc['id']?.toString() ?? '',
       title: doc['title']?.toString() ?? '',
+      status: doc['status']?.toString() ?? 'ready',
       pageCount: (doc['page_count'] as num?)?.toInt() ?? 0,
+      processedPages: (doc['processed_pages'] as num?)?.toInt() ??
+          (doc['processed_page'] as num?)?.toInt(),
       layoutWarning: doc['layout_warning']?.toString(),
       contextStatus: doc['context_status']?.toString(),
       integrityVerified: integrity['verified'] as bool? ?? false,

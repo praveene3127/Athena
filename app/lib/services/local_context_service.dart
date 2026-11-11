@@ -382,6 +382,82 @@ class LocalContextService {
     return cards;
   }
 
+  // Banned generic slop phrases (GAP-05 / Anti-Slop Filter)
+  static const List<String> bannedGenericSlopPhrases = [
+    'in conclusion',
+    'delve into',
+    'it is important to note',
+    'plays a crucial role',
+    'serves as a reminder',
+    'at the end of the day',
+    'a testament to',
+    'in today\'s world',
+    'sheds light on',
+    'tapestry of',
+  ];
+
+  static final RegExp _slopRegex = RegExp(
+    bannedGenericSlopPhrases
+        .map((p) => '\\b${RegExp.escape(p)}\\b')
+        .join('|'),
+    caseSensitive: false,
+  );
+
+  /// Filters out generic AI slop phrases.
+  static bool containsSlop(String text) {
+    return _slopRegex.hasMatch(text);
+  }
+
+  /// < 1ms synchronous local SimHash cross-reference + key claim extraction
+  /// with is_speculative_draft: true (GAP-03).
+  Map<String, Object?>? generateSpeculativeDraftCard(
+    String documentId,
+    Map<String, Object?> chunk,
+  ) {
+    final passage = (chunk['raw_text'] as String?)?.trim() ?? '';
+    if (passage.isEmpty) return null;
+    final words = passage.split(RegExp(r'\s+')).where((w) => w.isNotEmpty).toList();
+    if (words.length < 10) return null;
+
+    final chunkId = chunk['id']?.toString() ?? 'chunk_speculative';
+    final concept = extractSalientConcept(passage);
+    if (concept.isEmpty) return null;
+
+    final exactQuote = _exactQuote(passage, concept) ??
+        (passage.length > 60 ? passage.substring(0, 60) : passage);
+
+    final summary = _summarizeLocally(passage, concept);
+    if (containsSlop(summary)) return null;
+
+    final id = sha256
+        .convert(utf8.encode('speculative:$documentId:$chunkId:$concept'))
+        .toString()
+        .substring(0, 24);
+
+    return {
+      'id': 'spec-$id',
+      'document_id': documentId,
+      'source_chunk_id': chunkId,
+      'concept_name': concept,
+      'card_type': 'speculative_draft',
+      'title': 'THE CORE IDEA: $concept',
+      'exact_quote': exactQuote,
+      'body': summary,
+      'why_here': 'Speculative key claim extracted from passage.',
+      'citations_json': '[]',
+      'citations': const [],
+      'verified': 0,
+      'support_status': 'speculative_draft',
+      'support_tier': 'speculative_draft',
+      'canonical_sha256': sha256.convert(utf8.encode(passage)).toString(),
+      'generation_mode': 'speculative_draft',
+      'is_speculative_draft': true,
+      'saved': 0,
+      'dismissed': 0,
+      'created_at': DateTime.now().toUtc().toIso8601String(),
+    };
+  }
+
   Future<List<Map<String, Object?>>> buildCards(
     String documentId,
     List<Map<String, Object?>> chunks,
@@ -1052,7 +1128,10 @@ Respond ONLY with valid JSON with this exact schema:
         .where((t) => t.length >= 5 && !chunkTokens.contains(t))
         .toSet();
 
-    if (jaccard > 0.75 || novelTokens.length < 3) {
+    if (jaccard > 0.78 || novelTokens.length < 3) {
+      return false;
+    }
+    if (containsSlop(cardBody)) {
       return false;
     }
     return true;

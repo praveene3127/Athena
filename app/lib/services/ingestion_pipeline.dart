@@ -4,8 +4,9 @@ import 'dart:io' show File;
 import 'dart:isolate';
 import 'dart:math';
 import 'dart:typed_data';
-import 'package:archive/archive.dart';
+import 'package:archive/archive_io.dart';
 import 'package:crypto/crypto.dart';
+import 'package:convert/convert.dart';
 import 'package:flutter/foundation.dart';
 import 'package:syncfusion_flutter_pdf/pdf.dart';
 import 'package:xml/xml.dart';
@@ -21,6 +22,9 @@ class IngestionResult {
   final int pageCount;
   final List<Map<String, Object?>> chunks;
   final bool integrityVerified;
+  final int totalWords;
+  final int totalCharacters;
+  final int chunkCount;
 
   const IngestionResult({
     required this.canonicalText,
@@ -28,6 +32,9 @@ class IngestionResult {
     required this.pageCount,
     required this.chunks,
     required this.integrityVerified,
+    this.totalWords = 0,
+    this.totalCharacters = 0,
+    this.chunkCount = 0,
   });
 }
 
@@ -68,14 +75,23 @@ class DocumentIngestionPipeline {
     String? filePath,
     List<int>? fileBytes,
     int chunkWindowPages = 16,
+    int startFromPage = 1,
+    int initialSequence = 1,
+    int initialOffset = 0,
+    String? initialCarryOver,
+    String? savedProfileJson,
     Duration watchdogTimeout = const Duration(seconds: 90),
     void Function(double progress, String stageLabel)? onProgress,
     Future<void> Function(
       List<Map<String, Object?>> batchChunks,
       int processedPages,
       int totalPages,
-      bool isFinalBatch,
-    )? onBatch,
+      bool isFinalBatch, {
+      int? lastSequence,
+      int? lastCharOffset,
+      String? carryOverText,
+      String? profileJson,
+    })? onBatch,
   }) async {
     final hasPath =
         filePath != null && filePath.isNotEmpty && !filePath.startsWith('local://');
@@ -137,6 +153,11 @@ class DocumentIngestionPipeline {
       filePath: hasPath ? filePath : null,
       fileBytes: hasBytes ? fileBytes : null,
       chunkWindowPages: chunkWindowPages,
+      startFromPage: startFromPage,
+      initialSequence: initialSequence,
+      initialOffset: initialOffset,
+      initialCarryOver: initialCarryOver,
+      savedProfileJson: savedProfileJson,
       watchdogTimeout: watchdogTimeout,
       onProgress: onProgress,
       onBatch: onBatch,
@@ -151,28 +172,48 @@ class DocumentIngestionPipeline {
     String? filePath,
     List<int>? fileBytes,
     int chunkWindowPages = 16,
+    int startFromPage = 1,
+    int initialSequence = 1,
+    int initialOffset = 0,
+    String? initialCarryOver,
+    String? savedProfileJson,
     Duration watchdogTimeout = const Duration(seconds: 90),
     void Function(double progress, String stageLabel)? onProgress,
     Future<void> Function(
       List<Map<String, Object?>> batchChunks,
       int processedPages,
       int totalPages,
-      bool isFinalBatch,
-    )? onBatch,
+      bool isFinalBatch, {
+      int? lastSequence,
+      int? lastCharOffset,
+      String? carryOverText,
+      String? profileJson,
+    })? onBatch,
   }) async {
     final completer = Completer<IngestionResult>();
     final receivePort = ReceivePort();
     final errorPort = ReceivePort();
     final exitPort = ReceivePort();
-    final allChunks = <Map<String, Object?>>[];
-    final fullCanonical = StringBuffer();
+
+    // MEM-03: Incremental streaming hashes and stats (Zero whole-book string in UI isolate)
+    final canonicalSink = AccumulatorSink<Digest>();
+    final canonicalByteSink = sha256.startChunkedConversion(canonicalSink);
+    final reconstructedSink = AccumulatorSink<Digest>();
+    final reconstructedByteSink = sha256.startChunkedConversion(reconstructedSink);
+
+    final initialChunksSample = <Map<String, Object?>>[];
+    StringBuffer? inMemoryCanonicalBuffer;
+    int totalWords = 0;
+    int totalCharacters = 0;
+    int totalChunkCount = 0;
     int totalPages = 0;
     Isolate? isolate;
-    Timer? watchdogTimer;
+    Timer? livenessTimer;
+    const livenessDuration = Duration(seconds: 60);
 
     void cleanup() {
-      watchdogTimer?.cancel();
-      watchdogTimer = null;
+      livenessTimer?.cancel();
+      livenessTimer = null;
       receivePort.close();
       errorPort.close();
       exitPort.close();
@@ -183,15 +224,15 @@ class DocumentIngestionPipeline {
       }
     }
 
-    void resetWatchdog() {
-      watchdogTimer?.cancel();
-      watchdogTimer = Timer(watchdogTimeout, () async {
-        debugPrint('[Athena Ingestion] Watchdog triggered: ${watchdogTimeout.inSeconds}s worker timeout');
+    void resetLiveness() {
+      livenessTimer?.cancel();
+      livenessTimer = Timer(livenessDuration, () async {
+        debugPrint('[Athena Ingestion] Liveness watchdog triggered: 60s without events');
         if (!completer.isCompleted) {
           completer.completeError(
             const AppError(
               code: 'EXTRACTION_TIMEOUT',
-              message: 'Document extraction timed out.',
+              message: 'Extraction timed out due to worker inactivity.',
             ),
           );
         }
@@ -201,8 +242,8 @@ class DocumentIngestionPipeline {
             docId,
             status: 'failed',
             stage: 'failed',
-            stageLabel: 'Extraction interrupted or timed out.',
-            errorMessage: 'Extraction interrupted or timed out.',
+            stageLabel: 'Extraction timed out due to worker inactivity.',
+            errorMessage: 'Extraction timed out due to worker inactivity.',
             errorCode: 'EXTRACTION_TIMEOUT',
           );
         } catch (e) {
@@ -247,63 +288,86 @@ class DocumentIngestionPipeline {
           bytes: fileBytes,
           sendPort: receivePort.sendPort,
           chunkWindowPages: chunkWindowPages,
+          startFromPage: startFromPage,
+          initialSequence: initialSequence,
+          initialOffset: initialOffset,
+          initialCarryOver: initialCarryOver,
+          savedProfileJson: savedProfileJson,
         ),
         onError: errorPort.sendPort,
         onExit: exitPort.sendPort,
         errorsAreFatal: true,
       );
 
-      resetWatchdog();
+      resetLiveness();
 
       receivePort.listen(
         (dynamic message) async {
-          resetWatchdog();
-          if (message is _WorkerProgressEvent) {
+          resetLiveness();
+          if (message is _WorkerHeartbeatEvent) {
+            // Worker is alive
+          } else if (message is _WorkerProgressEvent) {
             onProgress?.call(message.progress, message.stageLabel);
           } else if (message is _WorkerBatchEvent) {
             totalPages = message.totalPages;
-            allChunks.addAll(message.batchChunks);
-            if (message.batchCanonicalText.isNotEmpty) {
-              fullCanonical.write(message.batchCanonicalText);
+            totalChunkCount += message.batchChunks.length;
+            if (initialChunksSample.length < 16) {
+              initialChunksSample.addAll(
+                message.batchChunks.take(16 - initialChunksSample.length),
+              );
             }
 
-            if (onBatch != null && message.batchChunks.isNotEmpty) {
-              watchdogTimer?.cancel();
+            if (message.batchCanonicalText.isNotEmpty) {
+              canonicalByteSink.add(utf8.encode(message.batchCanonicalText));
+              totalCharacters += message.batchCanonicalText.length;
+              totalWords += StructureResolver._countWordsStatic(message.batchCanonicalText);
+              // For short documents or tests without onBatch persistence, retain canonicalText in memory (<= 2MB)
+              if (onBatch == null || totalPages <= 10) {
+                inMemoryCanonicalBuffer ??= StringBuffer();
+                inMemoryCanonicalBuffer!.write(message.batchCanonicalText);
+              }
+            }
+
+            for (final c in message.batchChunks) {
+              final raw = c['raw_text']?.toString() ?? '';
+              reconstructedByteSink.add(utf8.encode(raw));
+            }
+
+            if (onBatch != null && (message.batchChunks.isNotEmpty || message.isFinalBatch)) {
+              livenessTimer?.cancel();
               try {
                 await onBatch(
                   message.batchChunks,
                   message.processedPages,
                   message.totalPages,
                   message.isFinalBatch,
+                  lastSequence: message.lastSequence,
+                  lastCharOffset: message.lastCharOffset,
+                  carryOverText: message.carryOverText,
+                  profileJson: message.profileJson,
                 );
               } finally {
-                resetWatchdog();
+                resetLiveness();
               }
             }
           } else if (message is _WorkerDoneEvent) {
             cleanup();
+            canonicalByteSink.close();
+            reconstructedByteSink.close();
 
-            final canonicalStr = fullCanonical.isNotEmpty
-                ? fullCanonical.toString()
-                : message.canonicalText;
-            final canonicalSha256 =
-                sha256.convert(utf8.encode(canonicalStr)).toString();
-
-            final reconstructedText = allChunks
-                .map((c) => (c['raw_text'] ?? '').toString())
-                .join('');
-            final reconstructedSha256 =
-                sha256.convert(utf8.encode(reconstructedText)).toString();
-            final bool integrityVerified =
-                reconstructedText == canonicalStr &&
-                reconstructedSha256 == canonicalSha256;
+            final canonicalSha256 = canonicalSink.events.single.toString();
+            final reconstructedSha256 = reconstructedSink.events.single.toString();
+            final bool integrityVerified = (canonicalSha256 == reconstructedSha256);
 
             final result = IngestionResult(
-              canonicalText: canonicalStr,
+              canonicalText: inMemoryCanonicalBuffer?.toString() ?? '',
               canonicalSha256: canonicalSha256,
               pageCount: message.pageCount > 0 ? message.pageCount : totalPages,
-              chunks: allChunks,
+              chunks: initialChunksSample,
               integrityVerified: integrityVerified,
+              totalWords: totalWords,
+              totalCharacters: totalCharacters,
+              chunkCount: totalChunkCount,
             );
 
             if (!completer.isCompleted) {
@@ -491,130 +555,202 @@ class DocumentIngestionPipeline {
       final extractor = PdfTextExtractor(pdfDoc);
       final bookmarks = _extractPdfBookmarks(pdfDoc);
 
-      final pageLinesMap = <int, List<LineFragment>>{};
-      final pageRawTextMap = <int, String>{};
+      LayoutProfile profile;
+      Set<String> repeatedHeadersFooters;
+      String profileJson;
 
-      int cleanPageCount = 0;
-      for (int p = 0; p < totalPages; p++) {
-        final progressFraction = 0.05 + 0.55 * ((p + 1) / totalPages);
+      if (params.savedProfileJson != null && params.savedProfileJson!.isNotEmpty) {
+        try {
+          final decoded = jsonDecode(params.savedProfileJson!) as Map<String, dynamic>;
+          profile = LayoutProfile.fromJson(decoded['layout'] as Map<String, dynamic>);
+          repeatedHeadersFooters = (decoded['furniture'] as List).map((e) => e.toString()).toSet();
+          profileJson = params.savedProfileJson!;
+        } catch (_) {
+          profile = const LayoutProfile(
+            bodyFontSize: 12.0,
+            linePitch: 14.0,
+            bodyLeft: 54.0,
+            bodyRight: 550.0,
+            indent: 0.0,
+            usesIndent: false,
+          );
+          repeatedHeadersFooters = <String>{};
+          profileJson = jsonEncode({
+            'layout': profile.toJson(),
+            'furniture': repeatedHeadersFooters.toList(),
+          });
+        }
+      } else {
+        // Pass 0: Fast 24-Page Sampled Profile (< 1s)
+        final samplePages = <int>{};
+        for (int p = 1; p <= 10 && p <= totalPages; p++) {
+          samplePages.add(p);
+        }
+        for (int p = totalPages - 3; p <= totalPages; p++) {
+          if (p >= 1) samplePages.add(p);
+        }
+        if (totalPages > 14) {
+          final startBody = (totalPages * 0.15).round().clamp(1, totalPages);
+          final endBody = (totalPages * 0.85).round().clamp(1, totalPages);
+          if (endBody > startBody) {
+            final step = (endBody - startBody) / 10.0;
+            for (int i = 0; i < 10; i++) {
+              samplePages.add((startBody + (i * step)).round().clamp(1, totalPages));
+            }
+          }
+        }
+        final sampleSorted = samplePages.toList()..sort();
+
+        final sampleLinesMap = <int, List<LineFragment>>{};
+        int cleanSampleCount = 0;
+
+        for (final p in sampleSorted) {
+          final pageHeight = pdfDoc.pages[p - 1].size.height;
+          final lines = _extractHorizontalGroupedLines(extractor, p - 1, pageHeight: pageHeight);
+          sampleLinesMap[p] = lines;
+          final rawText = lines.map((l) => l.text).join('\n');
+          if (rawText.trim().length >= 20 && computePageQuality(rawText).isAcceptable) {
+            cleanSampleCount++;
+          }
+        }
+
+        // a) Scanned PDF detection (< 15% clean in sample)
+        if (sampleSorted.isNotEmpty && (cleanSampleCount / sampleSorted.length) < 0.15) {
+          params.sendPort.send(const _WorkerErrorEvent(
+            error: 'No readable text could be extracted from this document. Scanned image-only files are not supported on-device.',
+          ));
+          return;
+        }
+
+        // b) Deterministic LayoutProfile & repeatedHeadersFooters furniture keys
+        repeatedHeadersFooters = detectFurniture(sampleLinesMap);
+        final cleanSampleLinesMap = <int, List<LineFragment>>{};
+        for (final p in sampleSorted) {
+          var lines = sampleLinesMap[p] ?? const [];
+          lines = lines.where((line) {
+            final ph = line.pageHeight > 0 ? line.pageHeight : 792.0;
+            final inMargin = (line.top <= 0.08 * ph) || (line.bottom >= 0.92 * ph);
+            if (!inMargin) return true;
+            final key = _furnitureKey(line.text);
+            final yBucket = (line.top / 4).round();
+            if (repeatedHeadersFooters.contains('$key@$yBucket') ||
+                repeatedHeadersFooters.contains('$key@${yBucket - 1}') ||
+                repeatedHeadersFooters.contains('$key@${yBucket + 1}')) {
+              return false;
+            }
+            if (_isLonePageNumber(line.text, pageIndex: p)) return false;
+            return true;
+          }).toList();
+          cleanSampleLinesMap[p] = lines;
+        }
+
+        profile = LayoutProfile.compute(cleanSampleLinesMap);
+
+        profileJson = jsonEncode({
+          'layout': profile.toJson(),
+          'furniture': repeatedHeadersFooters.toList(),
+        });
+
+        // Release sample lines from memory
+        sampleLinesMap.clear();
+        cleanSampleLinesMap.clear();
+      }
+
+      // Pass 1: True Bounded 16-Page Streaming Loop
+      final int chunkWindowPages =
+          params.chunkWindowPages > 0 ? params.chunkWindowPages : 16;
+      final int startFromPage =
+          params.startFromPage > 0 ? params.startFromPage : 1;
+      int chunkSeq = params.initialSequence > 0 ? params.initialSequence : 1;
+      int currentOffset = params.initialOffset >= 0 ? params.initialOffset : 0;
+      String? currentCarryOver = params.initialCarryOver;
+      int? prevReadablePage;
+
+      for (int startP = startFromPage; startP <= totalPages; startP += chunkWindowPages) {
+        final endP = (startP + chunkWindowPages - 1).clamp(startFromPage, totalPages);
+        final isFinalWindow = (endP == totalPages);
+
+        final progressFraction = 0.05 + 0.90 * (endP / totalPages);
         final pctInt = (progressFraction * 100).toInt();
         params.sendPort.send(_WorkerProgressEvent(
           progress: progressFraction,
-          stageLabel: 'Extracting page ${p + 1} of $totalPages ($pctInt%)...',
+          stageLabel: 'Extracting pages $startP–$endP of $totalPages ($pctInt%)...',
         ));
+        params.sendPort.send(const _WorkerHeartbeatEvent());
 
-        final pageHeight = pdfDoc.pages[p].size.height;
-        final lines = _extractHorizontalGroupedLines(extractor, p, pageHeight: pageHeight);
-        pageLinesMap[p + 1] = lines;
-        final rawText = lines.map((l) => l.text).join('\n');
-        pageRawTextMap[p + 1] = rawText;
-        if (rawText.trim().length >= 20 &&
-            computePageQuality(rawText).isAcceptable) {
-          cleanPageCount++;
-        }
-      }
+        // Extract ONLY pages startP..endP into memory
+        final windowCleanLinesMap = <int, List<LineFragment>>{};
+        final windowRawTextMap = <int, String>{};
+        final explicitHeadingMap = <int, List<String>>{};
+        final tocPages = <int>{};
+        final tocTitles = <String>{};
 
-      // Scanned PDF detection (H-9)
-      if (totalPages >= 3 && (cleanPageCount / totalPages) < 0.15) {
-        params.sendPort.send(const _WorkerErrorEvent(
-          error: 'Scanned image-only PDF detected (no extractable text layer).',
-        ));
-        return;
-      }
+        for (int p = startP; p <= endP; p++) {
+          final pageHeight = pdfDoc.pages[p - 1].size.height;
+          final lines = _extractHorizontalGroupedLines(extractor, p - 1, pageHeight: pageHeight);
+          final rawText = lines.map((l) => l.text).join('\n');
+          windowRawTextMap[p] = rawText;
 
-      params.sendPort.send(const _WorkerProgressEvent(
-        progress: 0.65,
-        stageLabel: 'Analyzing document layout and structure...',
-      ));
+          var cleanLines = lines.where((line) {
+            final ph = line.pageHeight > 0 ? line.pageHeight : 792.0;
+            final inMargin = (line.top <= 0.08 * ph) || (line.bottom >= 0.92 * ph);
+            if (!inMargin) return true;
+            final key = _furnitureKey(line.text);
+            final yBucket = (line.top / 4).round();
+            if (repeatedHeadersFooters.contains('$key@$yBucket') ||
+                repeatedHeadersFooters.contains('$key@${yBucket - 1}') ||
+                repeatedHeadersFooters.contains('$key@${yBucket + 1}')) {
+              return false;
+            }
+            if (_isLonePageNumber(line.text, pageIndex: p)) return false;
+            return true;
+          }).toList();
+          windowCleanLinesMap[p] = cleanLines;
 
-      // 1. Whole-book furniture removal (FP-6)
-      final repeatedHeadersFooters = detectFurniture(pageLinesMap);
-      final cleanLinesMap = <int, List<LineFragment>>{};
-      for (int p = 1; p <= totalPages; p++) {
-        var lines = pageLinesMap[p] ?? const [];
-        lines = lines.where((line) {
-          final ph = line.pageHeight > 0 ? line.pageHeight : 792.0;
-          final inMargin = (line.top <= 0.08 * ph) || (line.bottom >= 0.92 * ph);
-          if (!inMargin) return true; // NEVER strip lines outside top/bottom 8% margin!
-
-          final key = _furnitureKey(line.text);
-          final yBucket = (line.top / 4).round();
-          if (repeatedHeadersFooters.contains('$key@$yBucket') ||
-              repeatedHeadersFooters.contains('$key@${yBucket - 1}') ||
-              repeatedHeadersFooters.contains('$key@${yBucket + 1}')) {
-            return false;
+          final tocRes = TocDetector.analyzePage(
+            lines: cleanLines,
+            bodyRight: profile.bodyRight,
+            rawPageText: rawText,
+            pageNum: p,
+            totalPages: totalPages,
+          );
+          if (tocRes.isToc) {
+            tocPages.add(p);
+            for (final entry in tocRes.entries) {
+              tocTitles.add(entry.title.toLowerCase());
+            }
           }
-          if (_isLonePageNumber(line.text, pageIndex: p)) return false;
-          return true;
-        }).toList();
-        cleanLinesMap[p] = lines;
-      }
+          for (final l in cleanLines) {
+            if (isStrictHeading(
+              line: l,
+              profile: profile,
+              bookmarkTitle: bookmarks[p],
+              tocTitles: tocTitles,
+            )) {
+              explicitHeadingMap.putIfAbsent(p, () => []).add(l.text.trim());
+            }
+          }
+        }
 
-      // 2. Compute LayoutProfile (FP-6)
-      final profile = LayoutProfile.compute(cleanLinesMap);
-
-      // 3. TocDetector & Heading discovery (FP-8, FP-9)
-      final tocPages = <int>{};
-      final tocTitles = <String>{};
-      final explicitHeadingMap = <int, List<String>>{};
-
-      for (int p = 1; p <= totalPages; p++) {
-        final lines = cleanLinesMap[p] ?? const [];
-        final rawText = pageRawTextMap[p] ?? '';
-        final tocRes = TocDetector.analyzePage(
-          lines: lines,
-          bodyRight: profile.bodyRight,
-          rawPageText: rawText,
-          pageNum: p,
+        final roles = StructureResolver.smoothRolesForWindow(
+          startPage: startP,
+          endPage: endP,
           totalPages: totalPages,
+          pageLinesMap: windowCleanLinesMap,
+          pageRawTextMap: windowRawTextMap,
+          bookmarks: bookmarks,
+          tocPages: tocPages,
+          explicitHeadingMap: explicitHeadingMap,
         );
-        if (tocRes.isToc) {
-          tocPages.add(p);
-          for (final entry in tocRes.entries) {
-            tocTitles.add(entry.title.toLowerCase());
-          }
-        }
-        for (final l in lines) {
-          if (isStrictHeading(
-            line: l,
-            profile: profile,
-            bookmarkTitle: bookmarks[p],
-            tocTitles: tocTitles,
-          )) {
-            explicitHeadingMap.putIfAbsent(p, () => []).add(l.text.trim());
-          }
-        }
-      }
-
-      // 4. StructureResolver: 5-state monotonic Viterbi smoothing (FP-9, FP-10)
-      final roles = StructureResolver.smoothRoles(
-        totalPages: totalPages,
-        pageLinesMap: cleanLinesMap,
-        pageRawTextMap: pageRawTextMap,
-        bookmarks: bookmarks,
-        tocPages: tocPages,
-        explicitHeadingMap: explicitHeadingMap,
-      );
-
-      // 5. Windowed Reflow, Chunking & Incremental Batch Emission (H-5, P0-01, P0-05)
-      final int chunkWindowPages =
-          params.chunkWindowPages > 0 ? params.chunkWindowPages : 16;
-      int chunkSeq = 1;
-      final fullCanonical = StringBuffer();
-      final allChunks = <Map<String, Object?>>[];
-      String? currentCarryOver;
-      int? prevReadablePage;
-
-      for (int startP = 1; startP <= totalPages; startP += chunkWindowPages) {
-        final endP = (startP + chunkWindowPages - 1).clamp(1, totalPages);
-        final isFinalWindow = (endP == totalPages);
 
         final windowBuffer = StringBuffer();
         final windowSpans = <Map<String, dynamic>>[];
 
         for (int p = startP; p <= endP; p++) {
-          final role =
-              (p - 1 < roles.length) ? roles[p - 1] : SectionRole.chapter;
+          final roleIdx = p - startP;
+          final role = (roleIdx >= 0 && roleIdx < roles.length)
+              ? roles[roleIdx]
+              : SectionRole.chapter;
           if (role.isMatter) {
             continue;
           }
@@ -624,10 +760,9 @@ class DocumentIngestionPipeline {
           }
           prevReadablePage = p;
 
-          var lines = cleanLinesMap[p] ?? const [];
+          var lines = windowCleanLinesMap[p] ?? const [];
           if (lines.isEmpty) continue;
 
-          // 2-Column XY-cut ordering if applicable (FP-6)
           if (profile.hasTwoColumns && profile.columnGutterLeft > 0) {
             final col1 = lines
                 .where((l) => l.right <= profile.columnGutterRight)
@@ -710,7 +845,7 @@ class DocumentIngestionPipeline {
         List<Map<String, Object?>> windowChunks = const [];
 
         if (windowCanonical.isNotEmpty) {
-          final bool needsWindowSep = fullCanonical.isNotEmpty;
+          final bool needsWindowSep = currentOffset > 0;
           if (needsWindowSep) {
             windowCanonical = '\n\n$windowCanonical';
             for (final span in windowSpans) {
@@ -721,28 +856,22 @@ class DocumentIngestionPipeline {
             }
           }
 
-          final int currentWindowOffset = fullCanonical.length;
-
           windowChunks = LosslessChunker().build(
             documentId: params.docId,
             canonicalText: windowCanonical,
             spans: windowSpans,
             initialSequence: chunkSeq,
-            offsetDelta: currentWindowOffset,
+            offsetDelta: currentOffset,
           );
 
-          fullCanonical.write(windowCanonical);
-
           chunkSeq += windowChunks.length;
-          allChunks.addAll(windowChunks);
+          currentOffset += windowCanonical.length;
         }
 
-        // CRITICAL MEMORY OPTIMIZATION: Clear processed pages from RAM!
-        for (int p = startP; p <= endP; p++) {
-          pageLinesMap.remove(p);
-          cleanLinesMap.remove(p);
-          pageRawTextMap.remove(p);
-        }
+        // CRITICAL: Clear processed pages from RAM immediately!
+        windowCleanLinesMap.clear();
+        windowRawTextMap.clear();
+        explicitHeadingMap.clear();
 
         if (windowChunks.isNotEmpty || isFinalWindow) {
           params.sendPort.send(_WorkerBatchEvent(
@@ -751,17 +880,17 @@ class DocumentIngestionPipeline {
             processedPages: endP,
             totalPages: totalPages,
             isFinalBatch: isFinalWindow,
+            lastSequence: chunkSeq - 1,
+            lastCharOffset: currentOffset,
+            carryOverText: currentCarryOver,
+            profileJson: profileJson,
           ));
         }
       }
 
-      final canonicalStr = fullCanonical.toString();
-      final canonicalSha256 =
-          sha256.convert(utf8.encode(canonicalStr)).toString();
-
       params.sendPort.send(_WorkerDoneEvent(
-        canonicalText: canonicalStr,
-        canonicalSha256: canonicalSha256,
+        canonicalText: '',
+        canonicalSha256: '',
         pageCount: totalPages,
       ));
     } catch (e, stack) {
@@ -2151,15 +2280,11 @@ class DocumentIngestionPipeline {
   static void _epubWorkerIsolateEntryPoint(_EpubWorkerParams params) async {
     try {
       List<int>? bytes = params.bytes;
-      if ((bytes == null || bytes.isEmpty) &&
-          params.filePath != null &&
+      final bool hasFilePath = params.filePath != null &&
           params.filePath!.isNotEmpty &&
-          !kIsWeb) {
-        final xfile = XFile(params.filePath!);
-        bytes = await xfile.readAsBytes();
-      }
+          !kIsWeb;
 
-      if (bytes == null || bytes.isEmpty) {
+      if ((bytes == null || bytes.isEmpty) && !hasFilePath) {
         params.sendPort.send(const _WorkerErrorEvent(
           error: 'EPUB file is unreadable or empty.',
         ));
@@ -2171,7 +2296,14 @@ class DocumentIngestionPipeline {
         stageLabel: 'Parsing EPUB spine and navigation manifests...',
       ));
 
-      final archive = ZipDecoder().decodeBytes(bytes);
+      // MEM-05: Stream EPUB spine entries lazily without inflating embedded image binaries into RAM
+      Archive archive;
+      if (hasFilePath) {
+        final inputStream = InputFileStream(params.filePath!);
+        archive = ZipDecoder().decodeBuffer(inputStream);
+      } else {
+        archive = ZipDecoder().decodeBytes(bytes!);
+      }
       final binaryExtensions = {
         '.png', '.jpg', '.jpeg', '.gif', '.webp', '.svg',
         '.ttf', '.otf', '.woff', '.woff2',
@@ -2861,6 +2993,11 @@ class _PdfWorkerParams {
   final List<int>? bytes;
   final SendPort sendPort;
   final int chunkWindowPages;
+  final int startFromPage;
+  final int initialSequence;
+  final int initialOffset;
+  final String? initialCarryOver;
+  final String? savedProfileJson;
 
   const _PdfWorkerParams({
     required this.docId,
@@ -2869,6 +3006,11 @@ class _PdfWorkerParams {
     this.bytes,
     required this.sendPort,
     this.chunkWindowPages = 16,
+    this.startFromPage = 1,
+    this.initialSequence = 1,
+    this.initialOffset = 0,
+    this.initialCarryOver,
+    this.savedProfileJson,
   });
 }
 
@@ -2898,12 +3040,20 @@ class _WorkerProgressEvent {
   });
 }
 
+class _WorkerHeartbeatEvent {
+  const _WorkerHeartbeatEvent();
+}
+
 class _WorkerBatchEvent {
   final List<Map<String, Object?>> batchChunks;
   final String batchCanonicalText;
   final int processedPages;
   final int totalPages;
   final bool isFinalBatch;
+  final int lastSequence;
+  final int lastCharOffset;
+  final String? carryOverText;
+  final String? profileJson;
 
   const _WorkerBatchEvent({
     required this.batchChunks,
@@ -2911,6 +3061,10 @@ class _WorkerBatchEvent {
     required this.processedPages,
     required this.totalPages,
     required this.isFinalBatch,
+    this.lastSequence = 0,
+    this.lastCharOffset = 0,
+    this.carryOverText,
+    this.profileJson,
   });
 }
 
@@ -3134,6 +3288,30 @@ class LayoutProfile {
     this.columnGutterLeft = 0.0,
     this.columnGutterRight = 0.0,
   });
+
+  Map<String, dynamic> toJson() => {
+    'bodyFontSize': bodyFontSize,
+    'linePitch': linePitch,
+    'bodyLeft': bodyLeft,
+    'bodyRight': bodyRight,
+    'indent': indent,
+    'usesIndent': usesIndent,
+    'hasTwoColumns': hasTwoColumns,
+    'columnGutterLeft': columnGutterLeft,
+    'columnGutterRight': columnGutterRight,
+  };
+
+  factory LayoutProfile.fromJson(Map<String, dynamic> json) => LayoutProfile(
+    bodyFontSize: (json['bodyFontSize'] as num?)?.toDouble() ?? 12.0,
+    linePitch: (json['linePitch'] as num?)?.toDouble() ?? 14.0,
+    bodyLeft: (json['bodyLeft'] as num?)?.toDouble() ?? 54.0,
+    bodyRight: (json['bodyRight'] as num?)?.toDouble() ?? 550.0,
+    indent: (json['indent'] as num?)?.toDouble() ?? 0.0,
+    usesIndent: json['usesIndent'] as bool? ?? false,
+    hasTwoColumns: json['hasTwoColumns'] as bool? ?? false,
+    columnGutterLeft: (json['columnGutterLeft'] as num?)?.toDouble() ?? 0.0,
+    columnGutterRight: (json['columnGutterRight'] as num?)?.toDouble() ?? 0.0,
+  );
 
   factory LayoutProfile.compute(Map<int, List<LineFragment>> pageLinesMap) {
     final allLines = <LineFragment>[];
@@ -3435,6 +3613,115 @@ class PageLayoutProfile extends LayoutProfile {
 }
 
 class StructureResolver {
+  static int _countWordsStatic(String text) {
+    int count = 0;
+    bool inWord = false;
+    for (int i = 0; i < text.length; i++) {
+      if (text.codeUnitAt(i) <= 32) {
+        inWord = false;
+      } else if (!inWord) {
+        inWord = true;
+        count++;
+      }
+    }
+    return count;
+  }
+
+  static List<SectionRole> smoothRolesForWindow({
+    required int startPage,
+    required int endPage,
+    required int totalPages,
+    required Map<int, List<LineFragment>> pageLinesMap,
+    required Map<int, String> pageRawTextMap,
+    required Map<int, String> bookmarks,
+    required Set<int> tocPages,
+    required Map<int, Object> explicitHeadingMap,
+  }) {
+    final windowLength = (endPage - startPage + 1).clamp(0, totalPages);
+    if (windowLength <= 0) return const [];
+
+    final roles = <SectionRole>[];
+    for (int pageNum = startPage; pageNum <= endPage; pageNum++) {
+      final lines = pageLinesMap[pageNum] ?? const [];
+      final rawText = (pageRawTextMap[pageNum] ?? '').toLowerCase();
+      final words = _countWordsStatic(rawText);
+      final Object? headingVal = explicitHeadingMap[pageNum];
+      final String heading = (headingVal is List
+              ? headingVal.join(' ')
+              : headingVal?.toString() ?? bookmarks[pageNum] ?? '')
+          .toLowerCase();
+
+      final isToc = tocPages.contains(pageNum);
+      final hasFrontMarkers = RegExp(
+              r'(?:copyright|©|all rights reserved|isbn|library of congress|cataloging|printed in|published by)\b',
+              caseSensitive: false)
+          .hasMatch(rawText);
+
+      final bool isLatePage = totalPages > 4 && pageNum >= (totalPages * 0.75).floor();
+      final hasBackHeading = RegExp(
+              r'^(?:notes?|endnotes|index|bibliography|references|works cited|glossary|about the author|also by)\b',
+              caseSensitive: false)
+          .hasMatch(heading);
+      final hasBackLine = lines.any((l) {
+        final t = l.text.trim();
+        final wCount = _countWordsStatic(t);
+        return wCount <= 10 &&
+            RegExp(r'^(?:notes?|endnotes|index|bibliography|references|works cited|glossary|about the author|also by)\b',
+                    caseSensitive: false)
+                .hasMatch(t);
+      });
+
+      int indexEntryCount = 0;
+      for (final l in lines) {
+        if (RegExp(r'^[A-Za-z][^,]{1,40},\s\d').hasMatch(l.text.trim())) {
+          indexEntryCount++;
+        }
+      }
+      final bool isIndexDense =
+          lines.length >= 8 && (indexEntryCount / lines.length >= 0.40);
+      final bool hasBackMarkers = isLatePage &&
+          (hasBackHeading || (hasBackLine && (isIndexDense || words < 120)));
+
+      final hasReadableFrontHeader = RegExp(
+                  r'\b(preface|foreword|introduction|prologue|acknowledgments)\b',
+                  caseSensitive: false)
+              .hasMatch(heading) ||
+          lines.any((l) {
+            final t = l.text.trim();
+            final wCount = _countWordsStatic(t);
+            return wCount <= 10 &&
+                RegExp(r'^(?:preface|foreword|introduction|prologue|acknowledgments)\b',
+                        caseSensitive: false)
+                    .hasMatch(t);
+          });
+
+      if (pageNum <= (totalPages * 0.20).ceil()) {
+        if (hasFrontMarkers) {
+          roles.add(SectionRole.titlePage);
+        } else if (isToc) {
+          roles.add(SectionRole.toc);
+        } else if (hasReadableFrontHeader) {
+          roles.add(SectionRole.preface);
+        } else {
+          roles.add(SectionRole.chapter);
+        }
+      } else if (isLatePage && (hasBackMarkers || isIndexDense)) {
+        if (heading.contains('index') || isIndexDense) {
+          roles.add(SectionRole.bookIndex);
+        } else if (heading.contains('glossary')) {
+          roles.add(SectionRole.glossary);
+        } else if (heading.contains('bibliography') || heading.contains('references')) {
+          roles.add(SectionRole.bibliography);
+        } else {
+          roles.add(SectionRole.notes);
+        }
+      } else {
+        roles.add(SectionRole.chapter);
+      }
+    }
+    return roles;
+  }
+
   static List<SectionRole> smoothRoles({
     required int totalPages,
     required Map<int, List<LineFragment>> pageLinesMap,

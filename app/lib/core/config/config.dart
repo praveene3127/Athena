@@ -18,10 +18,17 @@ class AppConfig {
 
   static const String nativeFallback = 'http://127.0.0.1:8000';
 
+  static bool? _isStandaloneMobileOverride;
+
   static bool get isStandaloneMobile =>
-      !kIsWeb &&
-      (_runtimeBaseUrl == null || _runtimeBaseUrl!.isEmpty) &&
-      _configured.isEmpty;
+      _isStandaloneMobileOverride ??
+      (!kIsWeb &&
+          (_runtimeBaseUrl == null || _runtimeBaseUrl!.isEmpty) &&
+          _configured.isEmpty);
+
+  static set isStandaloneMobileForTesting(bool? value) {
+    _isStandaloneMobileOverride = value;
+  }
 
   static bool get hasActiveBackend =>
       kIsWeb ||

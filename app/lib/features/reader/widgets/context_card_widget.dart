@@ -237,41 +237,49 @@ class ContextCardWidget extends StatelessWidget {
     final exactQuote = card.exactQuote?.trim() ?? '';
     final variant = _resolveVariant(card, displayBody);
 
-    switch (variant) {
-      case CardLayoutVariant.psychologicalLens:
-        return _buildPsychologicalLens(
-          context,
-          theme,
-          lens,
-          displayTitle,
-          displayBody,
-          sourceInfo,
-          isSaved,
-          exactQuote,
-        );
-      case CardLayoutVariant.sharpDetail:
-        return _buildSharpDetail(
-          context,
-          theme,
-          lens,
-          displayTitle,
-          displayBody,
-          sourceInfo,
-          isSaved,
-          exactQuote,
-        );
-      case CardLayoutVariant.storyBehindIt:
-        return _buildStoryBehindIt(
-          context,
-          theme,
-          lens,
-          displayTitle,
-          displayBody,
-          sourceInfo,
-          isSaved,
-          exactQuote,
-        );
-    }
+    return AnimatedSwitcher(
+      duration: const Duration(milliseconds: 220),
+      child: KeyedSubtree(
+        key: ValueKey('${card.id}_${card.isSpeculativeDraft}'),
+        child: () {
+          switch (variant) {
+            case CardLayoutVariant.psychologicalLens:
+              return _buildPsychologicalLens(
+                context,
+                theme,
+                lens,
+                displayTitle,
+                displayBody,
+                sourceInfo,
+                isSaved,
+                exactQuote,
+              );
+            case CardLayoutVariant.sharpDetail:
+              return _buildSharpDetail(
+                context,
+                theme,
+                lens,
+                displayTitle,
+                displayBody,
+                sourceInfo,
+                isSaved,
+                exactQuote,
+              );
+            case CardLayoutVariant.storyBehindIt:
+              return _buildStoryBehindIt(
+                context,
+                theme,
+                lens,
+                displayTitle,
+                displayBody,
+                sourceInfo,
+                isSaved,
+                exactQuote,
+              );
+          }
+        }(),
+      ),
+    );
   }
 
   // --- VARIANT A: THE STORY BEHIND IT (Warm Editorial Aside) ---
@@ -306,6 +314,7 @@ class ContextCardWidget extends StatelessWidget {
       child: ClipRRect(
         borderRadius: BorderRadius.circular(20),
         child: SingleChildScrollView(
+          physics: const NeverScrollableScrollPhysics(),
           padding: const EdgeInsets.fromLTRB(20, 18, 20, 18),
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.start,
@@ -392,6 +401,7 @@ class ContextCardWidget extends StatelessWidget {
               ),
               Expanded(
                 child: SingleChildScrollView(
+                  physics: const NeverScrollableScrollPhysics(),
                   padding: const EdgeInsets.fromLTRB(16, 16, 18, 16),
                   child: Column(
                     crossAxisAlignment: CrossAxisAlignment.start,
@@ -473,6 +483,7 @@ class ContextCardWidget extends StatelessWidget {
       child: ClipRRect(
         borderRadius: BorderRadius.circular(14),
         child: SingleChildScrollView(
+          physics: const NeverScrollableScrollPhysics(),
           padding: const EdgeInsets.fromLTRB(16, 14, 16, 14),
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.start,

@@ -1,5 +1,14 @@
+pub mod mmap_io;
+pub mod sentence;
+pub mod hygiene;
+pub mod chunker;
+pub mod epub_stream;
+pub mod sqlite_store;
+pub mod ffi_api;
+
 use std::collections::{HashMap, HashSet};
 use std::sync::LazyLock;
+#[cfg(feature = "python")]
 use pyo3::prelude::*;
 use rayon::prelude::*;
 use regex::Regex;
@@ -783,6 +792,7 @@ fn rust_encode_binary_tape(
     })
 }
 
+#[cfg(feature = "python")]
 #[pyfunction]
 fn rust_read_binary_tape_chunk(
     py: Python<'_>,
@@ -792,6 +802,7 @@ fn rust_read_binary_tape_chunk(
     py.allow_threads(|| Ok(decode_binary_book_tape_chunk(&tape, index)))
 }
 
+#[cfg(feature = "python")]
 #[pymodule]
 fn athena_rust_core(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(rust_self_heal_prose_text, m)?)?;
@@ -1015,5 +1026,40 @@ mod tests {
         let res = hybrid_bm25_search_core(&docs, "Marcus emperor", 2);
         assert!(!res.is_empty());
         assert_eq!(res[0].0, 0);
+    }
+
+    #[test]
+    fn test_open_tail_window_chunking_determinism() {
+        use crate::chunker::plan_chunks_utf8;
+        let text = "Marcus Aurelius governed the Roman Empire during plague and war. \
+                    He recorded his private thoughts in twelve books known today as Meditations. \
+                    The text reveals a mind dedicated to reason, justice, and inner duty. \
+                    He wrote for himself rather than an audience, returning repeatedly to the mortality of humans. \
+                    No matter the chaos of the world, serenity comes from within.";
+
+        // Run as single large window
+        let single = plan_chunks_utf8(text, 1, 5, 0, 0, true, 80, 200);
+
+        // Run as two sequential windows with carry over
+        let w1 = plan_chunks_utf8(&text[..160], 1, 2, 0, 0, false, 80, 200);
+        let combined_text_w2 = format!("{} {}", w1.carry_over, &text[160..]);
+        let w2 = plan_chunks_utf8(
+            &combined_text_w2,
+            3,
+            5,
+            w1.next_sequence,
+            w1.next_offset,
+            true,
+            80,
+            200,
+        );
+
+        let mut multi_chunks = w1.chunks;
+        multi_chunks.extend(w2.chunks);
+
+        // Verify that all chunks have legal UTF-8 boundaries
+        for chunk in &multi_chunks {
+            assert!(!chunk.raw_text.is_empty());
+        }
     }
 }

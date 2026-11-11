@@ -45,7 +45,7 @@ class ChunkWidget extends StatefulWidget {
     this.isFeedMode = true,
     this.bionicFocusEnabled = false,
     this.layoutWarning,
-    this.fontFamily = 'Georgia',
+    this.fontFamily = AppTheme.fontReading,
     this.lineHeight = 1.62,
     this.themeId = 'paper',
     this.initialEditedText,
@@ -200,7 +200,9 @@ class _ChunkWidgetState extends State<ChunkWidget> {
                 // Card Body: Scrollable middle prose area wrapped in Flexible + SingleChildScrollView
                 Flexible(
                   child: SingleChildScrollView(
-                    physics: const BouncingScrollPhysics(),
+                    physics: (widget.isFeedMode && !_isEditing)
+                        ? const NeverScrollableScrollPhysics()
+                        : const BouncingScrollPhysics(),
                     child: Column(
                       crossAxisAlignment: CrossAxisAlignment.start,
                       mainAxisSize: MainAxisSize.min,
@@ -343,12 +345,14 @@ class _ChunkWidgetState extends State<ChunkWidget> {
   double _getIdealFontSize(String text, double baseFontSize) {
     final delta = baseFontSize - 18.0;
     final len = text.length;
-    if (len < 220) {
-      return 19.0 + delta;
-    } else if (len <= 320) {
-      return 17.5 + delta;
+    if (len < 160) {
+      return (19.0 + delta).clamp(14.5, 24.0);
+    } else if (len <= 260) {
+      return (17.5 + delta).clamp(14.5, 22.0);
+    } else if (len <= 340) {
+      return (16.0 + delta).clamp(14.0, 20.0);
     } else {
-      return 16.0 + delta;
+      return (14.5 + delta).clamp(13.0, 18.0);
     }
   }
 

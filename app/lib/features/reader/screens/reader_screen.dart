@@ -67,7 +67,7 @@ class _ReaderScreenState extends ConsumerState<ReaderScreen>
       'feed'; // 'feed' (1-swipe=1-card) or 'flow' (continuous)
   String _themeId = 'paper';
   double _fontSize = 18.0;
-  String _fontFamily = 'Georgia';
+  String _fontFamily = AppTheme.fontReading;
   double _lineHeight = 1.62;
   bool _bionic = false;
   int _currentIndex = 0;
@@ -183,11 +183,16 @@ class _ReaderScreenState extends ConsumerState<ReaderScreen>
 
             _cardsByChunkSeq[chunkSeq] = cardItem;
 
-            // Trigger UI feed recomputation whenever background card completes
-            if (mounted) {
-              setState(() {
-                _recomputeCachedFeed();
-              });
+            // UI-04: Only insert background-prefetched cards at chunkSeq >= currentChunkSeq
+            // and reconcile _currentIndex atomically in the same frame
+            final currentChunk = _readingChunkAt(_currentIndex, _cachedFeedItems);
+            final currentSeq = currentChunk?.sequence ?? 0;
+            if (chunkSeq >= currentSeq) {
+              if (mounted) {
+                setState(() {
+                  _recomputeCachedFeed();
+                });
+              }
             }
           }
         } catch (e) {
@@ -280,10 +285,15 @@ class _ReaderScreenState extends ConsumerState<ReaderScreen>
 
         _cardsByChunkSeq[seq] = cardItem;
 
-        if (mounted) {
-          setState(() {
-            _recomputeCachedFeed();
-          });
+        // UI-04: Only insert background-prefetched cards at chunkSeq >= currentChunkSeq
+        final currentChunk = _readingChunkAt(_currentIndex, _cachedFeedItems);
+        final currentSeq = currentChunk?.sequence ?? 0;
+        if (seq >= currentSeq) {
+          if (mounted) {
+            setState(() {
+              _recomputeCachedFeed();
+            });
+          }
         }
       }
     } catch (e) {
@@ -761,80 +771,119 @@ class _ReaderScreenState extends ConsumerState<ReaderScreen>
                     autofocus: true,
                     onKeyEvent: (_, event) =>
                         _handleKeyEvent(event, feedItems.length),
-                    child: _readingMode == 'feed'
-                        ? ReaderFeedView(
-                            documentId: widget.documentId,
-                            onJumpToPassage: (id) =>
-                                _jumpToChunkId(id, feedItems),
-                            pageController: _pageController,
-                            feedItems: feedItems,
-                            themeId: _themeId,
-                            fontSize: _fontSize,
-                            fontFamily: _fontFamily,
-                            lineHeight: _lineHeight,
-                            bionicFocusEnabled: _bionic,
-                            layoutWarning: data.layoutWarning,
-                            chunkEdits: _chunkEdits,
-                            chunkNotes: _chunkNotes,
-                            onEditSaved: (id, text, note) {
-                              setState(() {
-                                if (text != null) {
-                                  _chunkEdits[id] = text;
-                                } else {
-                                  _chunkEdits.remove(id);
-                                }
-                                if (note != null) {
-                                  _chunkNotes[id] = note;
-                                } else {
-                                  _chunkNotes.remove(id);
-                                }
-                              });
-                            },
-                            onPageChanged: _onPageChanged,
-                            onViewOriginalPage: (c) => _showOriginalPage(c),
-                            onAsk: (c) => _openAsk(c),
-                            onSaveQuote: (c, [q]) => _saveQuote(c, q),
-                            onToggleSaveCard: (card) => _toggleSaveCard(card),
-                            onDismissCard: _dismissCard,
-                            onAskAthenaForCard: (card) => _openAsk(card),
-                          )
-                        : ReaderFlowView(
-                            documentId: widget.documentId,
-                            onJumpToPassage: (id) =>
-                                _jumpToChunkId(id, feedItems),
-                            itemScrollController: _flowScrollController,
-                            itemPositionsListener: _flowPositionsListener,
-                            feedItems: feedItems,
-                            initialIndex: _currentIndex,
-                            themeId: _themeId,
-                            fontSize: _fontSize,
-                            fontFamily: _fontFamily,
-                            lineHeight: _lineHeight,
-                            bionicFocusEnabled: _bionic,
-                            layoutWarning: data.layoutWarning,
-                            chunkEdits: _chunkEdits,
-                            chunkNotes: _chunkNotes,
-                            onEditSaved: (id, text, note) {
-                              setState(() {
-                                if (text != null) {
-                                  _chunkEdits[id] = text;
-                                } else {
-                                  _chunkEdits.remove(id);
-                                }
-                                if (note != null) {
-                                  _chunkNotes[id] = note;
-                                } else {
-                                  _chunkNotes.remove(id);
-                                }
-                              });
-                            },
-                            onViewOriginalPage: (c) => _showOriginalPage(c),
-                            onAsk: (c) => _openAsk(c),
-                            onSaveQuote: (c, [q]) => _saveQuote(c, q),
-                            onToggleSaveCard: (card) => _toggleSaveCard(card),
-                            onDismissCard: _dismissCard,
-                            onAskAthenaForCard: (card) => _openAsk(card),
+                    child: Column(
+                      children: [
+                        Expanded(
+                          child: _readingMode == 'feed'
+                              ? ReaderFeedView(
+                                  documentId: widget.documentId,
+                                  onJumpToPassage: (id) =>
+                                      _jumpToChunkId(id, feedItems),
+                                  pageController: _pageController,
+                                  feedItems: feedItems,
+                                  themeId: _themeId,
+                                  fontSize: _fontSize,
+                                  fontFamily: _fontFamily,
+                                  lineHeight: _lineHeight,
+                                  bionicFocusEnabled: _bionic,
+                                  layoutWarning: data.layoutWarning,
+                                  chunkEdits: _chunkEdits,
+                                  chunkNotes: _chunkNotes,
+                                  onEditSaved: (id, text, note) {
+                                    setState(() {
+                                      if (text != null) {
+                                        _chunkEdits[id] = text;
+                                      } else {
+                                        _chunkEdits.remove(id);
+                                      }
+                                      if (note != null) {
+                                        _chunkNotes[id] = note;
+                                      } else {
+                                        _chunkNotes.remove(id);
+                                      }
+                                    });
+                                  },
+                                  onPageChanged: _onPageChanged,
+                                  onViewOriginalPage: (c) => _showOriginalPage(c),
+                                  onAsk: (c) => _openAsk(c),
+                                  onSaveQuote: (c, [q]) => _saveQuote(c, q),
+                                  onToggleSaveCard: (card) => _toggleSaveCard(card),
+                                  onDismissCard: _dismissCard,
+                                  onAskAthenaForCard: (card) => _openAsk(card),
+                                )
+                              : ReaderFlowView(
+                                  documentId: widget.documentId,
+                                  onJumpToPassage: (id) =>
+                                      _jumpToChunkId(id, feedItems),
+                                  itemScrollController: _flowScrollController,
+                                  itemPositionsListener: _flowPositionsListener,
+                                  feedItems: feedItems,
+                                  initialIndex: _currentIndex,
+                                  themeId: _themeId,
+                                  fontSize: _fontSize,
+                                  fontFamily: _fontFamily,
+                                  lineHeight: _lineHeight,
+                                  bionicFocusEnabled: _bionic,
+                                  layoutWarning: data.layoutWarning,
+                                  chunkEdits: _chunkEdits,
+                                  chunkNotes: _chunkNotes,
+                                  onEditSaved: (id, text, note) {
+                                    setState(() {
+                                      if (text != null) {
+                                        _chunkEdits[id] = text;
+                                      } else {
+                                        _chunkEdits.remove(id);
+                                      }
+                                      if (note != null) {
+                                        _chunkNotes[id] = note;
+                                      } else {
+                                        _chunkNotes.remove(id);
+                                      }
+                                    });
+                                  },
+                                  onViewOriginalPage: (c) => _showOriginalPage(c),
+                                  onAsk: (c) => _openAsk(c),
+                                  onSaveQuote: (c, [q]) => _saveQuote(c, q),
+                                  onToggleSaveCard: (card) => _toggleSaveCard(card),
+                                  onDismissCard: _dismissCard,
+                                  onAskAthenaForCard: (card) => _openAsk(card),
+                                ),
+                        ),
+                        if (data.status == 'partially_readable')
+                          Container(
+                            width: double.infinity,
+                            padding: const EdgeInsets.symmetric(vertical: 8, horizontal: 16),
+                            decoration: BoxDecoration(
+                              color: theme.innerCardColor,
+                              border: Border(
+                                top: BorderSide(color: theme.borderColor, width: 0.8),
+                              ),
+                            ),
+                            child: Row(
+                              mainAxisAlignment: MainAxisAlignment.center,
+                              children: [
+                                SizedBox(
+                                  width: 12,
+                                  height: 12,
+                                  child: CircularProgressIndicator(
+                                    strokeWidth: 1.5,
+                                    color: theme.accentColor,
+                                  ),
+                                ),
+                                const SizedBox(width: 8),
+                                Text(
+                                  'Still preparing pages ${data.processedPages ?? 0}/${data.pageCount}...',
+                                  style: TextStyle(
+                                    fontFamily: AppTheme.fontMono,
+                                    fontSize: 11,
+                                    color: theme.textMutedColor,
+                                  ),
+                                ),
+                              ],
+                            ),
                           ),
+                      ],
+                    ),
                   ),
                 ),
 

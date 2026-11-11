@@ -2,11 +2,204 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
+/// Athena Theme Extension providing the canonical editorial design tokens.
+class AthenaTokens extends ThemeExtension<AthenaTokens> {
+  final Color canvas;
+  final Color surface;
+  final Color surfaceWarm;
+  final Color ink;
+  final Color inkMuted;
+  final Color hairline;
+  final Color accent;
+  final Color brandLime;
+  final double radius4;
+  final double radius8;
+  final double radius12;
+  final double radius16;
+  final double radius20;
+  final double radius24;
+  final double minTouchTarget;
+
+  const AthenaTokens({
+    this.canvas = const Color(0xFFFBF9F5),
+    this.surface = const Color(0xFFFFFFFF),
+    this.surfaceWarm = const Color(0xFFFAF7F2),
+    this.ink = const Color(0xFF161615),
+    this.inkMuted = const Color(0xFF6E6E6B),
+    this.hairline = const Color(0xFFECE7DE),
+    this.accent = const Color(0xFF2D6A4F),
+    this.brandLime = const Color(0xFFBAF82A),
+    this.radius4 = 4.0,
+    this.radius8 = 8.0,
+    this.radius12 = 12.0,
+    this.radius16 = 16.0,
+    this.radius20 = 20.0,
+    this.radius24 = 24.0,
+    this.minTouchTarget = 48.0,
+  });
+
+  static const AthenaTokens light = AthenaTokens(
+    canvas: Color(0xFFFBF9F5),
+    surface: Color(0xFFFFFFFF),
+    surfaceWarm: Color(0xFFFAF7F2),
+    ink: Color(0xFF161615),
+    inkMuted: Color(0xFF6E6E6B),
+    hairline: Color(0xFFECE7DE),
+    accent: Color(0xFF2D6A4F),
+    brandLime: Color(0xFFBAF82A),
+  );
+
+  static const AthenaTokens dark = AthenaTokens(
+    canvas: Color(0xFF101010),
+    surface: Color(0xFF181818),
+    surfaceWarm: Color(0xFF202020),
+    ink: Color(0xFFF3F3F3),
+    inkMuted: Color(0xFF9E9E9E),
+    hairline: Color(0xFF222222),
+    accent: Color(0xFF2DD4BF),
+    brandLime: Color(0xFFBAF82A),
+  );
+
+  @override
+  AthenaTokens copyWith({
+    Color? canvas,
+    Color? surface,
+    Color? surfaceWarm,
+    Color? ink,
+    Color? inkMuted,
+    Color? hairline,
+    Color? accent,
+    Color? brandLime,
+    double? radius4,
+    double? radius8,
+    double? radius12,
+    double? radius16,
+    double? radius20,
+    double? radius24,
+    double? minTouchTarget,
+  }) {
+    return AthenaTokens(
+      canvas: canvas ?? this.canvas,
+      surface: surface ?? this.surface,
+      surfaceWarm: surfaceWarm ?? this.surfaceWarm,
+      ink: ink ?? this.ink,
+      inkMuted: inkMuted ?? this.inkMuted,
+      hairline: hairline ?? this.hairline,
+      accent: accent ?? this.accent,
+      brandLime: brandLime ?? this.brandLime,
+      radius4: radius4 ?? this.radius4,
+      radius8: radius8 ?? this.radius8,
+      radius12: radius12 ?? this.radius12,
+      radius16: radius16 ?? this.radius16,
+      radius20: radius20 ?? this.radius20,
+      radius24: radius24 ?? this.radius24,
+      minTouchTarget: minTouchTarget ?? this.minTouchTarget,
+    );
+  }
+
+  @override
+  AthenaTokens lerp(ThemeExtension<AthenaTokens>? other, double t) {
+    if (other is! AthenaTokens) return this;
+    return AthenaTokens(
+      canvas: Color.lerp(canvas, other.canvas, t) ?? canvas,
+      surface: Color.lerp(surface, other.surface, t) ?? surface,
+      surfaceWarm: Color.lerp(surfaceWarm, other.surfaceWarm, t) ?? surfaceWarm,
+      ink: Color.lerp(ink, other.ink, t) ?? ink,
+      inkMuted: Color.lerp(inkMuted, other.inkMuted, t) ?? inkMuted,
+      hairline: Color.lerp(hairline, other.hairline, t) ?? hairline,
+      accent: Color.lerp(accent, other.accent, t) ?? accent,
+      brandLime: Color.lerp(brandLime, other.brandLime, t) ?? brandLime,
+      radius4: radius4,
+      radius8: radius8,
+      radius12: radius12,
+      radius16: radius16,
+      radius20: radius20,
+      radius24: radius24,
+      minTouchTarget: minTouchTarget,
+    );
+  }
+}
+
+/// Unified Athena Appearance state across Library, Processing, Saved, and Reader
+enum AthenaAppearance {
+  paper,
+  sepia,
+  charcoal,
+  oled;
+
+  String get id => switch (this) {
+        AthenaAppearance.paper => 'paper',
+        AthenaAppearance.sepia => 'sepia',
+        AthenaAppearance.charcoal => 'charcoal',
+        AthenaAppearance.oled => 'oled',
+      };
+
+  bool get isDark => this == AthenaAppearance.charcoal || this == AthenaAppearance.oled;
+
+  ThemeMode get themeMode => isDark ? ThemeMode.dark : ThemeMode.light;
+
+  static AthenaAppearance fromId(String id) {
+    switch (id.toLowerCase()) {
+      case 'sepia':
+        return AthenaAppearance.sepia;
+      case 'charcoal':
+      case 'night':
+        return AthenaAppearance.charcoal;
+      case 'oled':
+      case 'obsidian':
+        return AthenaAppearance.oled;
+      case 'paper':
+      default:
+        return AthenaAppearance.paper;
+    }
+  }
+}
+
+class AthenaAppearanceNotifier extends Notifier<AthenaAppearance> {
+  static const _key = 'athena_appearance_theme';
+  final AthenaAppearance? initialAppearance;
+
+  AthenaAppearanceNotifier([this.initialAppearance]);
+
+  @override
+  AthenaAppearance build() {
+    if (initialAppearance != null) {
+      return initialAppearance!;
+    }
+    _load();
+    return AthenaAppearance.paper;
+  }
+
+  Future<void> _load() async {
+    final prefs = await SharedPreferences.getInstance();
+    final saved = prefs.getString(_key);
+    if (saved != null) {
+      state = AthenaAppearance.fromId(saved);
+    }
+  }
+
+  Future<void> setAppearance(AthenaAppearance app) async {
+    state = app;
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setString(_key, app.id);
+  }
+}
+
+final athenaAppearanceProvider =
+    NotifierProvider<AthenaAppearanceNotifier, AthenaAppearance>(
+        AthenaAppearanceNotifier.new);
+
 class ThemeModeNotifier extends Notifier<ThemeMode> {
   static const _key = 'athena_app_theme_mode';
+  final ThemeMode? initialMode;
+
+  ThemeModeNotifier([this.initialMode]);
 
   @override
   ThemeMode build() {
+    if (initialMode != null) {
+      return initialMode!;
+    }
     _loadFromPrefs();
     return ThemeMode.light;
   }
@@ -136,6 +329,9 @@ class AppTheme {
         onSecondary: Colors.white,
         onSurface: textPrimary,
       ),
+      extensions: const [
+        AthenaTokens.light,
+      ],
       appBarTheme: const AppBarTheme(
         backgroundColor: background,
         surfaceTintColor: Colors.transparent,
@@ -219,6 +415,9 @@ class AppTheme {
         onSecondary: Colors.black,
         onSurface: darkTextPrimary,
       ),
+      extensions: const [
+        AthenaTokens.dark,
+      ],
       appBarTheme: const AppBarTheme(
         backgroundColor: darkBackground,
         surfaceTintColor: Colors.transparent,

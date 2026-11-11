@@ -105,6 +105,7 @@ FeedBuildResult buildFeedResult({
   // 4. Build feed items strictly anchored to matching chunks
   // Orphan cards without matching chunk anchors are quarantined and never misassigned
   final feedItems = <ReaderItem>[];
+  int lastCardChunkSeq = -999;
 
   for (final chunk in chunks) {
     // 1-to-1 canonical ReadingChunk mapping (F21)
@@ -114,9 +115,14 @@ FeedBuildResult buildFeedResult({
 
     final matchedCards = cardsBySeq[seq];
     if (matchedCards != null && showContextCards) {
-      for (final card in matchedCards) {
-        if (!dismissedCardIds.contains(card.id)) {
-          feedItems.add(card);
+      // GAP-02: Enforce minChunkGapBetweenCards
+      final gap = seq - lastCardChunkSeq;
+      if (gap >= minChunkGapBetweenCards) {
+        for (final card in matchedCards) {
+          if (!dismissedCardIds.contains(card.id)) {
+            feedItems.add(card);
+            lastCardChunkSeq = seq;
+          }
         }
       }
     }

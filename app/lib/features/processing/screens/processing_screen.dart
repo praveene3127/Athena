@@ -812,6 +812,56 @@ class _ProcessingScreenState extends ConsumerState<ProcessingScreen>
                         ),
                       ),
                     )
+                  else if (_status?.isPartiallyReadable == true)
+                    InkWell(
+                      onTap: () => context.go('/reader/${widget.documentId}'),
+                      borderRadius: BorderRadius.circular(24),
+                      child: Container(
+                        width: double.infinity,
+                        height: 54,
+                        padding: const EdgeInsets.symmetric(horizontal: 20),
+                        decoration: BoxDecoration(
+                          color: const Color(0xFF2D6A4F),
+                          borderRadius: BorderRadius.circular(24),
+                          boxShadow: [
+                            BoxShadow(
+                              color: const Color(0xFF2D6A4F)
+                                  .withValues(alpha: 0.25),
+                              blurRadius: 14,
+                              offset: const Offset(0, 4),
+                            ),
+                          ],
+                        ),
+                        child: Row(
+                          mainAxisAlignment: MainAxisAlignment.center,
+                          children: [
+                            Text(
+                              'READING READY · ${_status?.percent ?? 0}% · READ NOW',
+                              style: const TextStyle(
+                                color: Colors.white,
+                                fontSize: 13.5,
+                                fontWeight: FontWeight.w700,
+                                letterSpacing: 0.4,
+                              ),
+                            ),
+                            const SizedBox(width: 10),
+                            Container(
+                              width: 30,
+                              height: 30,
+                              decoration: BoxDecoration(
+                                color: Colors.white.withValues(alpha: 0.2),
+                                shape: BoxShape.circle,
+                              ),
+                              child: const Icon(
+                                Icons.arrow_forward_rounded,
+                                size: 16,
+                                color: Colors.white,
+                              ),
+                            ),
+                          ],
+                        ),
+                      ),
+                    )
                   else if (isFailed)
                     InkWell(
                       onTap: _isRetrying ? null : _retry,
