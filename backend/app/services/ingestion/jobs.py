@@ -1,7 +1,11 @@
 from concurrent.futures import ThreadPoolExecutor
+import errno
+import hashlib
 import json
 import logging
 import multiprocessing
+from pathlib import Path
+import time
 from typing import Optional
 from sqlmodel import Session, select, delete
 
@@ -13,7 +17,7 @@ from app.services.ingestion.chunker import chunk_document
 from app.services.ingestion.integrity import verify_integrity
 from app.services.marginalia.concepts import extract_concepts
 from app.services.marginalia.cards import generate_context_cards
-from app.services.edge_ai import classify_document_purpose
+from app.services.edge.bouncer import classify_document_purpose
 
 logger = logging.getLogger(__name__)
 
@@ -22,19 +26,25 @@ _executor = ThreadPoolExecutor(max_workers=1)
 
 
 def cleanup_interrupted_jobs() -> None:
-    """Marks any lingering 'queued' or 'processing' documents as failed INTERRUPTED on startup."""
+    """Marks any lingering 'queued' or 'processing' documents as paused or failed INTERRUPTED on startup."""
     with Session(engine) as session:
         statement = select(Document).where(Document.status.in_(["queued", "processing"]))
         stale_docs = session.exec(statement).all()
         for doc in stale_docs:
-            doc.status = "failed"
-            doc.error_code = "INTERRUPTED"
-            doc.error_message = ERROR_MESSAGES["INTERRUPTED"]
+            if doc.processed_page and doc.processed_page > 0:
+                doc.status = "paused"
+                doc.stage = "paused"
+                doc.error_code = "INTERRUPTED"
+                doc.error_message = "Ingestion paused on server restart. Resume to continue."
+            else:
+                doc.status = "failed"
+                doc.error_code = "INTERRUPTED"
+                doc.error_message = ERROR_MESSAGES["INTERRUPTED"]
             doc.updated_at = utc_now()
             session.add(doc)
         if stale_docs:
             session.commit()
-            logger.info("Marked %d interrupted documents as failed INTERRUPTED", len(stale_docs))
+            logger.info("Marked %d interrupted documents as paused/failed INTERRUPTED", len(stale_docs))
 
 
 def _update_doc_progress(
@@ -128,14 +138,15 @@ def process_document_job(doc_id: str) -> None:
 
             # 3. Cleaning stage (40%)
             _update_doc_progress(session, doc_id, stage="cleaning", percent=40)
+            canonical_text = extracted["canonical_text"]
+            spans_data = extracted.get("spans") or []
             doc.title = extracted["title"]
             doc.page_count = extracted["page_count"]
-            doc.canonical_text = extracted["canonical_text"]
-            doc.spans_json = json.dumps(extracted["spans"])
+            doc.canonical_text = None  # Text stored in RAW_DIR/{doc_id}.txt and reading_chunks, drop multi-MB string from Document row
+            doc.spans_json = None
             doc.layout_warning = extracted["layout_warning"]
             raw_path = extracted.get("raw_text_path")
             if raw_path and Path(raw_path).exists():
-                import hashlib
                 doc.extracted_text_sha256 = hashlib.sha256(Path(raw_path).read_bytes()).hexdigest()
             doc.repairs_count = len(extracted.get("repair_ledger") or [])
             session.add(doc)
@@ -143,10 +154,9 @@ def process_document_job(doc_id: str) -> None:
 
             # 4. Chunking stage (55%)
             _update_doc_progress(session, doc_id, stage="chunking", percent=55)
-            spans_data = json.loads(doc.spans_json) if doc.spans_json else []
             chunk_dicts = chunk_document(
                 doc_id=doc_id,
-                canonical_text=doc.canonical_text or "",
+                canonical_text=canonical_text,
                 spans=spans_data,
             )
 
@@ -239,7 +249,7 @@ def process_document_job(doc_id: str) -> None:
                 for cd in chunk_dicts
             ]
             integrity_result = verify_integrity(
-                canonical_text=doc.canonical_text or "",
+                canonical_text=canonical_text,
                 chunks=integrity_input,
             )
 
@@ -268,7 +278,7 @@ def process_document_job(doc_id: str) -> None:
             ).all()
 
             concepts = extract_concepts(
-                canonical_text=doc.canonical_text or "",
+                canonical_text=canonical_text,
                 chunks=chunk_rows,
                 document_id=doc_id,
             )
@@ -289,7 +299,7 @@ def process_document_job(doc_id: str) -> None:
                     concepts=concepts,
                     chunks=chunk_rows,
                     document_id=doc_id,
-                    canonical_text=doc.canonical_text,
+                    canonical_text=canonical_text,
                     progress_callback=progress_cb,
                 )
                 for card in cards:
@@ -368,30 +378,72 @@ def _run_isolated_document_job(doc_id: str) -> None:
         args=(doc_id,),
         name=f"athena-book-{doc_id[:8]}",
     )
+    timed_out = False
     try:
         worker.start()
-        worker.join(timeout=300)
-        if worker.is_alive():
-            logger.error("Book worker for %s timed out after 300s, terminating", doc_id)
-            worker.terminate()
-            worker.join(timeout=5)
+        last_progress_time = time.time()
+        last_percent = -1
+        last_page = -1
+
+        while worker.is_alive():
+            worker.join(timeout=2)
+            if not worker.is_alive():
+                break
+
+            now = time.time()
+            try:
+                with Session(engine) as session:
+                    doc = session.get(Document, doc_id)
+                    if doc:
+                        current_percent = doc.percent or 0
+                        current_page = doc.processed_page or 0
+                        if current_percent != last_percent or current_page != last_page:
+                            last_percent = current_percent
+                            last_page = current_page
+                            last_progress_time = now
+            except Exception:
+                pass
+
+            if now - last_progress_time > 90:
+                timed_out = True
+                logger.error("Book worker for %s stalled for >90s with zero progress, terminating", doc_id)
+                worker.terminate()
+                worker.join(timeout=5)
+                break
+
         exit_code = worker.exitcode
         worker.close()
-        if exit_code == 0:
+        if exit_code == 0 and not timed_out:
             return
         logger.error("Book worker for %s exited unexpectedly (%s)", doc_id, exit_code)
     except Exception:
         logger.exception("Could not start isolated worker for book %s", doc_id)
 
-    # A hard worker exit (for example, an OS memory termination) leaves the API
-    # process alive and gives the user a recoverable document status.
+    # A hard worker exit or stall: update document status safely
     try:
         with Session(engine) as session:
             doc = session.get(Document, doc_id)
             if doc and doc.status in {"queued", "processing"}:
-                doc.status = "failed"
-                doc.error_code = "RESOURCE_LIMIT"
-                doc.error_message = ERROR_MESSAGES["RESOURCE_LIMIT"]
+                if timed_out:
+                    if doc.processed_page and doc.processed_page > 0:
+                        doc.status = "paused"
+                        doc.stage = "paused"
+                        doc.error_code = "INGEST_TIMEOUT"
+                        doc.error_message = "Ingestion paused due to worker inactivity (>90s). Resume to continue."
+                    else:
+                        doc.status = "failed"
+                        doc.error_code = "INGEST_TIMEOUT"
+                        doc.error_message = ERROR_MESSAGES.get("INGEST_TIMEOUT", "Ingestion timed out due to worker inactivity.")
+                else:
+                    if doc.processed_page and doc.processed_page > 0:
+                        doc.status = "paused"
+                        doc.stage = "paused"
+                        doc.error_code = "RESOURCE_LIMIT"
+                        doc.error_message = "Worker process interrupted. Resume to continue."
+                    else:
+                        doc.status = "failed"
+                        doc.error_code = "RESOURCE_LIMIT"
+                        doc.error_message = ERROR_MESSAGES["RESOURCE_LIMIT"]
                 doc.updated_at = utc_now()
                 session.add(doc)
                 session.commit()

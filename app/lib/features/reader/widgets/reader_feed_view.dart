@@ -26,6 +26,7 @@ class ReaderFeedView extends StatelessWidget {
   final void Function(ReaderItem card) onToggleSaveCard;
   final void Function(ReaderItem card) onDismissCard;
   final void Function(ReaderItem card) onAskAthenaForCard;
+  final ReaderLoadState loadState;
   final Map<String, String>? chunkEdits;
   final Map<String, String>? chunkNotes;
   final void Function(String chunkId, String? editedText, String? userNote)?
@@ -43,6 +44,7 @@ class ReaderFeedView extends StatelessWidget {
     required this.lineHeight,
     required this.bionicFocusEnabled,
     this.layoutWarning,
+    this.loadState = ReaderLoadState.ready,
     required this.onPageChanged,
     required this.onViewOriginalPage,
     required this.onAsk,
@@ -59,7 +61,36 @@ class ReaderFeedView extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     if (feedItems.isEmpty) {
-      return const Center(child: CircularProgressIndicator());
+      if (loadState == ReaderLoadState.loading) {
+        return const Center(child: CircularProgressIndicator());
+      }
+      return Center(
+        child: Container(
+          margin: const EdgeInsets.symmetric(horizontal: 24, vertical: 36),
+          padding: const EdgeInsets.all(24),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              const Icon(Icons.menu_book_outlined, size: 40),
+              const SizedBox(height: 16),
+              Text(
+                'No Readable Content Found',
+                style: TextStyle(
+                  fontFamily: fontFamily,
+                  fontSize: 18,
+                  fontWeight: FontWeight.w600,
+                ),
+              ),
+              const SizedBox(height: 8),
+              const Text(
+                'This document has no extracted chunks yet or ingestion was interrupted.',
+                textAlign: TextAlign.center,
+                style: TextStyle(fontSize: 13),
+              ),
+            ],
+          ),
+        ),
+      );
     }
 
     return PageView.builder(

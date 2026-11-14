@@ -13,6 +13,7 @@ ERROR_MESSAGES: Dict[str, str] = {
     "SCANNED_NOT_SUPPORTED": "This looks like a scanned PDF. Athena currently supports digital PDFs with selectable text.",
     "NO_TEXT": "No usable text was found in this PDF.",
     "INTERRUPTED": "Processing was interrupted. Tap retry.",
+    "INGEST_TIMEOUT": "Ingestion timed out due to worker inactivity.",
     "NOT_FOUND": "That item no longer exists.",
     "INTERNAL": "Something went wrong. Please try again.",
     "CONFLICT": "Action conflicts with current item state.",

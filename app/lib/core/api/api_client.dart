@@ -522,7 +522,7 @@ class ApiClient {
       docId = 'doc_${DateTime.now().millisecondsSinceEpoch}';
     }
 
-    // Never duplicate or wipe an existing document on re-import (F-B4)
+    // Never duplicate or wipe an existing document on re-import (F-B4, R1)
     if (!kIsWeb) {
       final existing = await LocalDatabase.instance.getDocument(docId);
       if (existing != null) {
@@ -530,31 +530,14 @@ class ApiClient {
         if (existingStatus == 'ready') {
           onProgress?.call(1.0, 'Ready to read');
           return docId;
-        } else if (existingStatus == 'processing' || existingStatus == 'partially_readable' || existingStatus == 'paused') {
-          unawaited(IngestionJobCoordinator.instance.continueDocument(docId));
+        } else {
+          // Never reset existing non-ready books to page 1 unless redoFromScratch is explicitly confirmed
+          unawaited(IngestionJobCoordinator.instance.startOrResume(docId));
           return docId;
         }
       }
     }
 
-    return _uploadStreamedOnDevice(
-      docId: docId,
-      fileName: fileName,
-      cleanTitle: cleanTitle,
-      filePath: persistentPath,
-      fileBytes: bytes,
-      onProgress: onProgress,
-    );
-  }
-
-  Future<String> _uploadStreamedOnDevice({
-    required String docId,
-    required String fileName,
-    required String cleanTitle,
-    required String? filePath,
-    required List<int>? fileBytes,
-    required void Function(double progress, String stage)? onProgress,
-  }) async {
     final now = DateTime.now().toUtc().toIso8601String();
     onProgress?.call(0.05, '1/4 Initializing document library...');
 
@@ -570,7 +553,7 @@ class ApiClient {
         'percent': 5,
         'page_count': 0,
         'processed_page': 0,
-        'file_path': filePath ?? 'local://$fileName',
+        'file_path': persistentPath ?? 'local://$fileName',
         'integrity_verified': 0,
         'context_status': 'pending',
         'created_at': now,
@@ -580,191 +563,63 @@ class ApiClient {
       debugPrint('[Athena Error] Initial insertDocument notice: $e');
     }
 
-    // Step B: Unified Ingestion Pipeline (F23 & F33)
-    int lastProgressSaveMs = 0;
-    void handleProgress(double progress, String stageLabel) {
-      onProgress?.call(progress, stageLabel);
-      final nowMs = DateTime.now().millisecondsSinceEpoch;
-      if (nowMs - lastProgressSaveMs >= 500) {
-        lastProgressSaveMs = nowMs;
-        LocalDatabase.instance.updateDocumentProgress(
-          docId,
-          percent: (progress * 100).toInt().clamp(0, 99),
-          stage: 'extracting',
-          stageLabel: stageLabel,
-        ).catchError((e) {
-          debugPrint('[Athena Ingestion] progress update notice: $e');
-        });
-      }
-    }
-
-    IngestionResult result;
-    try {
-      result = await DocumentIngestionPipeline.ingest(
-        docId: docId,
-        fileName: fileName,
-        filePath: filePath,
-        fileBytes: fileBytes,
-        onProgress: handleProgress,
-        onBatch: (batchChunks, processedPages, totalPages, isFinalBatch,
-            {carryOverText, lastCharOffset, lastSequence, profileJson}) async {
-          await LocalDatabase.instance.insertChunksBatchWithCheckpoint(
-            batchChunks,
-            isFinalBatch: isFinalBatch,
-            documentId: docId,
-            checkpointPage: processedPages,
-            chunkSequence: lastSequence ?? 0,
-            charOffset: lastCharOffset ?? 0,
-            carryOverText: carryOverText,
-            profileJson: profileJson,
-          );
-
-          final progressFraction =
-              0.05 + 0.65 * (processedPages / (totalPages == 0 ? 1 : totalPages));
-          final pctInt = (progressFraction * 100).toInt();
-          final stageMsg =
-              'Extracting pages $processedPages of $totalPages ($pctInt%)...';
-          final bool canFastStart = processedPages >= 16 || (totalPages > 60 && processedPages >= 30);
-
-          try {
-            await LocalDatabase.instance.updateDocumentProgress(
-              docId,
-              status: canFastStart ? 'partially_readable' : 'processing',
-              stage: 'extracting',
-              stageLabel: stageMsg,
-              percent: pctInt,
-              processedPage: processedPages,
-              pageCount: totalPages,
-            );
-          } catch (e) {
-            debugPrint('[Athena Error] updateDocumentProgress notice: $e');
-          }
-        },
-      );
-    } on AppError catch (e) {
-      debugPrint('[Athena Ingestion] AppError during ingest: $e');
-      try {
-        await LocalDatabase.instance.updateDocumentProgress(
-          docId,
-          status: 'failed',
-          stage: 'failed',
-          stageLabel: e.message,
-          errorMessage: e.message,
-          errorCode: e.code,
-        );
-      } catch (dbErr) {
-        debugPrint(
-            '[Athena Ingestion] Failed updating doc progress on error: $dbErr');
-      }
-      return docId;
-    } catch (e) {
-      debugPrint('[Athena Ingestion] Error during ingest: $e');
-      final appErr = AppError.fromException(e);
-      try {
-        await LocalDatabase.instance.updateDocumentProgress(
-          docId,
-          status: 'failed',
-          stage: 'failed',
-          stageLabel: appErr.message,
-          errorMessage: appErr.message,
-          errorCode: appErr.code,
-        );
-      } catch (dbErr) {
-        debugPrint(
-            '[Athena Ingestion] Failed updating doc progress on error: $dbErr');
-      }
-      return docId;
-    }
-
-    final allChunks = result.chunks;
-    final totalPages = result.pageCount;
-
-    if (result.totalCharacters == 0 || result.chunkCount == 0 || !result.integrityVerified) {
-      final err = AppError(
-        code: !result.integrityVerified ? 'INTEGRITY_FAILED' : 'SCANNED_NOT_SUPPORTED',
-        message: !result.integrityVerified
-            ? 'Canonical SHA-256 reconstruction mismatch'
-            : 'No readable text could be extracted from this document. Scanned image-only files are not supported on-device.',
-      );
-      try {
-        await LocalDatabase.instance.updateDocumentProgress(
-          docId,
-          status: 'failed',
-          stage: 'failed',
-          stageLabel: err.message,
-          errorMessage: err.message,
-          errorCode: err.code,
-        );
-      } catch (e) {
-        debugPrint('[Athena Error] Failed updating doc status on empty text: $e');
-      }
-      return docId;
-    }
-
-    // Step C: Mark 'ready' and 100% immediately! Never block reader on network cards (H-1 / P0-04)
-    final words = result.totalWords;
-    final readingTime = (words / 200).ceil().clamp(1, 9999);
-
-    try {
-      await LocalDatabase.instance.updateDocumentProgress(
-        docId,
-        status: 'ready',
-        stage: 'done',
-        stageLabel: 'Ready to read',
-        percent: 100,
-        processedPage: totalPages,
-        pageCount: totalPages,
-        totalWords: words,
-        totalCharacters: result.totalCharacters,
-        readingTimeMinutes: readingTime,
-        canonicalSha256: result.canonicalSha256,
-        integrityVerified: result.integrityVerified ? 1 : 0,
-      );
-    } catch (e) {
-      debugPrint('[Athena Error] Final updateDocumentProgress notice: $e');
-    }
-
-    onProgress?.call(1.0, 'Ready to read');
-
-    // Step D: Fast 100% local extractive notes (<= 8 cards, < 20ms, zero HTTP calls)
-    try {
-      final contextService = LocalContextService();
-      final previewChunks = allChunks.isNotEmpty
-          ? allChunks
-          : await LocalDatabase.instance.getChunks(docId, limit: 16);
-      final fastCards = await contextService.buildFastInitialExtractiveCards(
-        docId,
-        previewChunks,
-        maxCards: 8,
-      );
-      if (fastCards.isNotEmpty) {
-        await LocalDatabase.instance.insertCards(fastCards);
-      }
-    } catch (e) {
-      debugPrint('[Athena Error] Fast extractive cards notice: $e');
-    }
-
+    // Fire and forget via single IngestionJobCoordinator orchestrator
+    unawaited(IngestionJobCoordinator.instance.startOrResume(docId));
     return docId;
   }
 
+
+
   Future<void> continueDocument(String id) async {
-    if (!kIsWeb && AppConfig.isStandaloneMobile) {
-      await IngestionJobCoordinator.instance.continueDocument(id);
+    if (!kIsWeb) {
+      if (AppConfig.apiBaseUrl.isNotEmpty) {
+        try {
+          await dio.post('/api/documents/$id/resume');
+          return;
+        } on DioException catch (e) {
+          debugPrint(
+              '[Athena ApiClient] continueDocument remote error: $e, falling back to local coordinator');
+        }
+      }
+      await IngestionJobCoordinator.instance
+          .startOrResume(id, redoFromScratch: false);
       return;
+    }
+    if (AppConfig.apiBaseUrl.isNotEmpty) {
+      try {
+        await dio.post('/api/documents/$id/resume');
+      } on DioException catch (e) {
+        throw _handleDioError(e);
+      }
     }
   }
 
   Future<void> retryDocument(String id, {bool redoFromScratch = false}) async {
-    if (!kIsWeb && AppConfig.isStandaloneMobile) {
-      await IngestionJobCoordinator.instance.retryDocument(
-        id,
-        redoFromScratch: redoFromScratch,
-      );
+    if (!kIsWeb) {
+      if (AppConfig.apiBaseUrl.isNotEmpty) {
+        try {
+          await dio.post(
+            redoFromScratch
+                ? '/api/documents/$id/process'
+                : '/api/documents/$id/resume',
+          );
+          return;
+        } on DioException catch (e) {
+          debugPrint(
+              '[Athena ApiClient] retryDocument remote error: $e, falling back to local coordinator');
+        }
+      }
+      await IngestionJobCoordinator.instance
+          .startOrResume(id, redoFromScratch: redoFromScratch);
       return;
     }
     if (AppConfig.apiBaseUrl.isEmpty) return;
     try {
-      await dio.post('/api/documents/$id/process');
+      await dio.post(
+        redoFromScratch
+            ? '/api/documents/$id/process'
+            : '/api/documents/$id/resume',
+      );
     } on DioException catch (e) {
       throw _handleDioError(e);
     }
@@ -1288,12 +1143,11 @@ class ApiClient {
                 .getAIKey('athena_ai_primary_api_key') ??
             '';
         if (provider == 'anthropic' && key.isNotEmpty) {
-          final chunks = await LocalDatabase.instance.getChunks(docId);
-          final chunk = chunkId == null
-              ? (chunkIndex > 0 && chunkIndex <= chunks.length
-                  ? chunks[chunkIndex - 1]
-                  : null)
-              : await LocalDatabase.instance.getChunk(chunkId);
+          final chunk = chunkId != null
+              ? await LocalDatabase.instance.getChunk(chunkId)
+              : (chunkIndex > 0
+                  ? await LocalDatabase.instance.getChunkBySequence(docId, chunkIndex)
+                  : null);
           final passage = chunk?['raw_text']?.toString() ?? '';
           if (passage.isNotEmpty) {
             final configuredModel =

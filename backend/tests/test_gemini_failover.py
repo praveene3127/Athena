@@ -1,6 +1,6 @@
 from google.genai.errors import APIError
 
-from app.services.llm import LLMService
+from app.services.marginalia.llm import LLMService
 
 
 def test_gemini_quota_error_fails_over_to_secondary_account():

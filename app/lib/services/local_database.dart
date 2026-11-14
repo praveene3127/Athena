@@ -8,7 +8,6 @@ import 'package:path/path.dart' as p;
 import 'package:path_provider/path_provider.dart';
 import 'package:sqflite/sqflite.dart';
 import 'package:athena/services/simhash_service.dart';
-import 'package:athena/services/local_context_service.dart';
 import 'package:athena/services/binary_book_cache.dart';
 
 /// App-private SQLite store shared by the foreground UI and background worker.
@@ -49,14 +48,24 @@ class LocalDatabase {
       final documentsDir = await getApplicationDocumentsDirectory();
       dbPath = p.join(documentsDir.path, 'athena_library.sqlite');
     } catch (e) {
-      debugPrint('Athena LocalDatabase path_provider fallback: ');
-      dbPath = 'athena_test_suite_${DateTime.now().microsecondsSinceEpoch}.db';
+      bool isTestOrDebug = false;
+      assert(() {
+        isTestOrDebug = true;
+        return true;
+      }());
+      if (isTestOrDebug) {
+        debugPrint('Athena LocalDatabase path_provider fallback: $e');
+        dbPath = 'athena_test_suite_${DateTime.now().microsecondsSinceEpoch}.db';
+      } else {
+        rethrow;
+      }
     }
     return openDatabase(
       dbPath,
       version: 4,
       onConfigure: (db) async {
         await db.execute('PRAGMA foreign_keys = ON');
+        await db.execute('PRAGMA busy_timeout = 5000');
         try {
           await db.execute('PRAGMA journal_mode = WAL');
           await db.execute('PRAGMA synchronous = NORMAL');
@@ -117,6 +126,9 @@ class LocalDatabase {
             if (!chunkCols.contains('page_start')) {
               await db.execute('ALTER TABLE reading_chunks ADD COLUMN page_start INTEGER DEFAULT 1');
             }
+            if (!chunkCols.contains('page_end')) {
+              await db.execute('ALTER TABLE reading_chunks ADD COLUMN page_end INTEGER');
+            }
             if (!chunkCols.contains('page_number')) {
               await db.execute('ALTER TABLE reading_chunks ADD COLUMN page_number INTEGER DEFAULT 1');
             }
@@ -171,10 +183,31 @@ class LocalDatabase {
               created_at INTEGER
             )
           ''');
+          await db.execute('CREATE INDEX IF NOT EXISTS idx_chunks_doc_page ON reading_chunks(document_id, page_start)');
+          await db.execute('CREATE INDEX IF NOT EXISTS idx_cards_source_chunk ON context_cards(document_id, source_chunk_id)');
           try {
             await db.execute(
                 'CREATE VIRTUAL TABLE IF NOT EXISTS reading_chunks_fts USING fts5('
-                'chunk_id UNINDEXED, document_id UNINDEXED, raw_text, section_title, tokenize=\'unicode61\')');
+                'chunk_id UNINDEXED, document_id UNINDEXED, raw_text, section_title, '
+                'tokenize=\'porter unicode61 remove_diacritics 2\')');
+            await db.execute('''
+              CREATE TRIGGER IF NOT EXISTS reading_chunks_ai AFTER INSERT ON reading_chunks BEGIN
+                INSERT INTO reading_chunks_fts(chunk_id, document_id, raw_text, section_title)
+                VALUES (new.id, new.document_id, new.raw_text, new.section_title);
+              END;
+            ''');
+            await db.execute('''
+              CREATE TRIGGER IF NOT EXISTS reading_chunks_ad AFTER DELETE ON reading_chunks BEGIN
+                DELETE FROM reading_chunks_fts WHERE chunk_id = old.id;
+              END;
+            ''');
+            await db.execute('''
+              CREATE TRIGGER IF NOT EXISTS reading_chunks_au AFTER UPDATE ON reading_chunks BEGIN
+                DELETE FROM reading_chunks_fts WHERE chunk_id = old.id;
+                INSERT INTO reading_chunks_fts(chunk_id, document_id, raw_text, section_title)
+                VALUES (new.id, new.document_id, new.raw_text, new.section_title);
+              END;
+            ''');
           } catch (e) {
             debugPrint('[Athena LocalDatabase] FTS5 init notice: $e');
             try {
@@ -250,6 +283,7 @@ class LocalDatabase {
             raw_text TEXT NOT NULL,
             source_pages_json TEXT NOT NULL,
             page_start INTEGER DEFAULT 1,
+            page_end INTEGER,
             page_number INTEGER DEFAULT 1,
             start_offset INTEGER NOT NULL,
             end_offset INTEGER NOT NULL,
@@ -287,7 +321,13 @@ class LocalDatabase {
           'CREATE INDEX reading_chunks_document_sequence ON reading_chunks(document_id, sequence)',
         );
         await db.execute(
+          'CREATE INDEX IF NOT EXISTS idx_chunks_doc_page ON reading_chunks(document_id, page_start)',
+        );
+        await db.execute(
           'CREATE INDEX context_cards_document ON context_cards(document_id, dismissed, saved)',
+        );
+        await db.execute(
+          'CREATE INDEX IF NOT EXISTS idx_cards_source_chunk ON context_cards(document_id, source_chunk_id)',
         );
         await db.execute('''
           CREATE TABLE IF NOT EXISTS reading_positions (
@@ -418,6 +458,9 @@ class LocalDatabase {
       'stage': doc['stage'] ?? 'done',
       'stage_label': doc['stage_label'] ?? 'Ready to read',
       'percent': doc['percent'] ?? 100,
+      'processed_page': doc['processed_page'] ?? doc['last_checkpoint_page'] ?? 0,
+      'last_checkpoint_page': doc['last_checkpoint_page'] ?? 0,
+      'page_count': doc['page_count'] ?? 0,
       if (doc['error_message'] != null)
         'error': {
           'code': doc['error_code'] ?? 'EXTRACTION_FAILED',
@@ -511,9 +554,24 @@ class LocalDatabase {
           debugPrint('LocalDatabase source_pages_json fallback: $e');
         }
       }
+      int? pageEnd;
+      if (chunk['page_end'] is num) {
+        pageEnd = (chunk['page_end'] as num).toInt();
+      } else if (chunk['source_pages_json'] != null) {
+        try {
+          final pList = jsonDecode(chunk['source_pages_json'].toString()) as List;
+          if (pList.isNotEmpty && pList.last is num) {
+            pageEnd = (pList.last as num).toInt();
+          }
+        } catch (e) {
+          debugPrint('LocalDatabase page_end parse fallback: $e');
+        }
+      }
+      pageEnd ??= pageStart;
       return <String, Object?>{
         ...chunk,
         'page_start': pageStart,
+        'page_end': pageEnd,
         'page_number': pageStart,
         'simhash_hi': fingerprint.high32,
         'simhash_lo': fingerprint.low32,
@@ -612,9 +670,24 @@ class LocalDatabase {
           debugPrint('LocalDatabase source_pages_json fallback: $e');
         }
       }
+      int? pageEnd;
+      if (chunk['page_end'] is num) {
+        pageEnd = (chunk['page_end'] as num).toInt();
+      } else if (chunk['source_pages_json'] != null) {
+        try {
+          final pList = jsonDecode(chunk['source_pages_json'].toString()) as List;
+          if (pList.isNotEmpty && pList.last is num) {
+            pageEnd = (pList.last as num).toInt();
+          }
+        } catch (e) {
+          debugPrint('LocalDatabase page_end parse fallback: $e');
+        }
+      }
+      pageEnd ??= pageStart;
       return <String, Object?>{
         ...chunk,
         'page_start': pageStart,
+        'page_end': pageEnd,
         'page_number': pageStart,
         'simhash_hi': fingerprint.high32,
         'simhash_lo': fingerprint.low32,
@@ -671,7 +744,7 @@ class LocalDatabase {
             'last_checkpoint_page': checkpointPage,
             'last_chunk_sequence': lastSeq,
             'last_char_offset': charOffset ?? 0,
-            if (carryOverText != null) 'carry_over_text': carryOverText,
+            'carry_over_text': carryOverText ?? '',
             if (profileJson != null) 'profile_json': profileJson,
             'heartbeat_at': DateTime.now().millisecondsSinceEpoch,
             'updated_at': DateTime.now().toIso8601String(),
@@ -683,28 +756,26 @@ class LocalDatabase {
     });
   }
 
-  /// Atomically inserts a batch of chunks and records checkpoint state.
+  /// Legacy pass-through for checkpointed batch insertions (P4-03)
   Future<void> insertChunksBatchWithCheckpoint(
     List<Map<String, Object?>> chunks, {
-    required String documentId,
-    required int checkpointPage,
-    required int chunkSequence,
-    required int charOffset,
+    bool isFinalBatch = false,
+    String? documentId,
+    int? checkpointPage,
+    int? chunkSequence,
+    int? charOffset,
     String? carryOverText,
     String? profileJson,
-    bool isFinalBatch = false,
-  }) async {
-    return insertChunksBatch(
-      chunks,
-      isFinalBatch: isFinalBatch,
-      documentId: documentId,
-      checkpointPage: checkpointPage,
-      chunkSequence: chunkSequence,
-      charOffset: charOffset,
-      carryOverText: carryOverText,
-      profileJson: profileJson,
-    );
-  }
+  }) => insertChunksBatch(
+    chunks,
+    isFinalBatch: isFinalBatch,
+    documentId: documentId,
+    checkpointPage: checkpointPage,
+    chunkSequence: chunkSequence,
+    charOffset: charOffset,
+    carryOverText: carryOverText,
+    profileJson: profileJson,
+  );
 
   /// Prune uncommitted tail chunks beyond lastCommittedSequence on resume
   Future<void> pruneUncommittedTailChunks(String id, int lastCommittedSequence) async {
@@ -1104,6 +1175,29 @@ class LocalDatabase {
     return rows.map((r) => Map<String, dynamic>.from(r)).toList();
   }
 
+  Future<Map<String, dynamic>?> getChunkBySequence(String docId, int sequence) async {
+    final db = await database;
+    final rows = await db.query(
+      'reading_chunks',
+      where: 'document_id = ? AND sequence = ?',
+      whereArgs: [docId, sequence],
+      limit: 1,
+    );
+    if (rows.isEmpty) return null;
+    return Map<String, dynamic>.from(rows.first);
+  }
+
+  Future<List<Map<String, dynamic>>> getChunksForPage(String docId, int pageNumber) async {
+    final db = await database;
+    final rows = await db.query(
+      'reading_chunks',
+      where: 'document_id = ? AND page_start <= ? AND COALESCE(page_end, page_start) >= ?',
+      whereArgs: [docId, pageNumber, pageNumber],
+      orderBy: 'sequence ASC',
+    );
+    return rows.map((r) => Map<String, dynamic>.from(r)).toList();
+  }
+
   Future<List<Map<String, dynamic>>> getCards(String documentId) async {
     final db = await database;
     final rows = await db.query(
@@ -1183,26 +1277,8 @@ class LocalDatabase {
       chunks.addAll(fullRows.map((r) => Map<String, dynamic>.from(r)));
     }
 
-    var cardRows = await db.query('context_cards',
+    final cardRows = await db.query('context_cards',
         where: 'document_id = ? AND dismissed = 0', whereArgs: [documentId]);
-
-    final int cardsGenerated = (docMap['cards_generated'] as num?)?.toInt() ?? 0;
-
-    // Safety fallback: If context_cards are empty for this document AND cards were never generated before, synthesize cards now!
-    // GAP-01: chunks now has authentic raw_text populated!
-    if (cardsGenerated == 0 && cardRows.isEmpty && chunks.isNotEmpty) {
-      final contextService = LocalContextService();
-      final synthesized =
-          await contextService.buildCards(documentId, chunks);
-      if (synthesized.isNotEmpty) {
-        await insertCards(synthesized);
-        cardRows = await db.query('context_cards',
-            where: 'document_id = ? AND dismissed = 0',
-            whereArgs: [documentId]);
-      }
-      await markCardsGenerated(documentId, generated: true);
-      docMap['cards_generated'] = 1;
-    }
 
     final cards = cardRows.map((r) {
       final m = Map<String, dynamic>.from(r);
@@ -1542,52 +1618,50 @@ class LocalDatabase {
     return buf.toString();
   }
 
-  /// Incremental O(1)-RAM SHA-256 calculation over SQLite chunks.
+  /// Incremental O(1)-RAM SHA-256 calculation over SQLite chunks via keyset pagination.
   Future<String> computeDocumentCanonicalSha256(String documentId) async {
     final db = await database;
     final output = AccumulatorSink<Digest>();
     final input = sha256.startChunkedConversion(output);
-    int offset = 0;
-    const int batchSize = 100;
+    int lastSeq = -1;
+    const int batchSize = 500;
     while (true) {
       final rows = await db.query(
         'reading_chunks',
-        columns: ['raw_text'],
-        where: 'document_id = ?',
-        whereArgs: [documentId],
+        columns: ['sequence', 'raw_text'],
+        where: 'document_id = ? AND sequence > ?',
+        whereArgs: [documentId, lastSeq],
         orderBy: 'sequence ASC',
         limit: batchSize,
-        offset: offset,
       );
       if (rows.isEmpty) break;
       for (final row in rows) {
         final text = row['raw_text']?.toString() ?? '';
         input.add(utf8.encode(text));
       }
-      offset += rows.length;
+      lastSeq = (rows.last['sequence'] as num).toInt();
       if (rows.length < batchSize) break;
     }
     input.close();
     return output.events.single.toString();
   }
 
-  /// Incremental O(1)-RAM word & char counter over SQLite chunks.
+  /// Incremental O(1)-RAM word & char counter over SQLite chunks via keyset pagination.
   Future<({int totalWords, int totalCharacters, int chunkCount})> computeDocumentStats(String documentId) async {
     final db = await database;
     int totalWords = 0;
     int totalCharacters = 0;
     int chunkCount = 0;
-    int offset = 0;
-    const int batchSize = 100;
+    int lastSeq = -1;
+    const int batchSize = 500;
     while (true) {
       final rows = await db.query(
         'reading_chunks',
-        columns: ['raw_text'],
-        where: 'document_id = ?',
-        whereArgs: [documentId],
+        columns: ['sequence', 'raw_text'],
+        where: 'document_id = ? AND sequence > ?',
+        whereArgs: [documentId, lastSeq],
         orderBy: 'sequence ASC',
         limit: batchSize,
-        offset: offset,
       );
       if (rows.isEmpty) break;
       for (final row in rows) {
@@ -1607,7 +1681,7 @@ class LocalDatabase {
         totalWords += words;
         chunkCount++;
       }
-      offset += rows.length;
+      lastSeq = (rows.last['sequence'] as num).toInt();
       if (rows.length < batchSize) break;
     }
     return (totalWords: totalWords, totalCharacters: totalCharacters, chunkCount: chunkCount);

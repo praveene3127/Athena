@@ -22,6 +22,9 @@ logger = logging.getLogger("athena.api")
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
+    # Ensure all runtime storage directories exist
+    from app.config import ensure_runtime_dirs
+    ensure_runtime_dirs()
     # Initialize DB schema on startup
     init_db()
     # Mark any stale queued/processing jobs as INTERRUPTED
@@ -98,7 +101,14 @@ async def reject_untrusted_browser_mutations(request, call_next):
     origin = request.headers.get("origin")
     host = request.headers.get("host")
     if origin and request.method not in {"GET", "HEAD", "OPTIONS"}:
-        is_same_origin = host and (origin.endswith(f"://{host}") or origin == f"http://{host}" or origin == f"https://{host}")
+        from urllib.parse import urlsplit
+        is_same_origin = False
+        if host:
+            o_split = urlsplit(origin)
+            h_split = urlsplit(f"//{host}")
+            o_port = o_split.port or (443 if o_split.scheme == "https" else 80)
+            h_port = h_split.port or (443 if o_split.scheme == "https" else 80)
+            is_same_origin = (o_split.hostname == h_split.hostname and o_port == h_port)
         if not is_same_origin and not _ALLOWED_ORIGIN.fullmatch(origin) and origin.rstrip("/") not in _EXPLICIT_ALLOWED_ORIGINS:
             return JSONResponse(
                 status_code=403,
@@ -138,7 +148,17 @@ app.add_middleware(
     allow_origin_regex=_ALLOWED_ORIGIN.pattern,
     allow_credentials=False,
     allow_methods=["GET", "POST", "PUT", "DELETE", "OPTIONS", "HEAD"],
-    allow_headers=["Content-Type", "X-Athena-Context-Token", "X-Athena-Pairing-Token", "Authorization", "Accept"],
+    allow_headers=[
+        "Content-Type",
+        "X-Athena-Context-Token",
+        "X-Athena-Pairing-Token",
+        "Authorization",
+        "Accept",
+        "Range",
+        "If-None-Match",
+        "Content-Range",
+    ],
+    expose_headers=["Content-Range", "Accept-Ranges", "Content-Length", "ETag"],
 )
 
 # Exception handlers

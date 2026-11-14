@@ -41,6 +41,8 @@ def _migrate_columns():
                 conn.execute(text("ALTER TABLE documents ADD COLUMN canonical_sha256 TEXT DEFAULT NULL"))
             if "repairs_count" not in doc_cols:
                 conn.execute(text("ALTER TABLE documents ADD COLUMN repairs_count INTEGER DEFAULT 0"))
+            if "processed_page" not in doc_cols:
+                conn.execute(text("ALTER TABLE documents ADD COLUMN processed_page INTEGER DEFAULT 0"))
 
         # Check reading_chunks columns
         rc_cols = {r[1] for r in conn.execute(text("PRAGMA table_info(reading_chunks)")).fetchall()}
@@ -78,14 +80,33 @@ def _ensure_indexes() -> None:
 
 
 def _ensure_fts() -> None:
-    """Creates SQLite C-engine FTS5 virtual table for sub-millisecond lexical search."""
+    """Creates SQLite C-engine FTS5 virtual table for sub-millisecond lexical search with auto-sync triggers."""
     from sqlalchemy import text
     with engine.begin() as conn:
         try:
             conn.execute(text(
                 "CREATE VIRTUAL TABLE IF NOT EXISTS reading_chunks_fts "
-                "USING fts5(chunk_id UNINDEXED, document_id UNINDEXED, sequence UNINDEXED, section_title, raw_text, tokenize='porter unicode61');"
+                "USING fts5(chunk_id UNINDEXED, document_id UNINDEXED, sequence UNINDEXED, section_title, raw_text, "
+                "tokenize='porter unicode61 remove_diacritics 2');"
             ))
+            conn.execute(text("""
+                CREATE TRIGGER IF NOT EXISTS reading_chunks_ai AFTER INSERT ON reading_chunks BEGIN
+                    INSERT INTO reading_chunks_fts(chunk_id, document_id, sequence, section_title, raw_text)
+                    VALUES (new.id, new.document_id, new.sequence, new.section_title, new.raw_text);
+                END;
+            """))
+            conn.execute(text("""
+                CREATE TRIGGER IF NOT EXISTS reading_chunks_ad AFTER DELETE ON reading_chunks BEGIN
+                    DELETE FROM reading_chunks_fts WHERE chunk_id = old.id;
+                END;
+            """))
+            conn.execute(text("""
+                CREATE TRIGGER IF NOT EXISTS reading_chunks_au AFTER UPDATE ON reading_chunks BEGIN
+                    DELETE FROM reading_chunks_fts WHERE chunk_id = old.id;
+                    INSERT INTO reading_chunks_fts(chunk_id, document_id, sequence, section_title, raw_text)
+                    VALUES (new.id, new.document_id, new.sequence, new.section_title, new.raw_text);
+                END;
+            """))
         except Exception as exc:
             logger.warning("SQLite FTS5 unavailable; lexical search index was not initialized: %s", exc)
 

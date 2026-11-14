@@ -13,7 +13,7 @@ import httpx
 from fastapi import APIRouter, Depends, File, Query, Request, UploadFile
 from fastapi.responses import Response, StreamingResponse
 from pydantic import BaseModel
-from sqlmodel import Session, select
+from sqlmodel import Session, select, func
 import pymupdf
 
 from app.config import (
@@ -324,7 +324,7 @@ def list_documents(session: Session = Depends(get_session)) -> List[Dict[str, An
     docs = session.exec(statement).all()
     results = []
     for d in docs:
-        effective_status = "ready" if (d.status == "ready" or (d.stage == "done" and d.percent == 100)) else d.status
+        effective_status = "ready" if (d.status == "ready" or (d.status != "failed" and d.stage == "done" and d.percent == 100)) else d.status
         results.append({
             "id": d.id,
             "title": d.title or d.filename,
@@ -403,6 +403,26 @@ def retry_document_process(id: str, session: Session = Depends(get_session)) -> 
         raise AppException("CONFLICT", "Only failed documents can be retried", status_code=409)
 
     reset_and_requeue_document(id)
+    return {"status": "queued", "document_id": id}
+
+
+@router.post("/{id}/resume")
+def resume_document_process(id: str, session: Session = Depends(get_session)) -> Dict[str, str]:
+    """Resumes processing for a paused, interrupted, or failed document from its checkpoint."""
+    doc = session.get(Document, id)
+    if not doc:
+        raise AppException("NOT_FOUND", status_code=404)
+    if doc.status not in ("paused", "interrupted", "failed", "partially_readable"):
+        raise AppException("CONFLICT", f"Document in status {doc.status} cannot be resumed", status_code=409)
+
+    doc.status = "queued"
+    doc.stage = "chunking" if (doc.processed_page and doc.processed_page > 0) else "validating"
+    doc.error_code = None
+    doc.error_message = None
+    doc.updated_at = utc_now()
+    session.add(doc)
+    session.commit()
+    queue_document_job(id)
     return {"status": "queued", "document_id": id}
 
 
@@ -573,21 +593,14 @@ def delete_document(id: str, request: Request = None, session: Session = Depends
             status_code=409,
         )
 
-    # Remove the FTS index rows explicitly; FTS virtual tables do not cascade.
+    # Bulk SQL deletes: remove related rows efficiently
     from sqlalchemy import text
     session.execute(text("DELETE FROM reading_chunks_fts WHERE document_id = :doc_id"), {"doc_id": id})
-    for chunk in session.exec(select(ReadingChunk).where(ReadingChunk.document_id == id)).all():
-        session.delete(chunk)
-    for concept in session.exec(select(Concept).where(Concept.document_id == id)).all():
-        session.delete(concept)
-    # Keep reader-saved cards/quotes available after removing the source book.
-    for card in session.exec(select(ContextCard).where(ContextCard.document_id == id, ContextCard.saved == False)).all():
-        session.delete(card)
-    for chapter in session.exec(select(DocumentChapter).where(DocumentChapter.doc_id == id)).all():
-        session.delete(chapter)
-    state = session.get(ReadingState, id)
-    if state:
-        session.delete(state)
+    session.execute(text("DELETE FROM reading_chunks WHERE document_id = :doc_id"), {"doc_id": id})
+    session.execute(text("DELETE FROM concepts WHERE document_id = :doc_id"), {"doc_id": id})
+    session.execute(text("DELETE FROM context_cards WHERE document_id = :doc_id AND saved = 0"), {"doc_id": id})
+    session.execute(text("DELETE FROM document_chapters WHERE doc_id = :doc_id"), {"doc_id": id})
+    session.execute(text("DELETE FROM reading_state WHERE doc_id = :doc_id"), {"doc_id": id})
 
     saved_cards = session.exec(
         select(ContextCard).where(ContextCard.document_id == id, ContextCard.saved == True)
@@ -624,8 +637,6 @@ def delete_document(id: str, request: Request = None, session: Session = Depends
             pipeline_instance.evict_document(id)
     except Exception as e:
         logger.debug("Pipeline eviction on delete error: %s", e)
-    except Exception as pipe_err:
-        logger.debug("Pipeline eviction error for %s: %s", id, pipe_err)
 
     return {"status": "deleted", "document_id": id}
 
@@ -633,42 +644,61 @@ def delete_document(id: str, request: Request = None, session: Session = Depends
 
 
 @router.get("/{id}/reader")
-def get_reader(
+async def get_reader(
     id: str,
+    from_seq: Optional[int] = Query(default=None),
+    limit: Optional[int] = Query(default=None),
     request: Request = None,
     session: Session = Depends(get_session),
 ) -> Dict[str, Any]:
     """
-    Returns the full reader payload:
+    Returns the reader payload:
     document metadata with integrity proof + ordered items
-    (reading chunks interleaved with context cards, with top-level cards array).
+    (reading chunks interleaved with context cards).
+    Supports keyset windowing: ?from_seq=1&limit=200 (defaulting to windowing when chunk_count > 500).
     """
     doc = session.get(Document, id)
     if not doc:
         raise AppException("NOT_FOUND", status_code=404)
-    if doc.status != "ready":
+    if doc.status not in ("ready", "partially_readable"):
         raise AppException("CONFLICT", "Document is not ready", status_code=409)
 
-    # Fetch chunks ordered by sequence
-    chunks = session.exec(
-        select(ReadingChunk)
-        .where(ReadingChunk.document_id == id)
-        .order_by(ReadingChunk.sequence)
-    ).all()
+    total_chunks = session.exec(
+        select(func.count(ReadingChunk.id)).where(ReadingChunk.document_id == id)
+    ).one()
+
+    # Determine pagination window
+    req_from_seq = from_seq if isinstance(from_seq, int) else None
+    req_limit = limit if isinstance(limit, int) else None
+    query = select(ReadingChunk).where(ReadingChunk.document_id == id).order_by(ReadingChunk.sequence)
+    is_windowed = (req_from_seq is not None) or (req_limit is not None) or (total_chunks > 500)
+    if is_windowed:
+        start_seq = req_from_seq if req_from_seq is not None else 1
+        page_limit = req_limit if req_limit is not None else 200
+        query = query.where(ReadingChunk.sequence >= start_seq).limit(page_limit)
+
+    chunks = session.exec(query).all()
 
     # Build integrity proof
     integrity = {
         "verified": doc.integrity_verified,
         "original_checksum": doc.original_checksum,
         "reconstructed_checksum": doc.reconstructed_checksum,
-        "chunk_count": len(chunks),
+        "chunk_count": total_chunks,
     }
 
-    # Fetch active (non-dismissed) context cards for this document
-    cards = session.exec(
-        select(ContextCard)
-        .where(ContextCard.document_id == id, ContextCard.dismissed == False)
-    ).all()
+    # Fetch active (non-dismissed) context cards for the window
+    chunk_ids = [c.id for c in chunks]
+    cards = []
+    if chunk_ids:
+        cards = session.exec(
+            select(ContextCard)
+            .where(
+                ContextCard.document_id == id,
+                ContextCard.dismissed == False,
+                ContextCard.source_chunk_id.in_(chunk_ids),
+            )
+        ).all()
 
     all_cards: List[Dict[str, Any]] = []
     cards_by_chunk: Dict[str, List[Dict[str, Any]]] = {}
@@ -719,6 +749,7 @@ def get_reader(
 
     # Build items list: reading chunks interleaved with context cards
     items: List[Dict[str, Any]] = []
+    chunk_items: List[Dict[str, Any]] = []
     for chunk in chunks:
         pages = json.loads(chunk.source_pages_json) if chunk.source_pages_json else []
         if len(pages) == 1:
@@ -729,7 +760,7 @@ def get_reader(
             page_ref = "Page 1"
 
         chunk_cards = cards_by_chunk.get(chunk.id, [])
-        items.append({
+        c_item = {
             "type": "reading_chunk",
             "id": chunk.id,
             "sequence": chunk.sequence,
@@ -737,8 +768,9 @@ def get_reader(
             "page_reference": page_ref,
             "section_title": chunk.section_title,
             "boundary_method": getattr(chunk, "boundary_method", "paragraph"),
-            "cards": chunk_cards,
-        })
+        }
+        items.append(c_item)
+        chunk_items.append(c_item)
         items.extend(chunk_cards)
 
     reading_state = session.get(ReadingState, id)
@@ -757,14 +789,14 @@ def get_reader(
             "reading_mode": saved_reading_mode,
         },
         "items": items,
-        "chunks": [it for it in items if it.get("type") == "reading_chunk"],
+        "chunks": chunk_items,
         "cards": all_cards,
     }
 
 
 @router.get("/{id}/tape")
-def get_document_tape(id: str, session: Session = Depends(get_session)):
-    """Returns application/octet-stream encoded binary tape of document chunks."""
+def get_document_tape(id: str, request: Request, session: Session = Depends(get_session)):
+    """Returns application/octet-stream encoded binary tape of document chunks, supporting Range requests."""
     doc = session.get(Document, id)
     if not doc:
         raise AppException("NOT_FOUND", status_code=404)
@@ -773,6 +805,7 @@ def get_document_tape(id: str, session: Session = Depends(get_session)):
         select(ReadingChunk).where(ReadingChunk.document_id == id).order_by(ReadingChunk.sequence)
     ).all()
 
+    tape_bytes = None
     # Try Rust core binary tape encoder first
     try:
         from athena_rust_core import rust_encode_binary_tape
@@ -790,34 +823,76 @@ def get_document_tape(id: str, session: Session = Depends(get_session)):
             pages.append(p)
         simhash_lows = [0] * len(chunks)
         tape_bytes = rust_encode_binary_tape(texts, pages, simhash_lows)
-        return Response(content=tape_bytes, media_type="application/octet-stream")
     except Exception as rust_err:
         logger.debug("Rust binary tape encoding fallback: %s", rust_err)
 
-    # Pure Python binary tape fallback (ATHN v1 Big-Endian specification)
-    import struct
-    payloads = [c.raw_text.encode("utf-8") for c in chunks]
-    count = len(chunks)
-    total_utf8_bytes = sum(len(p) for p in payloads)
-    header = struct.pack(">4sIII", b"ATHN", 1, count, total_utf8_bytes)
-    index_entries = []
-    current_offset = 0
-    for i, p in enumerate(payloads):
-        p_len = len(p)
-        page = 1
-        if chunks[i].source_pages_json:
-            try:
-                parsed = json.loads(chunks[i].source_pages_json)
-                if parsed and isinstance(parsed, list):
-                    page = int(parsed[0])
-            except Exception:
-                pass
-        simhash_low = 0
-        index_entries.append(struct.pack(">IIII", current_offset, p_len, page, simhash_low))
-        current_offset += p_len
+    if tape_bytes is None:
+        # Pure Python binary tape fallback (ATHN v1 Big-Endian specification)
+        import struct
+        payloads = [c.raw_text.encode("utf-8") for c in chunks]
+        count = len(chunks)
+        total_utf8_bytes = sum(len(p) for p in payloads)
+        header = struct.pack(">4sIII", b"ATHN", 1, count, total_utf8_bytes)
+        index_entries = []
+        current_offset = 0
+        for i, p in enumerate(payloads):
+            p_len = len(p)
+            page = 1
+            if chunks[i].source_pages_json:
+                try:
+                    parsed = json.loads(chunks[i].source_pages_json)
+                    if parsed and isinstance(parsed, list):
+                        page = int(parsed[0])
+                except Exception:
+                    pass
+            simhash_low = 0
+            index_entries.append(struct.pack(">IIII", current_offset, p_len, page, simhash_low))
+            current_offset += p_len
 
-    tape = header + b"".join(index_entries) + b"".join(payloads)
-    return Response(content=tape, media_type="application/octet-stream")
+        tape_bytes = header + b"".join(index_entries) + b"".join(payloads)
+
+    total_len = len(tape_bytes)
+    range_header = request.headers.get("range")
+    if range_header and range_header.startswith("bytes="):
+        try:
+            r_spec = range_header[len("bytes="):].strip()
+            if "-" in r_spec:
+                start_str, end_str = r_spec.split("-", 1)
+                start = int(start_str) if start_str else 0
+                end = int(end_str) if end_str else total_len - 1
+                end = min(end, total_len - 1)
+                if start < total_len and start <= end:
+                    sliced = tape_bytes[start : end + 1]
+                    return Response(
+                        content=sliced,
+                        status_code=206,
+                        headers={
+                            "Content-Range": f"bytes {start}-{end}/{total_len}",
+                            "Accept-Ranges": "bytes",
+                            "Content-Length": str(len(sliced)),
+                        },
+                        media_type="application/octet-stream",
+                    )
+                else:
+                    return Response(
+                        status_code=416,
+                        headers={
+                            "Content-Range": f"bytes */{total_len}",
+                            "Accept-Ranges": "bytes",
+                        },
+                        media_type="application/octet-stream",
+                    )
+        except Exception:
+            pass
+
+    return Response(
+        content=tape_bytes,
+        headers={
+            "Accept-Ranges": "bytes",
+            "Content-Length": str(total_len),
+        },
+        media_type="application/octet-stream",
+    )
 
 
 

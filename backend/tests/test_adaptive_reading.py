@@ -1,5 +1,5 @@
-from app.services.blocks import _order_page_blocks
-from app.services.chunker import chunk_document
+from app.services.ingestion.blocks import _order_page_blocks
+from app.services.ingestion.chunker import chunk_document
 
 
 def _block(text: str, x0: float, y0: float, x1: float, y1: float) -> dict:
@@ -111,7 +111,7 @@ def test_spanning_region_overlap_marks_reading_order_uncertain():
 
 
 def test_document_profile_uses_shared_mobile_target_without_changing_source():
-    from app.services.chunker import _paragraph_units, _target_words_for_document
+    from app.services.ingestion.chunker import _paragraph_units, _target_words_for_document
 
     short_paragraphs = [
         f"This short paragraph number {i} explains one small idea clearly."
@@ -197,7 +197,7 @@ def test_chunker_does_not_cut_at_abbreviations_or_decimal_points():
 
 
 def test_pdf_validation_has_no_fixed_25mb_size_ceiling(tmp_path, monkeypatch):
-    from app.services import extraction
+    from app.services.ingestion import extraction
 
     pdf_path = tmp_path / "large-book.pdf"
     with pdf_path.open("wb") as book_file:
@@ -218,7 +218,7 @@ def test_pdf_validation_has_no_fixed_25mb_size_ceiling(tmp_path, monkeypatch):
 
 def test_large_book_triage_can_report_progress_without_retaining_page_details():
     import pymupdf
-    from app.services.triage import triage_document
+    from app.services.ingestion.triage import triage_document
 
     doc = pymupdf.open()
     for index in range(3):
@@ -241,7 +241,7 @@ def test_large_book_triage_can_report_progress_without_retaining_page_details():
 
 def test_triage_detects_ascii_garbled_pdf_font_maps():
     import pymupdf
-    from app.services.triage import triage_page
+    from app.services.ingestion.triage import triage_page
 
     doc = pymupdf.open()
     page = doc.new_page(width=1000, height=1000)
@@ -264,7 +264,7 @@ def test_triage_detects_ascii_garbled_pdf_font_maps():
 
 def test_triage_does_not_flag_normal_prose_for_ocr():
     import pymupdf
-    from app.services.triage import triage_page
+    from app.services.ingestion.triage import triage_page
 
     doc = pymupdf.open()
     page = doc.new_page()
@@ -280,7 +280,7 @@ def test_triage_does_not_flag_normal_prose_for_ocr():
 
 def test_isolated_worker_child_starts_and_returns_cleanly():
     from app.db import init_db
-    from app.services.jobs import _run_isolated_document_job
+    from app.services.ingestion.jobs import _run_isolated_document_job
 
     init_db()
     _run_isolated_document_job("missing-worker-probe")
@@ -320,7 +320,7 @@ def test_upload_route_streams_a_book_larger_than_25mb(tmp_path, monkeypatch):
 
 
 def test_detect_printed_toc_page_dedoc_rules():
-    from app.services.blocks import detect_printed_toc_page
+    from app.services.ingestion.blocks import detect_printed_toc_page
 
     blocks = [
         {
@@ -351,8 +351,8 @@ def test_detect_printed_toc_page_dedoc_rules():
 
 
 def test_canonical_text_excludes_contents_entry_units():
-    from app.services.canonical import assemble_canonical_text
-    from app.services.chunker import chunk_document
+    from app.services.ingestion.canonical import assemble_canonical_text
+    from app.services.ingestion.chunker import chunk_document
 
     units = [
         {
@@ -391,7 +391,7 @@ def test_canonical_text_excludes_contents_entry_units():
 
 def test_grounded_context_prompt_includes_book_dna_and_3_archetypes():
     from unittest.mock import MagicMock
-    from app.services.llm import LLMService
+    from app.services.marginalia.llm import LLMService
 
     service = LLMService()
     mock_gemini = MagicMock()
@@ -446,9 +446,9 @@ def test_universal_6_archetype_pdf_defect_torture_test():
     5. Bottom-page footnotes and back-matter indexes
     6. Drop-caps ('O' + 'n May' -> 'On May')
     """
-    from app.services.blocks import BlockType
-    from app.services.canonical import assemble_canonical_text
-    from app.services.edge_ai import audit_chunk_quality, self_heal_prose_text
+    from app.services.ingestion.blocks import BlockType
+    from app.services.ingestion.canonical import assemble_canonical_text
+    from app.services.edge.hygiene import audit_chunk_quality, self_heal_prose_text
 
     # Synthesize units embodying all 6 PDF defect archetypes
     raw_units = [
@@ -517,7 +517,7 @@ def test_universal_6_archetype_pdf_defect_torture_test():
 
 
 def test_document_bouncer_20_archetypes():
-    from app.services.edge_ai import classify_document_purpose
+    from app.services.edge.bouncer import classify_document_purpose
 
     # 1. Classical Philosophy Book — Marcus Aurelius Meditations (Must ALLOW)
     book_para = (
@@ -893,7 +893,7 @@ def test_document_bouncer_20_archetypes():
 
 def test_book_containing_story_examples_is_allowed():
     """Real books frequently include examples of resumes, invoices, exams, or math formulas."""
-    from app.services.edge_ai import classify_document_purpose
+    from app.services.edge.bouncer import classify_document_purpose
 
     book_para = (
         "The soul of man does violence to itself, first of all, when it becomes an abscess and, "
@@ -982,8 +982,8 @@ def test_epub_upload_validation_and_bouncer(tmp_path, monkeypatch):
     import zipfile
     import asyncio
     from fastapi import UploadFile
-    from app.services.extraction import validate_pdf_file, extract_document_content, get_document_file_path
-    from app.services.edge_ai import classify_document_purpose
+    from app.services.ingestion.extraction import validate_pdf_file, extract_document_content, get_document_file_path
+    from app.services.edge.bouncer import classify_document_purpose
     from app.routers import documents
 
     # Build a valid EPUB zip in memory
@@ -1062,7 +1062,7 @@ def test_epub_upload_validation_and_bouncer(tmp_path, monkeypatch):
     assert saved_epub.stat().st_size == len(epub_bytes)
 
     # 5. File path resolver
-    monkeypatch.setattr("app.services.extraction.UPLOADS_DIR", uploads_dir)
+    monkeypatch.setattr("app.services.ingestion.extraction.UPLOADS_DIR", uploads_dir)
     found_path = get_document_file_path(doc_id)
     assert found_path == saved_epub
 

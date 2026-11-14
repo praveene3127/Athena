@@ -72,6 +72,14 @@ def tolerant_json_parse(raw_text: str) -> Optional[dict[str, Any]]:
     return None
 
 
+def _sanitize_data_delimiter(text: str) -> str:
+    """Escapes data delimiters so hostile book text cannot escape XML tags (P6-12)."""
+    if not text:
+        return ""
+    tags = r"(?:/)?(?:passage|evidence|prev_context|prev_passage|extract|neighbors|nearby_text)"
+    return re.sub(rf"<({tags})>", r"&lt;\1&gt;", text, flags=re.IGNORECASE)
+
+
 def verify_grounding(body: str, extract: str) -> bool:
     """Verifies that generated facts ground against source extract."""
     if not body or not extract:
@@ -560,11 +568,14 @@ class LLMService:
         if not self.is_configured:
             return None
 
-        prev_tag = f"<prev_context>\n{previous_context}\n</prev_context>\n\n" if previous_context else ""
+        safe_prev = _sanitize_data_delimiter(previous_context)
+        safe_passage = _sanitize_data_delimiter(passage_text)
+        safe_extract = _sanitize_data_delimiter(extract_text)
+        prev_tag = f"<prev_context>\n{safe_prev}\n</prev_context>\n\n" if safe_prev else ""
         prompt = (
             f"{prev_tag}"
-            f"<passage>\n{passage_text}\n</passage>\n\n"
-            f"<extract>\n{extract_text}\n</extract>"
+            f"<passage>\n{safe_passage}\n</passage>\n\n"
+            f"<extract>\n{safe_extract}\n</extract>"
         )
 
         endpoints = self._get_effective_endpoints()
@@ -767,8 +778,8 @@ class LLMService:
             "Output Format:\n"
             "Line 1: TITLE: <Editorial Category Name>: <Concise 3-6 word title>\n"
             "Line 2+: The continuous declarative fact body (45-80 words). Zero questions. Zero '||REVEAL||'.\n\n"
-            f"<passage>\n{passage_text}\n</passage>\n\n"
-            f"<nearby_text>\n{neighbors_text}\n</nearby_text>"
+            f"<passage>\n{_sanitize_data_delimiter(passage_text)}\n</passage>\n\n"
+            f"<nearby_text>\n{_sanitize_data_delimiter(neighbors_text)}\n</nearby_text>"
         )
 
         endpoints = self._get_effective_endpoints()
@@ -924,7 +935,7 @@ class LLMService:
 
             # Self-Correction: Local ONNX Novelty & Anti-Echo Evaluation
             try:
-                from app.services.edge_ai import evaluate_card_novelty
+                from app.services.edge.novelty import evaluate_card_novelty
                 novelty = evaluate_card_novelty(passage_text, card_title, body)
                 if not novelty["passed"]:
                     logger.warning("Card for '%s' rejected by Novelty Gate: %s", concept_name, novelty["reason"])
@@ -1040,8 +1051,8 @@ class LLMService:
             return "not_configured", None
 
         prompt = (
-            f"<passage>\n{passage_text}\n</passage>\n\n"
-            f"<neighbors>\n{neighbors_text}\n</neighbors>\n\n"
+            f"<passage>\n{_sanitize_data_delimiter(passage_text)}\n</passage>\n\n"
+            f"<neighbors>\n{_sanitize_data_delimiter(neighbors_text)}\n</neighbors>\n\n"
             f"Reader's Question: {question}"
         )
 
@@ -1189,8 +1200,8 @@ class LLMService:
         prompt = (
             f"<book>{doc_title}</book>\n"
             f"<chapter>{chapter_title}</chapter>\n"
-            f"<prev_passage>\n{prev_passage}\n</prev_passage>\n\n"
-            f"<passage>\n{passage}\n</passage>"
+            f"<prev_passage>\n{_sanitize_data_delimiter(prev_passage)}\n</prev_passage>\n\n"
+            f"<passage>\n{_sanitize_data_delimiter(passage)}\n</passage>"
         )
 
         endpoints = self._get_effective_endpoints()

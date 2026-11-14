@@ -1288,9 +1288,7 @@ class _LibraryScreenState extends ConsumerState<LibraryScreen>
       ref.invalidate(documentsProvider);
     } on AppError catch (e) {
       if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text(e.message), backgroundColor: Colors.redAccent),
-        );
+        showAthenaError(context, e);
       }
     }
   }
@@ -1343,9 +1341,7 @@ class _LibraryScreenState extends ConsumerState<LibraryScreen>
       if (mounted) context.push('/processing/${doc.id}');
     } on AppError catch (e) {
       if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text(e.message), backgroundColor: Colors.redAccent),
-        );
+        showAthenaError(context, e);
       }
     }
   }

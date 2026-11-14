@@ -13,6 +13,7 @@ import 'package:athena/core/theme/reader_theme.dart';
 import 'package:athena/models/document.dart';
 import 'package:athena/services/local_database.dart';
 import 'package:athena/services/local_context_service.dart';
+import 'package:athena/services/book_repository.dart';
 import 'package:athena/features/library/screens/library_screen.dart';
 import 'package:athena/features/reader/controllers/reader_feed_builder.dart';
 import 'package:athena/features/reader/controllers/kinematic_scroll_governor.dart';
@@ -86,6 +87,7 @@ class _ReaderScreenState extends ConsumerState<ReaderScreen>
   String? _savedChunkId;
   int? _savedChunkSeq;
   bool _isGeneratingCard = false;
+  final BookRepository _bookRepo = BookRepository();
 
   @override
   void initState() {
@@ -104,6 +106,14 @@ class _ReaderScreenState extends ConsumerState<ReaderScreen>
         final chunk = _readingChunkAt(index, _cachedFeedItems);
         final chunkSeq = chunk?.sequence;
         final chunkId = chunk?.id;
+
+        if (chunkSeq != null) {
+          unawaited(_bookRepo.saveReadingPosition(
+            widget.documentId,
+            chunkSeq: chunkSeq,
+            chunkId: chunkId,
+          ));
+        }
 
         SharedPreferences.getInstance().then((prefs) {
           prefs.setInt('reader_pos_${widget.documentId}', index);
@@ -376,7 +386,13 @@ class _ReaderScreenState extends ConsumerState<ReaderScreen>
       final savedBionic = prefs.getBool('reader_bionic_reading');
       final savedPos = prefs.getInt('reader_pos_${widget.documentId}');
       final savedChunkId = prefs.getString('reader_chunk_id_${widget.documentId}');
-      final savedChunkSeq = prefs.getInt('reader_chunk_seq_${widget.documentId}');
+      var savedChunkSeq = prefs.getInt('reader_chunk_seq_${widget.documentId}');
+
+      // Canonical reading position via BookRepository
+      final canonicalPos = await _bookRepo.getReadingPosition(widget.documentId);
+      if (canonicalPos != null && canonicalPos.chunkSeq > 0) {
+        savedChunkSeq = canonicalPos.chunkSeq;
+      }
 
       if (mounted) {
         setState(() {
@@ -458,6 +474,11 @@ class _ReaderScreenState extends ConsumerState<ReaderScreen>
     final chunkSeq = chunk?.sequence;
     final chunkId = chunk?.id;
     if (chunkSeq != null) {
+      unawaited(_bookRepo.saveReadingPosition(
+        widget.documentId,
+        chunkSeq: chunkSeq,
+        chunkId: chunkId,
+      ));
       ref.read(apiClientProvider).syncReadingProgress(
             widget.documentId,
             chunkSeq,
@@ -528,6 +549,13 @@ class _ReaderScreenState extends ConsumerState<ReaderScreen>
         final chunk = _readingChunkAt(index, _currentFeed);
         final chunkSeq = chunk?.sequence;
         final chunkId = chunk?.id;
+        if (chunkSeq != null) {
+          unawaited(_bookRepo.saveReadingPosition(
+            widget.documentId,
+            chunkSeq: chunkSeq,
+            chunkId: chunkId,
+          ));
+        }
         unawaited(SharedPreferences.getInstance().then((prefs) {
           prefs.setInt('reader_pos_${widget.documentId}', index);
           if (chunkId != null) {
@@ -709,6 +737,46 @@ class _ReaderScreenState extends ConsumerState<ReaderScreen>
               _syncData(data);
             }
             final feedItems = _cachedFeedItems;
+            if (feedItems.isEmpty) {
+              return Center(
+                child: Container(
+                  margin: const EdgeInsets.symmetric(horizontal: 24, vertical: 36),
+                  padding: const EdgeInsets.all(24),
+                  decoration: BoxDecoration(
+                    color: theme.innerCardColor,
+                    borderRadius: BorderRadius.circular(12),
+                    border: Border.all(color: theme.borderColor),
+                  ),
+                  child: Column(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      Icon(Icons.menu_book_outlined, size: 44, color: theme.accentColor),
+                      const SizedBox(height: 16),
+                      Text(
+                        'No Readable Content Found',
+                        style: TextStyle(
+                          fontFamily: _fontFamily,
+                          fontSize: 18,
+                          fontWeight: FontWeight.w600,
+                          color: theme.textColor,
+                        ),
+                      ),
+                      const SizedBox(height: 8),
+                      Text(
+                        'This document has no extracted chunks or processing is still finalizing.',
+                        textAlign: TextAlign.center,
+                        style: TextStyle(color: theme.textMutedColor, fontSize: 13),
+                      ),
+                      const SizedBox(height: 18),
+                      FilledButton.tonal(
+                        onPressed: () => Navigator.of(context).maybePop(),
+                        child: const Text('Back to Library'),
+                      ),
+                    ],
+                  ),
+                ),
+              );
+            }
             final chunks = feedItems.where((it) => it.isReadingChunk).toList();
             if (!_initialPositionResolved &&
                 _preferencesLoaded &&
@@ -787,6 +855,7 @@ class _ReaderScreenState extends ConsumerState<ReaderScreen>
                                   lineHeight: _lineHeight,
                                   bionicFocusEnabled: _bionic,
                                   layoutWarning: data.layoutWarning,
+                                  loadState: ReaderLoadState.ready,
                                   chunkEdits: _chunkEdits,
                                   chunkNotes: _chunkNotes,
                                   onEditSaved: (id, text, note) {
@@ -825,6 +894,7 @@ class _ReaderScreenState extends ConsumerState<ReaderScreen>
                                   lineHeight: _lineHeight,
                                   bionicFocusEnabled: _bionic,
                                   layoutWarning: data.layoutWarning,
+                                  loadState: ReaderLoadState.ready,
                                   chunkEdits: _chunkEdits,
                                   chunkNotes: _chunkNotes,
                                   onEditSaved: (id, text, note) {

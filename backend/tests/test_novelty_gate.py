@@ -1,5 +1,5 @@
 import pytest
-from app.services.edge_ai import evaluate_card_novelty
+from app.services.edge.novelty import evaluate_card_novelty
 
 
 def test_novelty_gate_blocks_banned_generic_phrases():

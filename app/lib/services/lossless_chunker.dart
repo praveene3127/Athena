@@ -1844,10 +1844,11 @@ class LosslessChunker {
       }
       final rawText = canonicalText.substring(start, end);
       final seq = initialSequence + i;
+      final padWidth = (seq >= 10000) ? 6 : 4;
       final pages = _pagesForSpan(start, end, spans);
       final firstPage = pages.isNotEmpty ? pages.first : 1;
       result.add({
-        'id': '$documentId-c${seq.toString().padLeft(4, '0')}',
+        'id': '$documentId-c${seq.toString().padLeft(padWidth, '0')}',
         'document_id': documentId,
         'sequence': seq,
         'page_start': firstPage,

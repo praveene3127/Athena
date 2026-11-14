@@ -20,6 +20,7 @@ class Document(SQLModel, table=True):
     error_code: Optional[str] = None
     error_message: Optional[str] = None
     page_count: int = Field(default=0)
+    processed_page: int = Field(default=0)
 
     # Text layer & integrity
     canonical_text: Optional[str] = None

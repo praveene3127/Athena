@@ -18,10 +18,29 @@ class SegmentationPolicy {
   static const int minWords = 35;
   static const int maxWords = 65;
   static const int preferredMaxChars = 380;
-
-  // Soft targets (adaptable based on body-text statistics)
-  // These are computed per-document, not hardcoded
   static const int defaultTargetWords = 50;
+  static const int chunkIdPadWidth = 6;
+
+  // Document states according to canonical athena-contract.json
+  static const List<String> documentStates = [
+    'queued',
+    'processing',
+    'partially_readable',
+    'paused',
+    'interrupted',
+    'ready',
+    'failed',
+    'unsupported',
+    'deleted',
+  ];
+
+  static const String methodChannel = 'athena/foreground_ingestion';
+  static const List<String> methodChannelMethods = [
+    'startForegroundService',
+    'updateForegroundProgress',
+    'stopForegroundService',
+    'requestNotificationPermission',
+  ];
   static const int minTargetWords = 48;
   static const int maxTargetWords = 64;
 
@@ -63,8 +82,8 @@ class SegmentationPolicy {
   };
 
   // Version for migration tracking
-  static const String version = 'segmentation-v2';
-  static const String offsetProtocol = 'utf8-byte-v2';
+  static const String version = 'segmentation-v3';
+  static const String offsetProtocol = 'utf8-byte-v3';
 
   /// Standard sentence candidate regex conforming to the Golden Rule
   static final RegExp sentenceRegex = RegExp(

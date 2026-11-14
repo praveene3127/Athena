@@ -77,6 +77,39 @@ const _stageDetails = [
   ),
 ];
 
+const _mobileStageDetails = [
+  StageInfo(
+    key: 'copying',
+    title: 'Copying file',
+    description: 'Persisting document and computing SHA-256 identity',
+    icon: Icons.file_copy_rounded,
+  ),
+  StageInfo(
+    key: 'profiling',
+    title: 'Profiling layout',
+    description: 'Analyzing page dimensions, margins, and font properties',
+    icon: Icons.aspect_ratio_rounded,
+  ),
+  StageInfo(
+    key: 'extracting',
+    title: 'Extracting & chunking pages',
+    description: 'Lossless text extraction and bounded-chunk generation',
+    icon: Icons.text_snippet_rounded,
+  ),
+  StageInfo(
+    key: 'verifying',
+    title: 'Verifying SHA-256 integrity',
+    description: 'Ensuring byte-exact verbatim reconstruction',
+    icon: Icons.verified_user_rounded,
+  ),
+  StageInfo(
+    key: 'done',
+    title: 'Ready',
+    description: 'Source text preserved verbatim. Reading ready.',
+    icon: Icons.menu_book_rounded,
+  ),
+];
+
 class ProcessingScreen extends ConsumerStatefulWidget {
   final String documentId;
   const ProcessingScreen({super.key, required this.documentId});
@@ -187,31 +220,52 @@ class _ProcessingScreenState extends ConsumerState<ProcessingScreen>
     }
   }
 
-  Future<void> _retry() async {
+  Future<void> _retry({bool redoFromScratch = false}) async {
     setState(() => _isRetrying = true);
     try {
       final client = ref.read(apiClientProvider);
-      await client.retryDocument(widget.documentId);
+      await client.retryDocument(widget.documentId,
+          redoFromScratch: redoFromScratch);
       _pollTimer?.cancel();
       _startPolling();
     } on AppError catch (e) {
       if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text(e.message), backgroundColor: Colors.redAccent),
-        );
+        showAthenaError(context, e);
       }
     } catch (e) {
       if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(
-            content: Text(
-                'Could not retry this book. Check the backend and try again.'),
-            backgroundColor: Colors.redAccent,
-          ),
-        );
+        showAthenaError(context, 'Could not retry this book. Check the backend and try again.');
       }
     } finally {
       if (mounted) setState(() => _isRetrying = false);
+    }
+  }
+
+  Future<void> _confirmRedo() async {
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text('Redo from page 1?'),
+        content: const Text(
+          'This will clear previously extracted pages and restart ingestion from the beginning.',
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(ctx).pop(false),
+            child: const Text('Cancel'),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.of(ctx).pop(true),
+            style: FilledButton.styleFrom(
+              backgroundColor: Colors.redAccent,
+            ),
+            child: const Text('Redo from page 1'),
+          ),
+        ],
+      ),
+    );
+    if (confirmed == true && mounted) {
+      await _retry(redoFromScratch: true);
     }
   }
 
@@ -249,9 +303,25 @@ class _ProcessingScreenState extends ConsumerState<ProcessingScreen>
     }
   }
 
+  List<StageInfo> get _currentStages =>
+      AppConfig.isStandaloneMobile ? _mobileStageDetails : _stageDetails;
+
   int _currentStageIndex() {
-    final stage = _status?.stage ?? 'validating';
-    final idx = _stageDetails.indexWhere((s) => s.key == stage);
+    final stages = _currentStages;
+    final stage = _status?.stage ??
+        (AppConfig.isStandaloneMobile ? 'copying' : 'validating');
+    if (AppConfig.isStandaloneMobile) {
+      if (stage == 'copying' || stage == 'validating' || stage == 'queued') {
+        return 0;
+      }
+      if (stage == 'profiling') return 1;
+      if (stage == 'extracting' || stage == 'chunking' || stage == 'cleaning') {
+        return 2;
+      }
+      if (stage == 'verifying') return 3;
+      if (stage == 'done' || stage == 'ready') return 4;
+    }
+    final idx = stages.indexWhere((s) => s.key == stage);
     return idx >= 0 ? idx : 0;
   }
 
@@ -264,6 +334,17 @@ class _ProcessingScreenState extends ConsumerState<ProcessingScreen>
     final isDone = isReady;
     final isFailed = _status?.isFailed ?? false;
     final isUnsupported = _status?.isUnsupported ?? false;
+    final isPaused = _status?.isPaused ?? false;
+    final isInterrupted = _status?.isInterrupted ?? false;
+    final isResumable = isPaused ||
+        isInterrupted ||
+        (isFailed &&
+            ((_status?.lastCheckpointPage ?? 0) > 0 ||
+                (_status?.processedPage ?? 0) > 0));
+    final processedPage = (_status?.lastCheckpointPage != null &&
+            _status!.lastCheckpointPage > 0)
+        ? _status!.lastCheckpointPage
+        : (_status?.processedPage ?? 0);
 
     if (isUnsupported && _status != null) {
       return Scaffold(
@@ -511,7 +592,7 @@ class _ProcessingScreenState extends ConsumerState<ProcessingScreen>
                                 ? 'Your paper is ready to read.'
                                 : isFailed
                                     ? 'Could not finish processing this paper.'
-                                    : _stageDetails[stageIdx].title,
+                                    : _currentStages[stageIdx.clamp(0, _currentStages.length - 1)].title,
                             style: TextStyle(
                               fontFamily: 'DM Serif Display',
                               color: AppTheme.textPrimaryOf(context),
@@ -544,9 +625,9 @@ class _ProcessingScreenState extends ConsumerState<ProcessingScreen>
                   Expanded(
                     child: ListView.builder(
                       padding: const EdgeInsets.only(top: 6, bottom: 16),
-                      itemCount: _stageDetails.length,
+                      itemCount: _currentStages.length,
                       itemBuilder: (ctx, i) {
-                        final stage = _stageDetails[i];
+                        final stage = _currentStages[i];
                         final isActive = i == stageIdx && !isDone && !isFailed;
                         final isComplete = isReady || (!isDone && i < stageIdx);
                         final isFailedHere = i == stageIdx && isFailed;
@@ -862,9 +943,80 @@ class _ProcessingScreenState extends ConsumerState<ProcessingScreen>
                         ),
                       ),
                     )
+                  else if (isResumable)
+                    Column(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        InkWell(
+                          onTap: _isRetrying
+                              ? null
+                              : () => _retry(redoFromScratch: false),
+                          borderRadius: BorderRadius.circular(24),
+                          child: Container(
+                            width: double.infinity,
+                            height: 54,
+                            padding: const EdgeInsets.symmetric(horizontal: 20),
+                            decoration: BoxDecoration(
+                              color: const Color(0xFF005E54),
+                              borderRadius: BorderRadius.circular(24),
+                              boxShadow: [
+                                BoxShadow(
+                                  color: const Color(0xFF005E54)
+                                      .withValues(alpha: 0.22),
+                                  blurRadius: 14,
+                                  offset: const Offset(0, 4),
+                                ),
+                              ],
+                            ),
+                            child: Row(
+                              mainAxisAlignment: MainAxisAlignment.center,
+                              children: [
+                                Text(
+                                  _isRetrying
+                                      ? 'Resuming Processing…'
+                                      : 'Continue from page $processedPage',
+                                  style: const TextStyle(
+                                    color: Colors.white,
+                                    fontSize: 15,
+                                    fontWeight: FontWeight.w700,
+                                    letterSpacing: 0.2,
+                                  ),
+                                ),
+                                const SizedBox(width: 12),
+                                Container(
+                                  width: 30,
+                                  height: 30,
+                                  decoration: BoxDecoration(
+                                    color: Colors.white.withValues(alpha: 0.2),
+                                    shape: BoxShape.circle,
+                                  ),
+                                  child: const Icon(
+                                    Icons.play_arrow_rounded,
+                                    size: 18,
+                                    color: Colors.white,
+                                  ),
+                                ),
+                              ],
+                            ),
+                          ),
+                        ),
+                        const SizedBox(height: 8),
+                        TextButton(
+                          onPressed: _isRetrying ? null : _confirmRedo,
+                          child: Text(
+                            'Redo from page 1',
+                            style: TextStyle(
+                              color: isDark ? Colors.white70 : AppTheme.textMuted,
+                              fontSize: 13,
+                              fontWeight: FontWeight.w600,
+                            ),
+                          ),
+                        ),
+                      ],
+                    )
                   else if (isFailed)
                     InkWell(
-                      onTap: _isRetrying ? null : _retry,
+                      onTap: _isRetrying ? null : () => _retry(redoFromScratch: true),
                       borderRadius: BorderRadius.circular(24),
                       child: Container(
                         width: double.infinity,

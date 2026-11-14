@@ -11,7 +11,7 @@
   <img src="https://img.shields.io/badge/Rust_Core-PyO3%20%7C%20Rayon-DEA584?logo=rust&logoColor=white" alt="Rust Core" />
   <img src="https://img.shields.io/badge/Zero--JSON-Binary%20Book%20Tape-8B5CF6" alt="Binary Book Tape" />
   <img src="https://img.shields.io/badge/SHA--256-Lossless%20Canonical-10B981" alt="Lossless Canonical" />
-  <img src="https://img.shields.io/badge/Tests-175%20passing-brightgreen" alt="Tests" />
+  <img src="https://img.shields.io/badge/Tests-216%20passing-brightgreen" alt="Tests" />
   <a href="LICENSE"><img src="https://img.shields.io/badge/License-GPLv3-blue.svg" alt="License: GPL v3" /></a>
 </p>
 
@@ -325,8 +325,8 @@ Athena/
 │   │   │   ├── saved/                   # Starred quotes, bookmarks & marginalia vault
 │   │   │   └── settings/                # BYOKSettingsSheet (live model discovery)
 │   │   ├── models/                      # Document, Chunk, and ContextCard schemas
-│   │   └── services/                    # LocalDatabase (SQLite FTS5), BinaryBookTape, SimHash
-│   ├── test/                            # 12 comprehensive Flutter unit & widget test suites
+│   │   └── services/                    # BookRepository, LocalDatabase (SQLite FTS5), RustEngineBridge
+│   ├── test/                            # 24 Flutter unit, widget, and contract conformance test suites
 │   ├── web/index.html                   # Standalone Web & PWA configuration & meta tags
 │   └── pubspec.yaml                     # Flutter dependencies
 │
@@ -335,16 +335,20 @@ Athena/
 │   │   ├── routers/                     # REST endpoints (documents, cards, ask, settings, updates)
 │   │   ├── services/
 │   │   │   ├── edge/                    # Document Bouncer, Shannon Hygiene & Novelty Gate
-│   │   │   ├── ingestion/               # Lossless chunker & PDF block parsing
-│   │   │   ├── marginalia/              # Academic evidence fetchers, card synthesis & prompts
-│   │   │   └── edge_ai.py               # ONNX runtime embedder & cosine similarity
+│   │   │   ├── ingestion/               # Lossless chunker, PDF block parsing, repairs, triage
+│   │   │   └── marginalia/              # Academic evidence fetchers, card synthesis & live LLM
 │   │   ├── db.py                        # SQLModel SQLite database engine
+│   │   ├── models.py                    # Schema definitions (documents, chunks, cards, positions)
+│   │   ├── security.py                  # Fail-closed secret encryption & network security
 │   │   └── main.py                      # FastAPI application & static Flutter SPA mount
-│   ├── rust_core/                       # Pure Rust text processing engine (PyO3)
+│   ├── rust_core/                       # High-performance Rust text processing engine (PyO3)
 │   │   ├── Cargo.toml                   # Rayon, Aho-Corasick, Regex, Serde, SHA-2
-│   │   └── src/lib.rs                   # De-hyphenation, SimHash, and Binary Tape (ATHN)
-│   ├── tests/                           # Backend pytest suite (74 tests)
-│   └── requirements.txt                 # Backend Python dependencies
+│   │   └── src/                         # chunker.rs, ffi_api.rs, sqlite_store.rs, lib.rs
+│   ├── tests/                           # Backend pytest suite (90 tests)
+│   └── requirements.txt                 # Backend Python production dependencies
+│
+├── contracts/                           # Single canonical cross-language contract
+│   └── athena-contract.json             # Enforced across Python, Dart, Kotlin, and Rust
 │
 ├── releases/                            # Distribution release binaries
 │   └── athena-release.apk               # Verified production Android APK
@@ -353,10 +357,12 @@ Athena/
 │   ├── run_athena.py                    # Unified supervisor (FastAPI + LAN IP discovery)
 │   ├── run_athena.sh                    # Bash supervisor for macOS / Linux
 │   ├── start_athena.bat                 # 1-Click Windows launcher
-│   ├── strict_goal_judge.py             # Strict 8-gate architectural invariant evaluator
-│   └── verify_release.py                # Release binary integrity verifier
+│   └── verify_release.py                # Release binary integrity & gate verifier
 │
 └── docs/                                # Architectural Decision Records & Specifications
+    ├── ARCHITECTURE.md                  # Dual-Mode Architecture & Layer Isolation (L1-L7)
+    ├── CHANGELOG.md                     # Semantic version release history
+    └── DECISIONS.md                     # Architecture Decisions Log & Invariants
 ```
 
 ---
@@ -373,18 +379,27 @@ When running the Companion Engine, the FastAPI server mounts the Flutter Web cli
 | `/api/documents/upload` | `POST` | Multipart PDF/EPUB | `{"document_id": "doc_...", "status": "processing"}` | Uploads book for structural triage and ingestion |
 | `/api/documents/upload-url` | `POST` | `{"url": "https://..."}` | `{"document_id": "doc_...", "status": "processing"}` | Imports document directly from a public URL |
 | `/api/documents/sample` | `POST` | None | `{"document_id": "doc_sample_...", "status": "ready"}`| Seeds sample book for instant reading |
-| `/api/documents/{id}/reader`| `GET` | None | `{"document": {...}, "chunks": [...], "cards": [...]}`| Retrieves lossless chunks and grounded marginalia cards |
+| `/api/documents/{id}/status` | `GET` | None | `{"document_id": "...", "status": "ready", "percent": 100}` | Fetches live extraction progress and checkpoint coordinates |
+| `/api/documents/{id}/resume` | `POST` | None | `{"document_id": "...", "status": "processing"}` | Resumes interrupted book extraction from last committed page |
+| `/api/documents/{id}/events` | `GET` | None | Server-Sent Events (SSE) | Streams real-time ingestion stage and progress updates |
+| `/api/documents/{id}/reader`| `GET` | `?from_seq=1&limit=200` | `{"document": {...}, "chunks": [...], "cards": [...]}`| Windowed retrieval of lossless chunks and grounded marginalia |
 | `/api/documents/{id}/cards/generate` | `POST` | `{"chunk_index": 4}` | `{"status": "ok", "cards": [...]}` | Synthesizes grounded marginalia cards for target chunk |
 | `/api/documents/{id}/chapters` | `GET` | None | `{"chapters": [...]}` | Returns detected structural headings and table of contents |
 | `/api/documents/{id}/vibe-check` | `POST` | `{"chunk_index": 0}` | `{"status": "ok", "archetype": "..."}` | Evaluates epistemic curiosity triggers and conceptual density |
 | `/api/documents/{id}/export-markdown` | `GET` | None | Streams markdown text | Exports full book with verbatim text and inline marginalia |
-| `/api/documents/{id}/tape` | `GET` | None | Streams `.athena.bin` | Streams zero-JSON flat binary book tape buffer |
+| `/api/documents/{id}/tape` | `GET` | Optional `Range: bytes=` | Streams `.athena.bin` | Streams zero-JSON flat binary book tape (supports HTTP 206) |
 | `/api/documents/{id}/search`| `GET` | `?q=...&top_k=8` | `{"document_id": "...", "results": [...]}` | Hybrid search across book (BM25 + Dense + RRF) |
 | `/api/documents/{id}/progress`| `POST` | `{"chunk_index": 42}` | `{"status": "ok"}` | Persists active reading position across devices |
 | `/api/ask` | `POST` | `{"document_id": "...", "chunk_id": "...", "question": "..."}` | `{"answer": "...", "status": "ok"}` | Grounded Q&A against the active passage via configured key |
 | `/api/settings/ai-config` | `GET` | None | `{"primary_provider": "gemini", ...}` | Returns active BYOK configuration |
 | `/api/settings/ai-config` | `POST` | `{"primary_provider": "...", "primary_api_key": "..."}` | `{"status": "saved"}` | Updates primary and fallback AI credentials |
+| `/api/settings/providers` | `GET` | None | `{"providers": [...]}` | Returns list of supported live model providers |
+| `/api/settings/fetch-models` | `POST` | `{"provider": "...", "api_key": "..."}` | `{"models": [...]}` | Dynamically queries provider's live endpoint for available models |
+| `/api/settings/test-connection` | `POST` | `{"provider": "...", "api_key": "..."}` | `{"status": "ok"}` | Validates user API key against upstream endpoint |
 | `/api/cards/quote` | `POST` | `{"document_id": "...", "chunk_id": "...", "quote_text": "..."}` | `{"status": "ok", "card_id": "..."}` | Saves user-highlighted quote as a marginalia card |
+| `/api/cards/{id}/save` | `POST` | None | `{"status": "saved"}` | Stars and bookmarks a marginalia card |
+| `/api/cards/{id}/dismiss` | `POST` | None | `{"status": "dismissed"}` | Hides an unhelpful card from the active reading feed |
+| `/api/cards/{id}/restore` | `POST` | None | `{"status": "restored"}` | Unhides a previously dismissed card |
 | `/api/saved` | `GET` | None | `{"cards": [...]}` | Retrieves saved marginalia cards and highlights |
 | `/api/app-update` | `GET` | `?current_version=1.1.0&platform=android` | `{"update_available": false}` | Checks for client updates |
 | `/api/download/android` | `GET` | None | Streams APK | Downloads latest `Athena-Android.apk` binary |
@@ -394,23 +409,20 @@ When running the Companion Engine, the FastAPI server mounts the Flutter Web cli
 ## 9. Development & Verification Workflow
 
 ```bash
-# Backend pytest suite (74 tests)
+# Backend pytest suite (90 tests)
 pytest backend/tests -q
 
 # Flutter static analysis (0 issues)
-flutter analyze
+cd app && flutter analyze
 
-# Flutter unit & widget test suites (101 tests)
-flutter test
+# Flutter unit & widget test suites (126 tests)
+cd app && flutter test
 
 # Comprehensive 8-Gate Release Verification Suite
 python scripts/verify_release.py
 
-# Strict Architectural Invariant & Monorepo Judge
-python scripts/strict_goal_judge.py
-
 # Build Android production APK
-flutter build apk --release
+cd app && flutter build apk --release
 ```
 
 ---

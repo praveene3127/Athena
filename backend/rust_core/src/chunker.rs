@@ -1,6 +1,14 @@
 use crate::sentence::find_sentence_boundaries;
 use serde::{Deserialize, Serialize};
 
+pub const DEFAULT_TARGET_WORDS: usize = 50;
+pub const MIN_CHUNK_WORDS: usize = 35;
+pub const MAX_CHUNK_WORDS: usize = 65;
+pub const MAX_CHUNK_CHARS: usize = 380;
+pub const CHUNK_ID_PAD_WIDTH: usize = 6;
+pub const SEGMENTATION_VERSION: &str = "segmentation-v3";
+pub const OFFSET_PROTOCOL: &str = "utf8-byte-v3";
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct PlannedChunk {
     pub sequence: usize,

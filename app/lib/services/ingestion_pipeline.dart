@@ -126,6 +126,10 @@ class DocumentIngestionPipeline {
         fileName: fileName,
         filePath: hasPath ? filePath : null,
         fileBytes: hasBytes ? fileBytes : null,
+        startFromPage: startFromPage,
+        initialSequence: initialSequence,
+        initialOffset: initialOffset,
+        initialCarryOver: initialCarryOver,
         watchdogTimeout: watchdogTimeout,
         onProgress: onProgress,
         onBatch: onBatch,
@@ -333,7 +337,7 @@ class DocumentIngestionPipeline {
               reconstructedByteSink.add(utf8.encode(raw));
             }
 
-            if (onBatch != null && (message.batchChunks.isNotEmpty || message.isFinalBatch)) {
+            if (onBatch != null) {
               livenessTimer?.cancel();
               try {
                 await onBatch(
@@ -351,12 +355,27 @@ class DocumentIngestionPipeline {
               }
             }
           } else if (message is _WorkerDoneEvent) {
-            cleanup();
             canonicalByteSink.close();
             reconstructedByteSink.close();
 
-            final canonicalSha256 = canonicalSink.events.single.toString();
-            final reconstructedSha256 = reconstructedSink.events.single.toString();
+            final canonicalSha256 =
+                canonicalSink.events.firstOrNull?.toString() ?? '';
+            final reconstructedSha256 =
+                reconstructedSink.events.firstOrNull?.toString() ?? '';
+
+            if (totalChunkCount == 0) {
+              if (!completer.isCompleted) {
+                completer.completeError(
+                  const AppError(
+                    code: 'EMPTY_DOCUMENT',
+                    message: 'No readable prose found in document.',
+                  ),
+                );
+              }
+              cleanup();
+              return;
+            }
+
             final bool integrityVerified = (canonicalSha256 == reconstructedSha256);
 
             final result = IngestionResult(
@@ -373,12 +392,16 @@ class DocumentIngestionPipeline {
             if (!completer.isCompleted) {
               completer.complete(result);
             }
-          } else if (message is _WorkerErrorEvent) {
             cleanup();
+          } else if (message is _WorkerErrorEvent) {
             final err = AppError(
-              code: 'EXTRACTION_FAILED',
+              code: message.errorCode ?? 'EXTRACTION_FAILED',
               message: message.error,
             );
+            if (!completer.isCompleted) {
+              completer.completeError(err);
+            }
+            cleanup();
             try {
               await LocalDatabase.instance.updateDocumentProgress(
                 docId,
@@ -386,13 +409,10 @@ class DocumentIngestionPipeline {
                 stage: 'failed',
                 stageLabel: message.error,
                 errorMessage: message.error,
-                errorCode: 'EXTRACTION_FAILED',
+                errorCode: message.errorCode ?? 'EXTRACTION_FAILED',
               );
             } catch (e) {
               debugPrint('[Athena Ingestion] DB worker error update notice: $e');
-            }
-            if (!completer.isCompleted) {
-              completer.completeError(err);
             }
           }
         },
@@ -603,12 +623,14 @@ class DocumentIngestionPipeline {
 
         final sampleLinesMap = <int, List<LineFragment>>{};
         int cleanSampleCount = 0;
+        int totalSampleChars = 0;
 
         for (final p in sampleSorted) {
           final pageHeight = pdfDoc.pages[p - 1].size.height;
           final lines = _extractHorizontalGroupedLines(extractor, p - 1, pageHeight: pageHeight);
           sampleLinesMap[p] = lines;
           final rawText = lines.map((l) => l.text).join('\n');
+          totalSampleChars += rawText.trim().length;
           if (rawText.trim().length >= 20 && computePageQuality(rawText).isAcceptable) {
             cleanSampleCount++;
           }
@@ -616,9 +638,17 @@ class DocumentIngestionPipeline {
 
         // a) Scanned PDF detection (< 15% clean in sample)
         if (sampleSorted.isNotEmpty && (cleanSampleCount / sampleSorted.length) < 0.15) {
-          params.sendPort.send(const _WorkerErrorEvent(
-            error: 'No readable text could be extracted from this document. Scanned image-only files are not supported on-device.',
-          ));
+          if (totalSampleChars == 0) {
+            params.sendPort.send(const _WorkerErrorEvent(
+              error: 'No readable prose found in document.',
+              errorCode: 'EMPTY_DOCUMENT',
+            ));
+          } else {
+            params.sendPort.send(const _WorkerErrorEvent(
+              error: 'No readable text could be extracted from this document. Scanned image-only files are not supported on-device.',
+              errorCode: 'UNSUPPORTED_FORMAT',
+            ));
+          }
           return;
         }
 
@@ -2070,14 +2100,22 @@ class DocumentIngestionPipeline {
     required String fileName,
     String? filePath,
     List<int>? fileBytes,
+    int startFromPage = 1,
+    int initialSequence = 1,
+    int initialOffset = 0,
+    String? initialCarryOver,
     Duration watchdogTimeout = const Duration(seconds: 90),
     void Function(double progress, String stageLabel)? onProgress,
     Future<void> Function(
       List<Map<String, Object?>> batchChunks,
       int processedPages,
       int totalPages,
-      bool isFinalBatch,
-    )? onBatch,
+      bool isFinalBatch, {
+      int? lastSequence,
+      int? lastCharOffset,
+      String? carryOverText,
+      String? profileJson,
+    })? onBatch,
   }) async {
     final completer = Completer<IngestionResult>();
     final receivePort = ReceivePort();
@@ -2162,6 +2200,10 @@ class DocumentIngestionPipeline {
           fileName: fileName,
           filePath: filePath,
           bytes: fileBytes,
+          startFromPage: startFromPage,
+          initialSequence: initialSequence,
+          initialOffset: initialOffset,
+          initialCarryOver: initialCarryOver,
           sendPort: receivePort.sendPort,
         ),
         onError: errorPort.sendPort,
@@ -2182,7 +2224,7 @@ class DocumentIngestionPipeline {
               if (fullCanonical.isNotEmpty) fullCanonical.write('\n\n');
               fullCanonical.write(message.batchCanonicalText);
             }
-            if (onBatch != null && message.batchChunks.isNotEmpty) {
+            if (onBatch != null) {
               watchdogTimer?.cancel();
               try {
                 await onBatch(
@@ -2190,6 +2232,10 @@ class DocumentIngestionPipeline {
                   message.processedPages,
                   message.totalPages,
                   message.isFinalBatch,
+                  lastSequence: message.lastSequence,
+                  lastCharOffset: message.lastCharOffset,
+                  carryOverText: message.carryOverText,
+                  profileJson: message.profileJson,
                 );
               } finally {
                 resetWatchdog();
@@ -2226,11 +2272,14 @@ class DocumentIngestionPipeline {
               completer.complete(result);
             }
           } else if (message is _WorkerErrorEvent) {
-            cleanup();
             final err = AppError(
-              code: 'EXTRACTION_FAILED',
+              code: message.errorCode ?? 'EXTRACTION_FAILED',
               message: message.error,
             );
+            if (!completer.isCompleted) {
+              completer.completeError(err);
+            }
+            cleanup();
             try {
               await LocalDatabase.instance.updateDocumentProgress(
                 docId,
@@ -2238,13 +2287,10 @@ class DocumentIngestionPipeline {
                 stage: 'failed',
                 stageLabel: message.error,
                 errorMessage: message.error,
-                errorCode: 'EXTRACTION_FAILED',
+                errorCode: message.errorCode ?? 'EXTRACTION_FAILED',
               );
             } catch (e) {
               debugPrint('[Athena Ingestion] DB worker error update notice: $e');
-            }
-            if (!completer.isCompleted) {
-              completer.completeError(err);
             }
           }
         },
@@ -2373,9 +2419,16 @@ class DocumentIngestionPipeline {
 
       final buffer = StringBuffer();
       final spans = <Map<String, dynamic>>[];
-      int readableSectionCount = 0;
+      final startSpineIndex =
+          params.startFromPage > 1 ? params.startFromPage - 1 : 0;
+      int readableSectionCount = startSpineIndex;
 
-      for (int idx = 0; idx < totalSections; idx++) {
+      if (params.initialCarryOver != null &&
+          params.initialCarryOver!.isNotEmpty) {
+        buffer.write(params.initialCarryOver!);
+      }
+
+      for (int idx = startSpineIndex; idx < totalSections; idx++) {
         final itemRef = itemRefs[idx];
         if ((itemRef.getAttribute('linear') ?? '').toLowerCase() == 'no') continue;
         final idref = itemRef.getAttribute('idref');
@@ -2478,14 +2531,24 @@ class DocumentIngestionPipeline {
         documentId: params.docId,
         canonicalText: canonicalStr,
         spans: spans,
+        initialSequence: params.initialSequence,
+        offsetDelta: params.initialOffset,
       );
+
+      final lastSeq = allChunks.isNotEmpty
+          ? (allChunks.last['sequence'] as num?)?.toInt() ??
+              params.initialSequence
+          : params.initialSequence;
+      final lastOffset = params.initialOffset + canonicalStr.length;
 
       params.sendPort.send(_WorkerBatchEvent(
         batchChunks: allChunks,
         batchCanonicalText: canonicalStr,
         processedPages: readableSectionCount,
-        totalPages: readableSectionCount,
+        totalPages: totalSections,
         isFinalBatch: true,
+        lastSequence: lastSeq,
+        lastCharOffset: lastOffset,
       ));
 
       params.sendPort.send(_WorkerDoneEvent(
@@ -3020,6 +3083,10 @@ class _EpubWorkerParams {
   final String? filePath;
   final List<int>? bytes;
   final SendPort sendPort;
+  final int startFromPage;
+  final int initialSequence;
+  final int initialOffset;
+  final String? initialCarryOver;
 
   const _EpubWorkerParams({
     required this.docId,
@@ -3027,6 +3094,10 @@ class _EpubWorkerParams {
     this.filePath,
     this.bytes,
     required this.sendPort,
+    this.startFromPage = 1,
+    this.initialSequence = 1,
+    this.initialOffset = 0,
+    this.initialCarryOver,
   });
 }
 
@@ -3082,8 +3153,9 @@ class _WorkerDoneEvent {
 
 class _WorkerErrorEvent {
   final String error;
+  final String? errorCode;
 
-  const _WorkerErrorEvent({required this.error});
+  const _WorkerErrorEvent({required this.error, this.errorCode});
 }
 
 

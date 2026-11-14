@@ -35,7 +35,7 @@ from app.config import (
 )
 from app.db import engine
 from app.models import Concept, ConceptCache, ContextCard, ReadingChunk
-from app.services.edge_ai import (
+from app.services.edge.novelty import (
     evaluate_card_novelty,
     compute_semantic_similarity,
     is_semantic_duplicate,

@@ -13,7 +13,7 @@ from app.models import (
     ReadingChunk,
     ReadingState,
 )
-from app.services.pipeline import ReadAheadPipeline
+from app.services.marginalia.pipeline import ReadAheadPipeline
 
 
 def _clean_doc(doc_id: str):
@@ -210,7 +210,7 @@ def test_export_markdown_endpoint():
 
 
 def test_shadow_quote_matching():
-    from app.services.cards import verify_and_anchor_quote, find_exact_quote
+    from app.services.marginalia.cards import find_exact_quote, verify_and_anchor_quote
 
     # Passage with pristine curly quotes and em-dash
     passage = "In cognitive psychology, the “mind—body dualism” explains how consciousness operates."

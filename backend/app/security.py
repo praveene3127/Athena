@@ -34,9 +34,14 @@ def _get_encryption_key() -> bytes:
         DATA_DIR.mkdir(parents=True, exist_ok=True)
         temp_file = _SECRET_FILE.with_suffix(f".tmp.{secrets.token_hex(6)}")
         temp_file.write_bytes(new_key)
+        if hasattr(os, "chmod"):
+            try:
+                os.chmod(temp_file, 0o600)
+            except OSError:
+                pass
         os.replace(temp_file, _SECRET_FILE)
-    except Exception:
-        pass
+    except Exception as e:
+        raise RuntimeError(f"Failed to persist encryption master key: {e}") from e
     return new_key
 
 

@@ -88,14 +88,17 @@ def test_cards_no_undefined_wiki_data():
     assert "wiki_data" not in content, "Found undefined 'wiki_data' in cards.py"
 
 
-def test_rust_core_no_backreferences_and_valid_source():
-    """Verify Rust core regex has no backreferences like \\1 that panic LazyLock."""
-    rust_src = Path(__file__).resolve().parent.parent / "rust_core" / "src" / "lib.rs"
-    if rust_src.exists():
-        content = rust_src.read_text(encoding="utf-8")
-        # Check no regex has \1 backreference
-        assert r"\1" not in content, "Rust core must not use regex backreferences"
-        assert "char_to_byte" in content, "Rust core must use byte boundary mapping"
+def test_rust_core_runtime_or_contract():
+    """Real runtime test that imports athena_rust_core (when compiled) or verifies contract conformance."""
+    try:
+        import athena_rust_core
+        assert hasattr(athena_rust_core, "rust_encode_binary_tape")
+        tape = athena_rust_core.rust_encode_binary_tape(["Hello", "World"], [1, 1], [0, 0])
+        assert tape is not None
+        assert len(tape) > 0
+    except ImportError:
+        from tests.test_contract_conformance import test_rust_chunker_matches_contract
+        test_rust_chunker_matches_contract()
 
 
 def test_dummy_ipa_removed_and_ci_documented():

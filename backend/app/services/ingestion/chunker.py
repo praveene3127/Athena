@@ -526,7 +526,7 @@ def chunk_document(
     previous_end = 0
     for seq_idx, (atom_start, atom_end) in enumerate(ranges):
         seq = seq_idx + 1
-        chunk_id = f"{doc_id}-c{seq:04d}"
+        chunk_id = f"{doc_id}-c{seq:06d}"
         first_atom = atoms[atom_start]
         last_atom = atoms[atom_end - 1]
         c_start = first_atom["start"]

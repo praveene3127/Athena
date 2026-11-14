@@ -5,8 +5,8 @@ from sqlmodel import Session, select
 from app.db import engine, init_db
 from app.main import app
 from app.models import AISettings
-from app.services.llm import LLMService
-from app.services.providers import fetch_provider_models, _parse_models_response, PROVIDER_CONFIGS
+from app.services.marginalia.llm import LLMService
+from app.services.marginalia.providers import fetch_provider_models, _parse_models_response, PROVIDER_CONFIGS
 
 
 @pytest.fixture(autouse=True)

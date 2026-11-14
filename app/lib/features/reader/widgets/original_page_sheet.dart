@@ -1,4 +1,3 @@
-import 'dart:convert';
 import 'package:flutter/material.dart';
 import 'package:athena/core/config/config.dart';
 import 'package:athena/core/theme/theme.dart';
@@ -190,37 +189,18 @@ class OriginalPageSheet extends StatelessWidget {
 
   Widget _buildOfflinePageContent(BuildContext context, bool isDark) {
     return FutureBuilder<List<Map<String, dynamic>>>(
-      future: LocalDatabase.instance.getChunks(documentId),
+      future: LocalDatabase.instance.getChunksForPage(documentId, pageNumber),
       builder: (context, snapshot) {
         if (snapshot.connectionState == ConnectionState.waiting) {
           return const Center(child: CircularProgressIndicator());
         }
-        final chunks = snapshot.data ?? [];
-        final pageChunks = chunks.where((c) {
-          final pStart = (c['page_start'] as num?)?.toInt() ??
-              (c['page_number'] as num?)?.toInt();
-          if (pStart != null && pStart == pageNumber) {
-            return true;
-          }
-          final sourcePagesJson = c['source_pages_json'] as String?;
-          if (sourcePagesJson != null && sourcePagesJson.isNotEmpty) {
-            try {
-              final pages = jsonDecode(sourcePagesJson) as List;
-              return pages.contains(pageNumber);
-            } catch (e) {
-              debugPrint('OriginalPageSheet source_pages_json parse fallback: $e');
-            }
-          }
-          return false;
-        }).toList();
+        final pageChunks = snapshot.data ?? [];
 
         final displayText = pageChunks.isNotEmpty
             ? pageChunks
                 .map((c) => c['raw_text']?.toString() ?? '')
                 .join('\n\n')
-            : (chunks.isNotEmpty
-                ? 'Page text preserved in local archive for $pageReference.'
-                : 'Page content preserved locally.');
+            : 'Page content preserved locally for $pageReference.';
 
         return Container(
           padding: const EdgeInsets.all(24.0),

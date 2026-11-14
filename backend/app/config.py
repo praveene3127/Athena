@@ -52,6 +52,27 @@ TARGET_CHUNK_WORDS: int = 50
 MIN_CHUNK_WORDS: int = 35
 MAX_CHUNK_WORDS: int = 65
 MAX_CHUNK_CHARS: int = 380
+CHUNK_ID_PAD_WIDTH: int = 6
+SEGMENTATION_VERSION: str = "segmentation-v3"
+OFFSET_PROTOCOL: str = "utf8-byte-v3"
+DOCUMENT_STATES: list[str] = [
+    "queued",
+    "processing",
+    "partially_readable",
+    "paused",
+    "interrupted",
+    "ready",
+    "failed",
+    "unsupported",
+    "deleted",
+]
+METHOD_CHANNEL_NAME: str = "athena/foreground_ingestion"
+METHOD_CHANNEL_METHODS: list[str] = [
+    "startForegroundService",
+    "updateForegroundProgress",
+    "stopForegroundService",
+    "requestNotificationPermission",
+]
 MARGIN_FRACTION: float = 0.07
 
 # Card Generation - Warm Start Budget (initial batch at ingestion time)
@@ -72,7 +93,7 @@ MIN_CHUNK_GAP_BETWEEN_CARDS: int = WARM_START_CHUNK_GAP
 MAX_WIKI_LOOKUPS_PER_DOC: int = WARM_START_WIKI_LOOKUPS
 
 CARD_MAX_WORDS: int = 80
-ASK_MAX_QUESTION_CHARS: int = 300
+ASK_MAX_QUESTION_CHARS: int = 2000
 ASK_MAX_ANSWER_WORDS: int = 120
 WIKI_TIMEOUT_S: float = 8.0
 LLM_TIMEOUT_S: float = 20.0
@@ -95,9 +116,13 @@ WIKI_CACHE_DIR: Path = CACHE_DIR / "wiki"
 FASTEMBED_CACHE_DIR: Path = CACHE_DIR / "fastembed"
 DB_PATH: Path = DATA_DIR / "athena.db"
 
-# Ensure runtime directories exist
-for path in (DATA_DIR, UPLOADS_DIR, RAW_DIR, CACHE_DIR, WIKI_CACHE_DIR, FASTEMBED_CACHE_DIR):
-    path.mkdir(parents=True, exist_ok=True)
+def ensure_runtime_dirs() -> None:
+    """Creates runtime storage directories (called during FastAPI startup)."""
+    for path in (DATA_DIR, UPLOADS_DIR, RAW_DIR, CACHE_DIR, WIKI_CACHE_DIR, FASTEMBED_CACHE_DIR):
+        path.mkdir(parents=True, exist_ok=True)
+
+# Ensure runtime directories exist on import as graceful fallback
+ensure_runtime_dirs()
 
 # --- Environment Configuration Aliases ---
 LLM_API_KEY: Optional[str] = settings.LLM_API_KEY

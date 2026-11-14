@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:athena/core/theme/theme.dart';
 
 class ReaderThemeConfig {
   final String id;
@@ -32,73 +33,95 @@ class ReaderThemeConfig {
   static const ReaderThemeConfig paper = ReaderThemeConfig(
     id: 'paper',
     name: 'Paper',
-    scaffoldBackground: Color(0xFFF6F3EC), // Warm archival paper
-    outerCardColor: Color(0xFFEFECE2),
-    innerCardColor: Color(0xFFFCFBF7), // Crisp archival card surface
-    borderColor: Color(0xFFE2DEC9), // 1px stone border
-    textColor: Color(0xFF1A1917), // Deep charcoal ink
-    textMutedColor: Color(0xFF6B665E),
-    accentColor: Color(0xFF005E54),
-    pillBackground: Color(0xFFEFECE2),
-    pillText: Color(0xFF005E54),
+    scaffoldBackground: Color(0xFFFBF9F5),
+    outerCardColor: Color(0xFFF2EFE9),
+    innerCardColor: Color(0xFFFFFFFF),
+    borderColor: Color(0xFFE6E1D6),
+    textColor: Color(0xFF161615),
+    textMutedColor: Color(0xFF6E6E6B),
+    accentColor: Color(0xFF2D6A4F),
+    pillBackground: Color(0xFFF2EFE9),
+    pillText: Color(0xFF2D6A4F),
     isDark: false,
   );
 
   static const ReaderThemeConfig sepia = ReaderThemeConfig(
     id: 'sepia',
     name: 'Sepia',
-    scaffoldBackground: Color(0xFFF2ECE1),
-    outerCardColor: Color(0xFFE8DFCE),
-    innerCardColor: Color(0xFFF9F5EC),
-    borderColor: Color(0xFFD8CCB5),
-    textColor: Color(0xFF382C1E),
-    textMutedColor: Color(0xFF7D6B58),
-    accentColor: Color(0xFF7A4E1D),
-    pillBackground: Color(0xFFE8DFCE),
-    pillText: Color(0xFF7A4E1D),
+    scaffoldBackground: Color(0xFFF4ECD8),
+    outerCardColor: Color(0xFFEAE0C8),
+    innerCardColor: Color(0xFFFAF4E4),
+    borderColor: Color(0xFFDCD0B8),
+    textColor: Color(0xFF2C221E),
+    textMutedColor: Color(0xFF6E5D53),
+    accentColor: Color(0xFF8C4A27),
+    pillBackground: Color(0xFFEAE0C8),
+    pillText: Color(0xFF8C4A27),
     isDark: false,
   );
 
-  static const ReaderThemeConfig night = ReaderThemeConfig(
-    id: 'night',
-    name: 'Night',
-    scaffoldBackground: Color(0xFF0D0E11), // Deep ink
-    outerCardColor: Color(0xFF111317),
-    innerCardColor: Color(0xFF14161B), // Crisp dark card surface
-    borderColor: Color(0xFF262932), // Hairline border
-    textColor: Color(0xFFE5E7EB),
-    textMutedColor: Color(0xFF9CA3AF),
-    accentColor: Color(0xFF2DD4BF),
-    pillBackground: Color(0xFF1E2129),
-    pillText: Color(0xFF2DD4BF),
+  static const ReaderThemeConfig charcoal = ReaderThemeConfig(
+    id: 'charcoal',
+    name: 'Charcoal',
+    scaffoldBackground: Color(0xFF121316),
+    outerCardColor: Color(0xFF22252A),
+    innerCardColor: Color(0xFF1A1C20),
+    borderColor: Color(0xFF2A2E35),
+    textColor: Color(0xFFECEAE4),
+    textMutedColor: Color(0xFF9CA0A8),
+    accentColor: Color(0xFF34D399),
+    pillBackground: Color(0xFF22252A),
+    pillText: Color(0xFF34D399),
     isDark: true,
   );
 
-  static const ReaderThemeConfig obsidian = ReaderThemeConfig(
-    id: 'obsidian',
-    name: 'Obsidian',
-    scaffoldBackground: Color(0xFF070709),
-    outerCardColor: Color(0xFF0D0E11),
-    innerCardColor: Color(0xFF14161B),
-    borderColor: Color(0xFF262932),
-    textColor: Color(0xFFEDEDED),
-    textMutedColor: Color(0xFF888888),
-    accentColor: Color(0xFF2DD4BF),
-    pillBackground: Color(0xFF181A20),
-    pillText: Color(0xFF2DD4BF),
+  static const ReaderThemeConfig oled = ReaderThemeConfig(
+    id: 'oled',
+    name: 'OLED',
+    scaffoldBackground: Color(0xFF000000),
+    outerCardColor: Color(0xFF121215),
+    innerCardColor: Color(0xFF0A0A0C),
+    borderColor: Color(0xFF1F1F24),
+    textColor: Color(0xFFF5F5F0),
+    textMutedColor: Color(0xFF8E8E93),
+    accentColor: Color(0xFF34D399),
+    pillBackground: Color(0xFF121215),
+    pillText: Color(0xFF34D399),
     isDark: true,
   );
 
-  static const List<ReaderThemeConfig> all = [paper, sepia, night, obsidian];
+  static ReaderThemeConfig get night => charcoal;
+  static ReaderThemeConfig get obsidian => oled;
 
-  static ReaderThemeConfig getById(String id) {
+  static const List<ReaderThemeConfig> all = [paper, sepia, charcoal, oled];
+  static const List<ReaderThemeConfig> defaults = all;
+
+  static ReaderThemeConfig fromId(String id) => getById(id);
+
+  AthenaAppearance toAppearance() {
     switch (id) {
       case 'sepia':
+        return AthenaAppearance.sepia;
+      case 'charcoal':
+        return AthenaAppearance.charcoal;
+      case 'oled':
+        return AthenaAppearance.oled;
+      case 'paper':
+      default:
+        return AthenaAppearance.paper;
+    }
+  }
+
+  static ReaderThemeConfig getById(String id) {
+    switch (id.toLowerCase()) {
+      case 'sepia':
         return sepia;
+      case 'charcoal':
       case 'night':
-        return night;
+        return charcoal;
+      case 'oled':
       case 'obsidian':
-        return obsidian;
+        return oled;
       case 'paper':
       default:
         return paper;

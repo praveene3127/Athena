@@ -55,6 +55,8 @@ class Document {
   bool get isFailed => status == 'failed';
   bool get isUnsupported => status == 'unsupported';
   bool get isPartiallyReadable => status == 'partially_readable';
+  bool get isPaused => status == 'paused';
+  bool get isInterrupted => status == 'interrupted';
   bool get isReadable => status == 'ready' || status == 'partially_readable';
   bool get isProcessing => status == 'processing' || status == 'queued' || status == 'partially_readable';
 }
@@ -66,6 +68,9 @@ class DocumentStatus {
   final String stage;
   final String stageLabel;
   final int percent;
+  final int processedPage;
+  final int lastCheckpointPage;
+  final int pageCount;
   final String? errorCode;
   final String? errorMessage;
   final String? contextStatus;
@@ -76,6 +81,9 @@ class DocumentStatus {
     required this.stage,
     required this.stageLabel,
     required this.percent,
+    this.processedPage = 0,
+    this.lastCheckpointPage = 0,
+    this.pageCount = 0,
     this.errorCode,
     this.errorMessage,
     this.contextStatus,
@@ -89,6 +97,9 @@ class DocumentStatus {
       stage: json['stage'] as String? ?? 'validating',
       stageLabel: json['stage_label'] as String? ?? 'Processing...',
       percent: json['percent'] as int? ?? 0,
+      processedPage: (json['processed_page'] as num?)?.toInt() ?? 0,
+      lastCheckpointPage: (json['last_checkpoint_page'] as num?)?.toInt() ?? 0,
+      pageCount: (json['page_count'] as num?)?.toInt() ?? 0,
       errorCode: error?['code'] as String?,
       errorMessage: error?['message'] as String?,
       contextStatus: json['context_status'] as String?,
@@ -99,8 +110,11 @@ class DocumentStatus {
   bool get isFailed => status == 'failed';
   bool get isUnsupported => status == 'unsupported';
   bool get isPartiallyReadable => status == 'partially_readable';
+  bool get isPaused => status == 'paused';
+  bool get isInterrupted => status == 'interrupted';
   bool get isReadable => status == 'ready' || status == 'partially_readable';
-  bool get isDone => isReady || isFailed || isUnsupported;
+  bool get isDone =>
+      isReady || isFailed || isUnsupported || isPaused || isInterrupted;
 }
 
 /// A single item in the reader response (reading_chunk or context_card).
@@ -254,6 +268,14 @@ class ReaderItem {
           .toList(),
     );
   }
+}
+
+/// Explicit Reader viewport load state to prevent infinite spinners on empty/failed books.
+enum ReaderLoadState {
+  loading,
+  empty,
+  error,
+  ready,
 }
 
 /// Reader response from GET /api/documents/{id}/reader.

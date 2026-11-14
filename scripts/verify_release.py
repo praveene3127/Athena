@@ -37,6 +37,10 @@ if not os.path.isfile(FLUTTER_BAT):
 sys.path.insert(0, BACKEND_DIR)
 
 
+PASSED_GATES: List[Tuple[int, str]] = []
+SKIPPED_GATES: List[Tuple[int, str, str]] = []
+
+
 def log_gate(gate_num: int, title: str):
     print("\n" + "=" * 70)
     print(f" GATE {gate_num}: {title.upper()}")
@@ -44,7 +48,13 @@ def log_gate(gate_num: int, title: str):
 
 
 def pass_gate(gate_num: int, title: str):
+    PASSED_GATES.append((gate_num, title))
     print(f" [PASS] Gate {gate_num}: {title}\n")
+
+
+def skip_gate(gate_num: int, title: str, reason: str):
+    SKIPPED_GATES.append((gate_num, title, reason))
+    print(f" [SKIPPED] Gate {gate_num}: {title} (SKIPPED: {reason})\n")
 
 
 def fail_gate(gate_num: int, title: str, reason: str):
@@ -223,8 +233,7 @@ def gate_3_cargo_test():
     log_gate(3, "Rust Core Cargo Test")
     cargo_bin = shutil.which("cargo")
     if not cargo_bin:
-        print("  * cargo executable not found on PATH - skipping gracefully (Rust core invariants verified via tests).")
-        pass_gate(3, "Rust Core Cargo Test (Gracefully Skipped - cargo not installed)")
+        skip_gate(3, "Rust Core Cargo Test", "cargo not installed on host")
         return
 
     cmd = [cargo_bin, "test"]
@@ -244,7 +253,7 @@ def gate_4_technical_words():
     log_gate(4, "Technical Word Preservation (Edge AI Wordninja)")
 
     try:
-        from app.services.edge_ai import split_fused_kerning_words
+        from app.services.edge.hygiene import split_fused_kerning_words
     except ImportError as e:
         fail_gate(4, "Technical Word Preservation", f"Cannot import edge_ai: {e}")
 
@@ -412,7 +421,7 @@ def gate_7_flutter():
 def gate_8_invariants():
     log_gate(8, "Core Invariants: Lossless Chunking & Card Quote Anchoring")
 
-    from app.services.chunker import chunk_document
+    from app.services.ingestion.chunker import chunk_document
     from app.db import get_session
     from app.models import Document, ReadingChunk
     from fastapi.testclient import TestClient
@@ -527,7 +536,12 @@ def main():
     gate_8_invariants()
 
     print("=" * 70)
-    print("  >>> ALL 8 GATES PASSED! ATHENA IS 100% PRODUCTION READY <<<")
+    if SKIPPED_GATES:
+        print(f"  >>> {len(PASSED_GATES)} GATES PASSED, {len(SKIPPED_GATES)} HONESTLY SKIPPED <<<")
+        for num, title, reason in SKIPPED_GATES:
+            print(f"  * Gate {num}: {title} -> SKIPPED ({reason})")
+    else:
+        print("  >>> ALL 8 GATES PASSED! ATHENA IS 100% PRODUCTION READY <<<")
     print("=" * 70)
     sys.exit(0)
 

@@ -12,7 +12,7 @@ from typing import Any, Callable, Dict, List, Optional, Set, Tuple
 import pymupdf
 
 from app.services.ingestion.repairs import repair_text, RepairLedger
-from app.services.edge_ai import (
+from app.services.edge.hygiene import (
     is_front_matter_or_noise_page,
     self_heal_prose_text,
     COMPOUND_PREFIXES,

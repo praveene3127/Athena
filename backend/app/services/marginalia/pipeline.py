@@ -11,7 +11,7 @@ from app.db import engine
 from app.models import Concept, ConceptCache, ContextCard, Document, ReadingChunk, DocumentChapter
 from app.services.marginalia.cards import find_exact_quote, _fetch_multi_source_evidence
 from app.services.marginalia.concepts import extract_concepts, build_search_query_for_concept
-from app.services.edge_ai import compute_semantic_similarity, is_semantic_duplicate
+from app.services.edge.novelty import compute_semantic_similarity, is_semantic_duplicate
 from app.services.marginalia.llm import LLMService
 from app.services.marginalia.wikipedia import WikipediaClient
 
@@ -181,7 +181,7 @@ class ReadAheadPipeline:
         editorial_penalty = 0.45 if RE_EDITORIAL_PENALTY.search(text) else 0.0
         base_density = max(0.05, (base_score + trigger_boost) / len(words) - editorial_penalty)
         try:
-            from app.services.edge_ai import score_chunk_curiosity_edge
+            from app.services.edge.novelty import score_chunk_curiosity_edge
             return score_chunk_curiosity_edge(text, base_density)
         except Exception:
             return base_density

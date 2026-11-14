@@ -29,6 +29,7 @@ class ReaderFlowView extends StatelessWidget {
   final void Function(ReaderItem card) onToggleSaveCard;
   final void Function(ReaderItem card) onDismissCard;
   final void Function(ReaderItem card) onAskAthenaForCard;
+  final ReaderLoadState loadState;
   final Map<String, String>? chunkEdits;
   final Map<String, String>? chunkNotes;
   final void Function(String chunkId, String? editedText, String? userNote)?
@@ -48,6 +49,7 @@ class ReaderFlowView extends StatelessWidget {
     required this.lineHeight,
     required this.bionicFocusEnabled,
     this.layoutWarning,
+    this.loadState = ReaderLoadState.ready,
     required this.onViewOriginalPage,
     required this.onAsk,
     required this.onSaveQuote,
@@ -62,11 +64,46 @@ class ReaderFlowView extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    if (feedItems.isEmpty) {
-      return const Center(child: CircularProgressIndicator());
-    }
-
     final theme = ReaderThemeConfig.getById(themeId);
+
+    if (feedItems.isEmpty) {
+      if (loadState == ReaderLoadState.loading) {
+        return const Center(child: CircularProgressIndicator());
+      }
+      return Center(
+        child: Container(
+          margin: const EdgeInsets.symmetric(horizontal: 24, vertical: 36),
+          padding: const EdgeInsets.all(24),
+          decoration: BoxDecoration(
+            color: theme.innerCardColor,
+            borderRadius: BorderRadius.circular(12),
+            border: Border.all(color: theme.borderColor),
+          ),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Icon(Icons.menu_book_outlined, size: 40, color: theme.accentColor),
+              const SizedBox(height: 16),
+              Text(
+                'No Readable Content Found',
+                style: TextStyle(
+                  fontFamily: fontFamily,
+                  fontSize: 18,
+                  fontWeight: FontWeight.w600,
+                  color: theme.textColor,
+                ),
+              ),
+              const SizedBox(height: 8),
+              Text(
+                'This document has no extracted chunks yet or ingestion was interrupted.',
+                textAlign: TextAlign.center,
+                style: TextStyle(color: theme.textMutedColor, fontSize: 13),
+              ),
+            ],
+          ),
+        ),
+      );
+    }
 
     return ScrollablePositionedList.builder(
       itemScrollController: itemScrollController,

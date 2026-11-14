@@ -8,14 +8,17 @@ class AthenaApp extends ConsumerWidget {
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
-    final themeMode = ref.watch(themeModeProvider);
+    final appearance = ref.watch(athenaAppearanceProvider);
+    final theme = AppTheme.themeForAppearance(appearance);
 
     return MaterialApp.router(
       title: 'Athena',
       debugShowCheckedModeBanner: false,
-      theme: AppTheme.lightTheme,
-      darkTheme: AppTheme.darkTheme,
-      themeMode: themeMode,
+      theme: theme,
+      darkTheme: AppTheme.themeForAppearance(
+        appearance.isDark ? appearance : AthenaAppearance.charcoal,
+      ),
+      themeMode: appearance.themeMode,
       routerConfig: appRouter,
     );
   }

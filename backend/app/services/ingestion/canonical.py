@@ -9,7 +9,7 @@ and provides guarded sentence boundary splitting.
 import re
 from typing import Any, Dict, List, Set, Tuple
 
-from app.services.edge_ai import self_heal_prose_text, COMPOUND_PREFIXES
+from app.services.edge.hygiene import self_heal_prose_text, COMPOUND_PREFIXES
 
 # Known abbreviations that must NEVER trigger sentence cuts (Golden Rule, FP-2)
 ABBREVIATIONS: Set[str] = {

@@ -1,0 +1,44 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Athena Single Canonical Cross-Language Specification Contract",
+  "version": "1.1.0",
+  "document_states": [
+    "queued",
+    "processing",
+    "partially_readable",
+    "paused",
+    "interrupted",
+    "ready",
+    "failed",
+    "unsupported",
+    "deleted"
+  ],
+  "segmentation_policy": {
+    "version": "segmentation-v3",
+    "offset_protocol": "utf8-byte-v3",
+    "target_words": 50,
+    "min_words": 35,
+    "max_words": 65,
+    "soft_max_chars": 380,
+    "chunk_id_pad_width": 6
+  },
+  "method_channel": {
+    "channel": "athena/foreground_ingestion",
+    "legacy_channel": "com.athena.reading/foreground_service",
+    "methods": [
+      "startForegroundService",
+      "updateForegroundProgress",
+      "stopForegroundService",
+      "requestNotificationPermission"
+    ]
+  },
+  "limits": {
+    "ask_max_question_chars": 2000,
+    "card_max_words": 80,
+    "status_poll_ms": 1500
+  },
+  "golden_fixture": {
+    "sample_text": "Athena provides an immersive feed of books with context marginalia. By decomposing literature into bite-sized, rhythmically balanced passages, reading feels as effortless as scrolling. Each passage is enriched by orthogonally curious facts, historical parallels, and scientific findings that stimulate deeper reflection without interrupting reading momentum.",
+    "expected_word_count": 45
+  }
+}

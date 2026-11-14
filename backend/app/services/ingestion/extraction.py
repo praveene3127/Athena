@@ -12,7 +12,8 @@ from app.services.ingestion.repairs import RepairLedger
 from app.services.ingestion.triage import triage_document
 from app.services.ingestion.blocks import extract_document_structure
 from app.services.ingestion.canonical import assemble_canonical_text
-from app.services.edge_ai import extract_clean_book_title, extract_document_telemetry
+from app.services.edge.bouncer import extract_document_telemetry
+from app.services.edge.hygiene import extract_clean_book_title
 
 MAGIC_PDF_HEADER = b"%PDF-"
 MAGIC_ZIP_HEADER = b"PK\x03\x04"
