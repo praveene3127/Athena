@@ -22,10 +22,11 @@ ABBREVIATIONS: Set[str] = {
     "et al.", "approx.", "est.", "min."
 }
 
-# Regex matching the Golden Rule sentence boundary detector (FP-2):
-# ([.!?…]+|\.\s?\.\s?\.)([”"’\x27)\]»]*)(\s+)(?=[“"‘\x27(\[«]*[A-Z0-9¿¡])
+# Regex matching the Golden Rule sentence boundary detector with multilingual support (FP-2, LNG-03):
+# Supports Latin (.!?…), CJK (。\uff01\uff1f), Indic (।॥), Arabic (؟)
 RE_SENTENCE_CANDIDATE = re.compile(
-    r"([.!?…]+|\.\s?\.\s?\.)([”\"’\'\)\]»]*)(\s+)(?=[“\"‘\'\(\[«]*[A-Z0-9¿¡])"
+    r"([.!?…\u3002\uff01\uff1f\u0964\u0965\u061f]+|\.\s?\.\s?\.)([”\"’\'\)\]»]*)([\s\u3000]*)(?=[“\"‘\'\(\[«¿¡]*([\w]|[\u0900-\u097F\u0B80-\u0BFF\u0600-\u06FF\u0590-\u05FF\u3040-\u9FFF\uAC00-\uD7AF]|$))",
+    re.UNICODE
 )
 
 
@@ -33,7 +34,7 @@ def find_safe_sentence_boundaries(text: str) -> List[int]:
     """
     Finds cut offsets in text after sentence terminal punctuation (Golden Rule, FP-2),
     guarding strictly against abbreviations, decimals (3.14), initials (J. K.),
-    and times/versions.
+    and times/versions across Latin and non-Latin scripts.
     
     Returns offsets at the end of whitespace so trailing whitespace stays with previous sentence.
     """
@@ -62,7 +63,13 @@ def find_safe_sentence_boundaries(text: str) -> List[int]:
             if len(last_word) == 2 and last_word[0].isalpha() and last_word[1] == ".":
                 continue
 
-        boundaries.append(ws_end)
+        # For ASCII/Latin punct, require whitespace before the next word
+        is_multilingual_term = any(ch in "\u3002\uff01\uff1f\u0964\u0965\u061f" for ch in punct_text)
+        if not m.group(3) and not is_multilingual_term and ws_end < len(text):
+            continue
+
+        if ws_end > 0:
+            boundaries.append(ws_end)
 
     return boundaries
 

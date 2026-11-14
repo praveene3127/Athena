@@ -1,3 +1,6 @@
+import 'package:flutter/foundation.dart';
+import 'package:athena/services/rust_engine_bridge.dart';
+
 /// Portable SimHash implementation using two unsigned 32-bit halves.
 /// Dart Web and native runtimes therefore use identical arithmetic.
 class SimHashFingerprint {
@@ -12,6 +15,18 @@ class SimHashService {
 
   static SimHashFingerprint computeSimHash64(String text) {
     if (text.trim().isEmpty) return const SimHashFingerprint(0, 0);
+
+    try {
+      final rustHash = RustEngineBridge.instance.computeSimhash64(text);
+      if (rustHash != null && rustHash != 0) {
+        final high = (rustHash >> 32) & _mask32;
+        final low = rustHash & _mask32;
+        return SimHashFingerprint(high, low);
+      }
+    } catch (e) {
+      debugPrint('[Athena SimHashService] native bridge notice: $e');
+    }
+
     final votes = List<int>.filled(64, 0);
     for (final raw in text.toLowerCase().split(RegExp(r'\s+'))) {
       final clean = raw.replaceAll(_nonAlnum, '');

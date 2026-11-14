@@ -271,6 +271,17 @@ def clean_block_hygiene(text: str) -> str:
     return re.sub(r"[ \t]+", " ", result)
 
 
+def is_predominantly_latin_ascii(text: str) -> bool:
+    """Checks whether text is > 90% Latin ASCII letters (LNG-01)."""
+    if not text:
+        return True
+    alpha_chars = [ch for ch in text if ch.isalpha()]
+    if not alpha_chars:
+        return True
+    ascii_latin = sum(1 for ch in alpha_chars if ("a" <= ch <= "z") or ("A" <= ch <= "Z"))
+    return (ascii_latin / len(alpha_chars)) > 0.90
+
+
 def is_front_matter_or_noise_page(
     page_index: int,
     total_pages: int,
@@ -285,14 +296,31 @@ def is_front_matter_or_noise_page(
         return False
 
     cleaned_text = clean_block_hygiene(page_text)
+    lower_text = cleaned_text.lower()
+    marker_hits = sum(1 for m in FRONT_MATTER_MARKERS if m in lower_text)
+
+    is_latin = is_predominantly_latin_ascii(cleaned_text)
+    if not is_latin:
+        # Non-Latin books (Cyrillic, Indic, Arabic, CJK) must NEVER be rejected for missing English stopwords (LNG-01)
+        cjk_chars = len(re.findall(r"[\u3040-\u9fff\uac00-\ud7af]", cleaned_text))
+        if cjk_chars >= 40:
+            return marker_hits >= 2
+        words = cleaned_text.split()
+        if len(words) < 15 and cjk_chars < 40:
+            return True
+        sentences = re.split(r"(?<=[.!?…。！？।॥؟])\s*", cleaned_text)
+        substantive = sum(1 for s in sentences if len(s.strip().split()) >= 4 or len(s.strip()) >= 15)
+        if substantive >= 2 and marker_hits == 0:
+            return False
+        if marker_hits >= 2:
+            return True
+        return len(words) < 25
+
     words = cleaned_text.split()
     total_words = len(words)
 
     if total_words < 25:
         return True
-
-    lower_text = cleaned_text.lower()
-    marker_hits = sum(1 for m in FRONT_MATTER_MARKERS if m in lower_text)
 
     sentences = re.split(r"(?<=[.!?])\s+", cleaned_text)
     complete_sentences = 0
@@ -457,6 +485,9 @@ def split_fused_kerning_words(text: str) -> str:
         return f"{m.group(1)} {m.group(2)}"
 
     text = re.sub(r"\b([a-zA-Z]*[a-z]{2,})([A-Z][a-z]+)\b", _split_camel, text)
+
+    if not is_predominantly_latin_ascii(text):
+        return text
 
     try:
         import wordninja

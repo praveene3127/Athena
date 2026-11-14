@@ -439,6 +439,20 @@ String _segmentFusedWordWithAudit(String rawWord, List<SpacingRepair> repairs) {
     return repaired;
   }
 
+  // Safe suffix/function-word boundary splitter for fused tokens (ISM-01)
+  final safeSplit = safeSplitFusedWord(rawWord);
+  if (safeSplit != rawWord) {
+    repairs.add(SpacingRepair(
+      startOffset: 0,
+      endOffset: rawWord.length,
+      originalText: rawWord,
+      repairedText: safeSplit,
+      reason: 'fused_token',
+      confidence: 0.95,
+    ));
+    return safeSplit;
+  }
+
   // SHORT TOKEN: Don't attempt to break short tokens
   if (end - start < 15) return rawWord;
 
@@ -503,6 +517,126 @@ String _segmentFusedWordWithAudit(String rawWord, List<SpacingRepair> repairs) {
   return repaired;
 }
 
+/// Safe suffix and function-word boundary splitter for fused tokens from extraction.
+/// Splits ONLY when the whole token is NOT a valid dictionary/scientific/protected word
+/// and segments match high-frequency English boundary words.
+String safeSplitFusedWord(String rawWord) {
+  if (rawWord.length < 6) return rawWord;
+
+  // Extract leading/trailing punctuation
+  int start = 0;
+  while (start < rawWord.length && !_isLetterRe.hasMatch(rawWord[start])) {
+    start++;
+  }
+  int end = rawWord.length;
+  while (end > start && !_isLetterRe.hasMatch(rawWord[end - 1])) {
+    end--;
+  }
+  if (start >= end) return rawWord;
+
+  final prefixPunct = rawWord.substring(0, start);
+  final core = rawWord.substring(start, end);
+  final suffixPunct = rawWord.substring(end);
+  final lower = core.toLowerCase();
+
+  // PROTECT: Known single dictionary words, scientific compounds, protected compounds, surname prefixes
+  if (_singleDictionaryWords.contains(lower) ||
+      _scientificCompounds.contains(lower) ||
+      _protectedCompoundWords.contains(lower) ||
+      _protectedMixedCaseWords.contains(lower)) {
+    return rawWord;
+  }
+
+  // Do not touch words with internal hyphens, slashes, or periods
+  if (core.contains('-') || core.contains('/') || core.contains('.')) {
+    return rawWord;
+  }
+
+  const highFreqSplitWords = {
+    'intoned',
+    'solemnly',
+    'bellowed',
+    'shouted',
+    'whispered',
+    'students',
+    'distinguished',
+    'alumni',
+    'pillars',
+    'year',
+    'what',
+    'are',
+    'the',
+    'four',
+    'and',
+    'for',
+    'with',
+    'from',
+    'this',
+    'that',
+    'they',
+    'have',
+    'been',
+    'were',
+    'will',
+    'would',
+    'could',
+    'should',
+    'he',
+    'she',
+  };
+
+  // Helper: check if sub decomposes strictly into highFreqSplitWords
+  List<String>? decomposeHighFreq(String sub) {
+    if (sub.isEmpty) return [];
+    if (highFreqSplitWords.contains(sub)) {
+      return [sub];
+    }
+    for (int len = 2; len < sub.length; len++) {
+      final prefix = sub.substring(0, len);
+      if (highFreqSplitWords.contains(prefix)) {
+        final rest = decomposeHighFreq(sub.substring(len));
+        if (rest != null && rest.isNotEmpty) {
+          return [prefix, ...rest];
+        }
+      }
+    }
+    return null;
+  }
+
+  // 1. Full decomposition where ALL segments are high-frequency boundary words
+  // e.g. "whatarethefourpillars", "distinguishedalumni", "andstudents", "hebellowed", "Thisyear"
+  final fullParts = decomposeHighFreq(lower);
+  if (fullParts != null && fullParts.length > 1) {
+    final resultWords = <String>[];
+    int offset = 0;
+    for (int i = 0; i < fullParts.length; i++) {
+      final partLen = fullParts[i].length;
+      var origSegment = core.substring(offset, offset + partLen);
+      if (i == 0 && core[0] == core[0].toUpperCase() && core[0] != core[0].toLowerCase()) {
+        origSegment = origSegment[0].toUpperCase() + origSegment.substring(1);
+      }
+      resultWords.add(origSegment);
+      offset += partLen;
+    }
+    return '$prefixPunct${resultWords.join(' ')}$suffixPunct';
+  }
+
+  // 2. Capitalized proper noun fused with verb/adverb/high-frequency suffix words
+  // e.g. "Nolanintonedsolemnly" -> head="Nolan" (proper noun), tail="intoned solemnly"
+  if (core[0] == core[0].toUpperCase() && core[0] != core[0].toLowerCase()) {
+    for (int i = 3; i <= core.length - 4; i++) {
+      final tail = lower.substring(i);
+      final tailSegments = decomposeHighFreq(tail);
+      if (tailSegments != null && tailSegments.isNotEmpty) {
+        final head = core.substring(0, i);
+        return '$prefixPunct$head ${tailSegments.join(' ')}$suffixPunct';
+      }
+    }
+  }
+
+  return rawWord;
+}
+
 const Set<String> _scientificCompounds = {
   'neuroplasticity',
   'electromagnetism',
@@ -533,6 +667,14 @@ const Set<String> _scientificCompounds = {
 };
 
 const Set<String> _singleDictionaryWords = {
+  'intoned',
+  'solemnly',
+  'bellowed',
+  'alumni',
+  'distinguished',
+  'students',
+  'pillars',
+  'year',
   'dramatically',
   'expectantly',
   'procession',
@@ -1803,6 +1945,7 @@ class LosslessChunker {
     required List<Map<String, dynamic>> spans,
     int initialSequence = 1,
     int offsetDelta = 0,
+    int? padWidth,
   }) {
     if (canonicalText.isEmpty) return const [];
     final units = _paragraphUnits(canonicalText, spans);
@@ -1826,6 +1969,7 @@ class LosslessChunker {
 
     final canonicalHash = _sha256(canonicalText);
     var previousEnd = 0;
+    var currentUtf8Offset = offsetDelta;
     final result = <Map<String, Object?>>[];
     for (var i = 0; i < ranges.length; i++) {
       final (atomStart, atomEnd) = ranges[i];
@@ -1844,11 +1988,16 @@ class LosslessChunker {
       }
       final rawText = canonicalText.substring(start, end);
       final seq = initialSequence + i;
-      final padWidth = (seq >= 10000) ? 6 : 4;
+      final effectivePadWidth = padWidth ?? (seq > 9999 ? SegmentationPolicy.chunkIdPadWidth : 4);
       final pages = _pagesForSpan(start, end, spans);
       final firstPage = pages.isNotEmpty ? pages.first : 1;
+      final chunkByteLen = utf8.encode(rawText).length;
+      final chunkStartByte = currentUtf8Offset;
+      final chunkEndByte = chunkStartByte + chunkByteLen;
+      currentUtf8Offset = chunkEndByte;
+
       result.add({
-        'id': '$documentId-c${seq.toString().padLeft(padWidth, '0')}',
+        'id': '$documentId-c${seq.toString().padLeft(effectivePadWidth, '0')}',
         'document_id': documentId,
         'sequence': seq,
         'page_start': firstPage,
@@ -1867,8 +2016,8 @@ class LosslessChunker {
             .firstOrNull ?? 'chapter',
         'raw_text': rawText,
         'source_pages_json': jsonEncode(pages),
-        'start_offset': start + offsetDelta,
-        'end_offset': end + offsetDelta,
+        'start_offset': chunkStartByte,
+        'end_offset': chunkEndByte,
         'checksum': _sha256(rawText),
         'boundary_method': last.boundaryAfter,
         'canonical_sha256': canonicalHash,

@@ -1,5 +1,7 @@
 import 'package:flutter/material.dart';
 
+import 'package:athena/core/config/config.dart';
+
 import 'package:athena/core/errors.dart';
 
 import 'package:athena/core/theme/theme.dart';
@@ -116,6 +118,7 @@ class _AskSheetState extends State<AskSheet> {
   }
 
   Future<void> _submitQuestion(String question) async {
+    if (_loading) return;
     final trimmed = question.trim();
 
     if (trimmed.isEmpty) return;
@@ -132,12 +135,31 @@ class _AskSheetState extends State<AskSheet> {
     String effectiveQuestion = trimmed;
 
     if (_qaHistory.isNotEmpty) {
-      final turns = _qaHistory
-          .map((t) => "Q: ${t['question']}\nA: ${t['answer']}")
-          .join("\n\n");
+      const prefix = "Prior dialogue about this passage:\n";
+      final suffix = "\n\nFollow-up question: $trimmed";
+      final budget = AppConfig.askMaxQuestionChars - prefix.length - suffix.length;
 
+      if (budget > 100) {
+        final recentTurns = <String>[];
+        int usedChars = 0;
+        for (final t in _qaHistory.reversed) {
+          final turnStr = "Q: ${t['question']}\nA: ${t['answer']}";
+          if (usedChars + turnStr.length + 2 <= budget) {
+            recentTurns.insert(0, turnStr);
+            usedChars += turnStr.length + 2;
+          } else {
+            break;
+          }
+        }
+        if (recentTurns.isNotEmpty) {
+          effectiveQuestion = "$prefix${recentTurns.join('\n\n')}$suffix";
+        }
+      }
+    }
+
+    if (effectiveQuestion.length > AppConfig.askMaxQuestionChars) {
       effectiveQuestion =
-          "Prior dialogue about this passage:\n$turns\n\nFollow-up question: $trimmed";
+          effectiveQuestion.substring(0, AppConfig.askMaxQuestionChars);
     }
 
     try {
@@ -425,7 +447,7 @@ class _AskSheetState extends State<AskSheet> {
 
                 TextField(
                   controller: _questionController,
-                  maxLength: 300,
+                  maxLength: AppConfig.askMaxQuestionChars,
                   maxLines: 2,
                   enabled: !_loading && !isNotConfigured,
                   style: TextStyle(

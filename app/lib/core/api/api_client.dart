@@ -674,7 +674,39 @@ class ApiClient {
           .get('/api/documents/$id/reader')
           .timeout(const Duration(seconds: 30));
       recordBackendSuccess();
-      final data = response.data as Map<String, dynamic>;
+      final data = Map<String, dynamic>.from(response.data as Map);
+
+      // ISM-04: If companion server returns a windowed response (< total_chunks),
+      // fetch remaining windows so books > 200 chunks are never truncated!
+      final chunkCount = (data['integrity'] as Map?)?['chunk_count'] as int? ??
+          (data['total_chunks'] as int? ?? (data['chunk_count'] as int? ?? 0));
+      var chunksList = ((data['chunks'] as List?)?.cast<dynamic>() ?? []).toList();
+      if (chunkCount > chunksList.length) {
+        int nextSeq = chunksList.isNotEmpty
+            ? ((chunksList.last as Map)['sequence'] as int? ?? chunksList.length) + 1
+            : 1;
+        while (chunksList.length < chunkCount) {
+          final nextResponse = await dio.get(
+            '/api/documents/$id/reader',
+            queryParameters: {'from_seq': nextSeq, 'limit': 500},
+          ).timeout(const Duration(seconds: 30));
+          final nextData = nextResponse.data as Map<String, dynamic>;
+          final nextChunks = (nextData['chunks'] as List?)?.cast<dynamic>() ?? [];
+          if (nextChunks.isEmpty) break;
+          chunksList.addAll(nextChunks);
+          final nextCards = (nextData['cards'] as List?)?.cast<dynamic>() ?? [];
+          if (nextCards.isNotEmpty) {
+            final cardsList = ((data['cards'] as List?)?.cast<dynamic>() ?? []).toList();
+            cardsList.addAll(nextCards);
+            data['cards'] = cardsList;
+          }
+          final lastChunk = nextChunks.last as Map;
+          nextSeq = (lastChunk['sequence'] as int? ?? (nextSeq + nextChunks.length - 1)) + 1;
+          if (nextChunks.length < 500) break;
+        }
+        data['chunks'] = chunksList;
+      }
+
       _sanitizeReaderData(data);
       _cacheReaderLocally(id, data);
       return data;
@@ -1352,8 +1384,7 @@ class ApiClient {
       debugPrint('Athena caught error: $e');
     }
     try {
-      final db = await LocalDatabase.instance.database;
-      await db.update('context_cards', {'saved': 0});
+      await LocalDatabase.instance.clearAllSavedCards();
     } catch (e) {
       debugPrint('Athena caught error: $e');
     }

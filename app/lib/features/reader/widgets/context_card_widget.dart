@@ -78,7 +78,20 @@ class ContextCardWidget extends StatelessWidget {
       resolveVariant(item, body);
 
   static ({String label, IconData icon, Color color}) _resolveLens(
-      String rawTitle, String body) {
+      ReaderItem card, String rawTitle, String body) {
+    final bool isInternal = card.isInternalExtractive ||
+        (!card.isVerifiedExternal &&
+            !card.isSingleSource &&
+            (card.citations == null || card.citations!.isEmpty));
+
+    if (isInternal) {
+      return (
+        label: 'PASSAGE INSIGHT',
+        icon: Icons.auto_stories_outlined,
+        color: const Color(0xFF6E5D53),
+      );
+    }
+
     final upTitle = rawTitle.toUpperCase();
     if (upTitle.contains('EMPIRICAL STUDY') ||
         upTitle.contains('REAL-WORLD STUDY')) {
@@ -229,7 +242,7 @@ class ContextCardWidget extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final theme = ReaderThemeConfig.getById(themeId);
-    final lens = _resolveLens(card.title ?? '', card.body ?? '');
+    final lens = _resolveLens(card, card.title ?? '', card.body ?? '');
     final displayTitle = _cleanTitle(card.title ?? 'Context Insight');
     final displayBody = _cleanBody(card.body ?? '');
     final sourceInfo = _extractSource(card);
@@ -460,6 +473,8 @@ class ContextCardWidget extends StatelessWidget {
     bool isSaved,
     String exactQuote,
   ) {
+    final isRtl = AppTheme.isRtlText(displayBody) || AppTheme.isRtlText(displayTitle);
+
     return Container(
       margin: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
       constraints: const BoxConstraints(maxWidth: 580),
@@ -485,40 +500,47 @@ class ContextCardWidget extends StatelessWidget {
         child: SingleChildScrollView(
           physics: const NeverScrollableScrollPhysics(),
           padding: const EdgeInsets.fromLTRB(16, 14, 16, 14),
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              _buildTopRow(theme, lens, isSaved),
-              const SizedBox(height: 10),
-              if (exactQuote.isNotEmpty) ...[
-                _buildAnchorQuote(theme, exactQuote),
+          child: Directionality(
+            textDirection: isRtl ? TextDirection.rtl : TextDirection.ltr,
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                _buildTopRow(theme, lens, isSaved),
                 const SizedBox(height: 10),
+                if (exactQuote.isNotEmpty) ...[
+                  _buildAnchorQuote(theme, exactQuote),
+                  const SizedBox(height: 10),
+                ],
+                Text(
+                  displayTitle,
+                  textAlign: isRtl ? TextAlign.right : TextAlign.left,
+                  style: TextStyle(
+                    fontFamily: AppTheme.fontUI,
+                    fontFamilyFallback: AppTheme.fontFallbacks,
+                    fontSize: 16.0,
+                    fontWeight: FontWeight.w700,
+                    color: theme.textColor,
+                    height: 1.25,
+                  ),
+                ),
+                const SizedBox(height: 8),
+                Text(
+                  displayBody,
+                  textAlign: isRtl ? TextAlign.right : TextAlign.left,
+                  style: TextStyle(
+                    fontFamily: AppTheme.fontReading,
+                    fontFamilyFallback: AppTheme.fontFallbacks,
+                    fontSize: 15.0,
+                    height: 1.48,
+                    color: theme.textColor.withValues(alpha: 0.90),
+                    fontWeight: FontWeight.w400,
+                  ),
+                ),
+                const SizedBox(height: 12),
+                _buildSourceFooter(theme, sourceInfo),
               ],
-              Text(
-                displayTitle,
-                style: TextStyle(
-                  fontFamily: AppTheme.fontUI,
-                  fontSize: 16.0,
-                  fontWeight: FontWeight.w700,
-                  color: theme.textColor,
-                  height: 1.25,
-                ),
-              ),
-              const SizedBox(height: 8),
-              Text(
-                displayBody,
-                style: TextStyle(
-                  fontFamily: AppTheme.fontReading,
-                  fontSize: 15.0,
-                  height: 1.48,
-                  color: theme.textColor.withValues(alpha: 0.90),
-                  fontWeight: FontWeight.w400,
-                ),
-              ),
-              const SizedBox(height: 12),
-              _buildSourceFooter(theme, sourceInfo),
-            ],
+            ),
           ),
         ),
       ),
@@ -645,6 +667,7 @@ class ContextCardWidget extends StatelessWidget {
                 overflow: TextOverflow.ellipsis,
                 style: TextStyle(
                   fontFamily: AppTheme.fontReading,
+                  fontFamilyFallback: AppTheme.fontFallbacks,
                   fontSize: 12.5,
                   fontStyle: FontStyle.italic,
                   color: theme.textMutedColor,

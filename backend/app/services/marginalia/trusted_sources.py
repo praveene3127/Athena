@@ -56,6 +56,35 @@ def _extract_keywords(text: str) -> set[str]:
     return {t for t in tokens if t not in _STOP_WORDS}
 
 
+def is_matching_language_and_script(passage: str, title: str, abstract: str) -> bool:
+    """Rejects academic evidence with mismatched scripts or foreign languages."""
+    full_evidence = f"{title} {abstract}"
+    if not full_evidence.strip():
+        return True
+
+    cyrillic_chars = len(re.findall(r"[\u0400-\u04FF]", full_evidence))
+    cjk_chars = len(re.findall(r"[\u3040-\u9FFF\uF900-\uFAFF]", full_evidence))
+    arabic_chars = len(re.findall(r"[\u0600-\u06FF]", full_evidence))
+    total_letters = len(re.findall(r"\w", full_evidence)) or 1
+
+    passage_cyrillic = len(re.findall(r"[\u0400-\u04FF]", passage)) if passage else 0
+    if passage_cyrillic == 0:
+        if (cyrillic_chars / total_letters) > 0.05:
+            return False
+        if (cjk_chars / total_letters) > 0.05:
+            return False
+        if (arabic_chars / total_letters) > 0.05:
+            return False
+
+        abstract_words = re.findall(r"[a-zA-Z]+", abstract.lower())
+        if len(abstract_words) >= 10:
+            sw_count = sum(1 for w in abstract_words if w in _STOP_WORDS)
+            if (sw_count / len(abstract_words)) < 0.12:
+                return False
+
+    return True
+
+
 def _score_relevance(passage_keywords: set[str], title: str, abstract: str) -> float:
     """Calculates relevance score between passage keywords and academic source text."""
     if not passage_keywords:
@@ -77,7 +106,7 @@ def fetch_crossref_works(query: str, timeout: float = 2.5) -> List[Dict[str, Any
         return []
     url = (
         f"https://api.crossref.org/works?query={urllib.parse.quote(clean_q)}"
-        f"&filter=has-abstract:true&rows=2&mailto=athena@reader.local"
+        f"&filter=has-abstract:true,language:en&rows=2&mailto=athena@reader.local"
     )
     req = urllib.request.Request(
         url,
@@ -168,7 +197,7 @@ def fetch_openalex_works(query: str, timeout: float = 2.5) -> List[Dict[str, Any
         return []
     url = (
         f"https://api.openalex.org/works?search={urllib.parse.quote(clean_q)}"
-        f"&per-page=2&mailto=athena@reader.local"
+        f"&filter=has_abstract:true,language:en&per-page=2&mailto=athena@reader.local"
     )
     req = urllib.request.Request(
         url,
@@ -247,6 +276,17 @@ def fetch_trusted_academic_evidence(
             except Exception as exc:
                 logger.debug("Academic fetch worker notice: %s", exc)
 
+    if not raw_candidates:
+        return []
+
+    # Language and script gate
+    raw_candidates = [
+        c
+        for c in raw_candidates
+        if is_matching_language_and_script(
+            passage, c.get("title", ""), c.get("abstract", "")
+        )
+    ]
     if not raw_candidates:
         return []
 

@@ -367,49 +367,55 @@ class _ChunkWidgetState extends State<ChunkWidget> {
     }
 
     final effectiveFontSize = _getIdealFontSize(cleanText, widget.fontSize);
+    final isRtl = AppTheme.isRtlText(cleanText);
 
-    return Padding(
-      padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 18),
-      child: SelectableText(
-        cleanText,
-        style: TextStyle(
-          fontFamily: widget.fontFamily,
-          fontSize: effectiveFontSize,
-          height: widget.lineHeight,
-          letterSpacing: 0.15,
-          color: theme.textColor,
+    return Directionality(
+      textDirection: isRtl ? TextDirection.rtl : TextDirection.ltr,
+      child: Padding(
+        padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 18),
+        child: SelectableText(
+          cleanText,
+          textAlign: isRtl ? TextAlign.right : TextAlign.left,
+          style: TextStyle(
+            fontFamily: widget.fontFamily,
+            fontFamilyFallback: AppTheme.fontFallbacks,
+            fontSize: effectiveFontSize,
+            height: widget.lineHeight,
+            letterSpacing: 0.15,
+            color: theme.textColor,
+          ),
+          contextMenuBuilder: (context, editableTextState) {
+            final buttonItems = editableTextState.contextMenuButtonItems;
+            final selectedText = editableTextState.textEditingValue.selection
+                .textInside(editableTextState.textEditingValue.text);
+            if (selectedText.trim().isNotEmpty) {
+              buttonItems.insert(
+                0,
+                ContextMenuButtonItem(
+                  label: 'Save Quote',
+                  onPressed: () {
+                    editableTextState.hideToolbar();
+                    widget.onSaveQuote?.call(selectedText.trim());
+                  },
+                ),
+              );
+              buttonItems.insert(
+                1,
+                ContextMenuButtonItem(
+                  label: 'Ask Athena',
+                  onPressed: () {
+                    editableTextState.hideToolbar();
+                    widget.onAsk();
+                  },
+                ),
+              );
+            }
+            return AdaptiveTextSelectionToolbar.buttonItems(
+              anchors: editableTextState.contextMenuAnchors,
+              buttonItems: buttonItems,
+            );
+          },
         ),
-        contextMenuBuilder: (context, editableTextState) {
-          final buttonItems = editableTextState.contextMenuButtonItems;
-          final selectedText = editableTextState.textEditingValue.selection
-              .textInside(editableTextState.textEditingValue.text);
-          if (selectedText.trim().isNotEmpty) {
-            buttonItems.insert(
-              0,
-              ContextMenuButtonItem(
-                label: 'Save Quote',
-                onPressed: () {
-                  editableTextState.hideToolbar();
-                  widget.onSaveQuote?.call(selectedText.trim());
-                },
-              ),
-            );
-            buttonItems.insert(
-              1,
-              ContextMenuButtonItem(
-                label: 'Ask Athena',
-                onPressed: () {
-                  editableTextState.hideToolbar();
-                  widget.onAsk();
-                },
-              ),
-            );
-          }
-          return AdaptiveTextSelectionToolbar.buttonItems(
-            anchors: editableTextState.contextMenuAnchors,
-            buttonItems: buttonItems,
-          );
-        },
       ),
     );
   }

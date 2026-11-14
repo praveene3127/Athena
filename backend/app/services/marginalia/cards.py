@@ -42,7 +42,10 @@ from app.services.edge.novelty import (
 )
 from app.services.marginalia.concepts import build_search_query_for_concept
 from app.services.marginalia.llm import LLMService
-from app.services.marginalia.trusted_sources import fetch_trusted_academic_evidence
+from app.services.marginalia.trusted_sources import (
+    fetch_trusted_academic_evidence,
+    is_matching_language_and_script,
+)
 from app.services.marginalia.wikipedia import WikipediaClient
 from sqlmodel import Session, select
 
@@ -100,7 +103,7 @@ def _fetch_multi_source_evidence(
         clean_q = re.sub(r"[^\w\s-]", " ", query).strip()
         url = (
             f"https://api.openalex.org/works?search={urllib.parse.quote(clean_q)}"
-            f"&filter=has_abstract:true"
+            f"&filter=has_abstract:true,language:en"
             f"&select=id,doi,display_name,publication_year,cited_by_count,abstract_inverted_index"
             f"&per-page=2&mailto=athena@reader.local"
         )
@@ -148,6 +151,7 @@ def _fetch_multi_source_evidence(
         clean_q = re.sub(r"[^\w\s-]", " ", query).strip()
         url = (
             f"https://api.crossref.org/works?query={urllib.parse.quote(clean_q)}"
+            f"&filter=has-abstract:true,language:en"
             f"&select=DOI,title,published,is-referenced-by-count,abstract"
             f"&rows=2&mailto=athena@reader.local"
         )
@@ -296,6 +300,10 @@ def _fetch_multi_source_evidence(
     for item in results:
         u = item.get("url", "")
         if u and u not in seen_urls:
+            if not is_matching_language_and_script(
+                query, item.get("title", ""), item.get("extract", "")
+            ):
+                continue
             seen_urls.add(u)
             deduped.append(item)
 

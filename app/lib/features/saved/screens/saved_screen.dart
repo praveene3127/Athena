@@ -423,29 +423,128 @@ class _SavedScreenState extends ConsumerState<SavedScreen> {
           ),
           Consumer(
             builder: (context, ref, _) {
+              final appearance = ref.watch(athenaAppearanceProvider);
+              final darkActive = appearance.isDark;
+
               return InkWell(
                 onTap: () {
                   HapticFeedback.selectionClick();
                   ref.read(themeModeProvider.notifier).toggleTheme();
+                },
+                onLongPress: () {
+                  HapticFeedback.selectionClick();
+                  showModalBottomSheet<void>(
+                    context: context,
+                    backgroundColor: Colors.transparent,
+                    builder: (ctx) {
+                      final current = ref.watch(athenaAppearanceProvider);
+                      final tokens = ctx.tokens;
+                      return Container(
+                        padding: const EdgeInsets.symmetric(
+                            horizontal: 20, vertical: 18),
+                        decoration: BoxDecoration(
+                          color: tokens.surface,
+                          borderRadius: const BorderRadius.vertical(
+                              top: Radius.circular(16)),
+                          border: Border.all(color: tokens.hairline),
+                        ),
+                        child: SafeArea(
+                          child: Column(
+                            mainAxisSize: MainAxisSize.min,
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: [
+                              Text(
+                                'Appearance',
+                                style: TextStyle(
+                                  fontFamily: AppTheme.fontDisplay,
+                                  fontSize: 18,
+                                  fontWeight: FontWeight.w500,
+                                  color: tokens.ink,
+                                ),
+                              ),
+                              const SizedBox(height: 16),
+                              Row(
+                                children: [
+                                  for (final app in AthenaAppearance.values)
+                                    Expanded(
+                                      child: Padding(
+                                        padding: const EdgeInsets.symmetric(
+                                            horizontal: 4),
+                                        child: InkWell(
+                                          onTap: () {
+                                            HapticFeedback.selectionClick();
+                                            ref
+                                                .read(athenaAppearanceProvider.notifier)
+                                                .setAppearance(app);
+                                            Navigator.of(ctx).pop();
+                                          },
+                                          borderRadius:
+                                              BorderRadius.circular(8),
+                                          child: Container(
+                                            height: 48,
+                                            decoration: BoxDecoration(
+                                              color: AppTheme
+                                                      .tokensForAppearance(app)
+                                                  .canvas,
+                                              borderRadius:
+                                                  BorderRadius.circular(8),
+                                              border: Border.all(
+                                                color: current == app
+                                                    ? AppTheme.tokensForAppearance(app)
+                                                        .accent
+                                                    : tokens.hairline,
+                                                width: current == app ? 2.0 : 1.0,
+                                              ),
+                                            ),
+                                            alignment: Alignment.center,
+                                            child: Text(
+                                              app.name[0].toUpperCase() +
+                                                  app.name.substring(1),
+                                              style: TextStyle(
+                                                fontFamily: AppTheme.fontUI,
+                                                color: AppTheme
+                                                        .tokensForAppearance(app)
+                                                    .ink,
+                                                fontWeight: current == app
+                                                    ? FontWeight.w700
+                                                    : FontWeight.w500,
+                                                fontSize: 12,
+                                              ),
+                                            ),
+                                          ),
+                                        ),
+                                      ),
+                                    ),
+                                ],
+                              ),
+                            ],
+                          ),
+                        ),
+                      );
+                    },
+                  );
                 },
                 borderRadius: BorderRadius.circular(10),
                 child: Container(
                   padding: const EdgeInsets.all(7),
                   margin: const EdgeInsets.only(right: 16),
                   decoration: BoxDecoration(
-                    color:
-                        isDark ? const Color(0xFF202020) : AppTheme.surfaceWarm,
+                    color: darkActive
+                        ? const Color(0xFF202020)
+                        : context.tokens.surfaceWarm,
                     borderRadius: BorderRadius.circular(10),
                     border: Border.all(
-                      color: isDark ? const Color(0xFF2E2E2E) : AppTheme.border,
+                      color: darkActive
+                          ? const Color(0xFF2E2E2E)
+                          : context.tokens.hairline,
                     ),
                   ),
                   child: Icon(
-                    isDark
+                    darkActive
                         ? Icons.light_mode_outlined
                         : Icons.dark_mode_outlined,
                     size: 16,
-                    color: isDark ? Colors.amberAccent : AppTheme.ink,
+                    color: darkActive ? Colors.amberAccent : context.tokens.ink,
                   ),
                 ),
               );

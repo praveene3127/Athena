@@ -1,17 +1,18 @@
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
+import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:athena/core/theme/theme.dart';
 import 'package:athena/core/theme/reader_theme.dart';
 
 /// L7 Modular Sheet: Typography and Appearance Sheet.
 ///
 /// Provides fine controls for:
-/// - Reading Theme (Paper, Sepia, Night, Obsidian)
+/// - Reading Theme (Paper, Sepia, Night/Charcoal, Obsidian/OLED)
 /// - Font Size (14px - 26px)
-/// - Font Family (Georgia, Literata, Bookerly, Inter, Monospace)
+/// - Font Family (Newsreader, DM Serif Display, Geist, Georgia, monospace)
 /// - Line Height (1.4 - 2.0)
 /// - Bionic Focus Reading
-class TypographySheet extends StatelessWidget {
+class TypographySheet extends ConsumerStatefulWidget {
   final String currentThemeId;
   final double currentFontSize;
   final String currentFontFamily;
@@ -70,8 +71,29 @@ class TypographySheet extends StatelessWidget {
   }
 
   @override
+  ConsumerState<TypographySheet> createState() => _TypographySheetState();
+}
+
+class _TypographySheetState extends ConsumerState<TypographySheet> {
+  late String _themeId;
+  late double _fontSize;
+  late String _fontFamily;
+  late double _lineHeight;
+  late bool _bionic;
+
+  @override
+  void initState() {
+    super.initState();
+    _themeId = widget.currentThemeId;
+    _fontSize = widget.currentFontSize;
+    _fontFamily = widget.currentFontFamily;
+    _lineHeight = widget.currentLineHeight;
+    _bionic = widget.currentBionic;
+  }
+
+  @override
   Widget build(BuildContext context) {
-    final theme = ReaderThemeConfig.getById(currentThemeId);
+    final theme = ReaderThemeConfig.getById(_themeId);
 
     return Container(
       constraints: BoxConstraints(
@@ -112,7 +134,8 @@ class TypographySheet extends StatelessWidget {
                   ),
                   const Spacer(),
                   IconButton(
-                    icon: Icon(Icons.close_rounded, size: 20, color: theme.textMutedColor),
+                    icon: Icon(Icons.close_rounded,
+                        size: 20, color: theme.textMutedColor),
                     onPressed: () => Navigator.of(context).pop(),
                   ),
                 ],
@@ -124,14 +147,18 @@ class TypographySheet extends StatelessWidget {
               const SizedBox(height: 8),
               Row(
                 children: ReaderThemeConfig.all.map((t) {
-                  final selected = t.id == currentThemeId;
+                  final selected = t.id == _themeId;
                   return Expanded(
                     child: Padding(
                       padding: const EdgeInsets.symmetric(horizontal: 4),
                       child: InkWell(
                         onTap: () {
                           HapticFeedback.selectionClick();
-                          onThemeChanged(t.id);
+                          setState(() => _themeId = t.id);
+                          widget.onThemeChanged(t.id);
+                          ref
+                              .read(athenaAppearanceProvider.notifier)
+                              .setAppearance(AthenaAppearance.fromId(t.id));
                         },
                         borderRadius: BorderRadius.circular(8),
                         child: Container(
@@ -150,7 +177,8 @@ class TypographySheet extends StatelessWidget {
                             style: TextStyle(
                               fontFamily: AppTheme.fontUI,
                               color: t.textColor,
-                              fontWeight: selected ? FontWeight.w700 : FontWeight.w500,
+                              fontWeight:
+                                  selected ? FontWeight.w700 : FontWeight.w500,
                               fontSize: 12,
                             ),
                           ),
@@ -167,7 +195,11 @@ class TypographySheet extends StatelessWidget {
               const SizedBox(height: 6),
               Row(
                 children: [
-                  Text('A', style: TextStyle(fontFamily: currentFontFamily, fontSize: 13, color: theme.textColor)),
+                  Text('A',
+                      style: TextStyle(
+                          fontFamily: _fontFamily,
+                          fontSize: 13,
+                          color: theme.textColor)),
                   Expanded(
                     child: SliderTheme(
                       data: SliderTheme.of(context).copyWith(
@@ -175,38 +207,93 @@ class TypographySheet extends StatelessWidget {
                         thumbColor: theme.accentColor,
                       ),
                       child: Slider(
-                        value: currentFontSize.clamp(14.0, 26.0),
+                        value: _fontSize.clamp(14.0, 26.0),
                         min: 14.0,
                         max: 26.0,
                         divisions: 12,
-                        label: '${currentFontSize.toInt()}pt',
+                        label: '${_fontSize.toInt()}pt',
                         onChanged: (val) {
-                          onFontSizeChanged(val);
+                          setState(() => _fontSize = val);
+                          widget.onFontSizeChanged(val);
                         },
                       ),
                     ),
                   ),
-                  Text('A', style: TextStyle(fontFamily: currentFontFamily, fontSize: 22, fontWeight: FontWeight.bold, color: theme.textColor)),
+                  Text('A',
+                      style: TextStyle(
+                          fontFamily: _fontFamily,
+                          fontSize: 22,
+                          fontWeight: FontWeight.bold,
+                          color: theme.textColor)),
                 ],
               ),
               const SizedBox(height: 14),
 
-              // Font Family Selector
+              // Line Spacing Slider (1.4 - 2.0)
+              Text('LINE SPACING', style: _headerStyle(theme)),
+              const SizedBox(height: 6),
+              Row(
+                children: [
+                  Text('1.4',
+                      style: TextStyle(
+                          fontFamily: AppTheme.fontUI,
+                          fontSize: 12,
+                          color: theme.textColor)),
+                  Expanded(
+                    child: SliderTheme(
+                      data: SliderTheme.of(context).copyWith(
+                        activeTrackColor: theme.accentColor,
+                        thumbColor: theme.accentColor,
+                      ),
+                      child: Slider(
+                        value: _lineHeight.clamp(1.4, 2.0),
+                        min: 1.4,
+                        max: 2.0,
+                        divisions: 6,
+                        label: _lineHeight.toStringAsFixed(1),
+                        onChanged: (val) {
+                          setState(() => _lineHeight = val);
+                          widget.onLineHeightChanged(val);
+                        },
+                      ),
+                    ),
+                  ),
+                  Text('2.0',
+                      style: TextStyle(
+                          fontFamily: AppTheme.fontUI,
+                          fontSize: 12,
+                          color: theme.textColor)),
+                ],
+              ),
+              const SizedBox(height: 14),
+
+              // Font Family Selector with real bundled fonts
               Text('FONT', style: _headerStyle(theme)),
               const SizedBox(height: 8),
               Wrap(
                 spacing: 8,
                 runSpacing: 8,
-                children: ['Georgia', 'Literata', 'Bookerly', 'Inter', 'JetBrains Mono'].map((f) {
-                  final selected = currentFontFamily == f;
+                children: [
+                  'Newsreader',
+                  'DM Serif Display',
+                  'Geist',
+                  'Georgia',
+                  'monospace'
+                ].map((f) {
+                  final selected = _fontFamily == f;
                   return ChoiceChip(
-                    label: Text(f, style: TextStyle(fontFamily: f == 'JetBrains Mono' ? AppTheme.fontMono : f)),
+                    label: Text(f,
+                        style: TextStyle(
+                            fontFamily: f == 'monospace'
+                                ? AppTheme.fontMono
+                                : f)),
                     selected: selected,
                     selectedColor: theme.accentColor.withValues(alpha: 0.15),
                     backgroundColor: theme.innerCardColor,
                     labelStyle: TextStyle(
                       color: selected ? theme.accentColor : theme.textColor,
-                      fontWeight: selected ? FontWeight.w700 : FontWeight.w400,
+                      fontWeight:
+                          selected ? FontWeight.w700 : FontWeight.w400,
                       fontSize: 12,
                     ),
                     side: BorderSide(
@@ -215,7 +302,8 @@ class TypographySheet extends StatelessWidget {
                     onSelected: (val) {
                       if (val) {
                         HapticFeedback.selectionClick();
-                        onFontFamilyChanged(f);
+                        setState(() => _fontFamily = f);
+                        widget.onFontFamilyChanged(f);
                       }
                     },
                   );
@@ -240,8 +328,11 @@ class TypographySheet extends StatelessWidget {
                   'Guides eyes through text with highlighted fixation points',
                   style: TextStyle(fontSize: 12, color: theme.textMutedColor),
                 ),
-                value: currentBionic,
-                onChanged: onBionicChanged,
+                value: _bionic,
+                onChanged: (b) {
+                  setState(() => _bionic = b);
+                  widget.onBionicChanged(b);
+                },
               ),
             ],
           ),

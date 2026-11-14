@@ -72,6 +72,7 @@ class _ChaptersDrawerState extends State<ChaptersDrawer> {
     if (_chapters.isNotEmpty) {
       for (final ch in _chapters) {
         final title = ch['title']?.toString() ?? 'Chapter';
+        if (title.toLowerCase() == 'chapter passage') continue;
         final seq = (ch['chunk_sequence'] as num?)?.toInt() ?? 1;
         final level = (ch['level'] as num?)?.toInt() ?? 1;
         final page = ch['page']?.toString() ??
@@ -95,7 +96,7 @@ class _ChaptersDrawerState extends State<ChaptersDrawer> {
         final it = widget.feedItems[i];
         if (it.isReadingChunk) {
           final sec = it.sectionTitle?.trim();
-          if (sec != null && sec.isNotEmpty) {
+          if (sec != null && sec.isNotEmpty && sec.toLowerCase() != 'chapter passage') {
             if (displayedSections.isEmpty ||
                 displayedSections.last['title'] != sec) {
               displayedSections.add({

@@ -227,19 +227,22 @@ def _is_prose_page(page_text: str) -> bool:
     if _is_table_dominated(page_text) or _is_code_dominated(page_text) or _is_math_dominated(page_text) or _is_transcript_or_dialogue(page_text) or _is_legal_contract(page_text):
         return False
 
+    cjk_chars = len(re.findall(r"[\u3040-\u9fff\uac00-\ud7af]", page_text))
     words = re.findall(r"[^\W\d_]+", page_text)
-    total_words = len(words)
+    total_words = len(words) + (int(cjk_chars / 2.5) if cjk_chars >= 40 else 0)
     if total_words < 90:
         return False
 
-    sentence_pattern = re.compile(r'([^\W_][^.!?]*?[.!?]["\'”]?)(\s+|$)', re.DOTALL)
+    sentence_pattern = re.compile(r'([^\W_][^.!?…。！？।॥؟]*?[.!?…。！？।॥؟]["\'”’»)]?)(\s*|$)', re.DOTALL)
     raw_sentences = [m.group(1).strip() for m in sentence_pattern.finditer(page_text)]
 
     words_in_sentences = 0
     for s in raw_sentences:
+        s_cjk = len(re.findall(r"[\u3040-\u9fff\uac00-\ud7af]", s))
         s_words = re.findall(r"[^\W\d_]+", s)
-        if len(s_words) >= 7 and re.search(r'[.!?]["\'”]?$', s):
-            words_in_sentences += len(s_words)
+        s_word_count = len(s_words) + (int(s_cjk / 2.5) if s_cjk >= 10 else 0)
+        if s_word_count >= 5 and re.search(r'[.!?…。！？।॥؟]["\'”’»)]?$', s):
+            words_in_sentences += s_word_count
 
     grammatical_ratio = words_in_sentences / max(1, total_words)
     if grammatical_ratio < 0.40:

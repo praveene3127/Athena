@@ -37,6 +37,28 @@ class CardSlot {
   });
 }
 
+class ScriptAndLang {
+  final String script;
+  final String lang;
+  final double latinShare;
+  final double cyrillicShare;
+  final double arabicShare;
+  final double cjkShare;
+  final double devanagariShare;
+  final double englishStopwordRatio;
+
+  const ScriptAndLang({
+    required this.script,
+    required this.lang,
+    this.latinShare = 0.0,
+    this.cyrillicShare = 0.0,
+    this.arabicShare = 0.0,
+    this.cjkShare = 0.0,
+    this.devanagariShare = 0.0,
+    this.englishStopwordRatio = 0.0,
+  });
+}
+
 /// Word-Distance Coverage Planner (FP-11).
 /// Guarantees steady card coverage across the entire book (~1 card every 180 words,
 /// minimum distance max(120 words, 2 chunks)), never a rigid global 24-card ceiling!
@@ -521,7 +543,7 @@ class LocalContextService {
 
     if (bestEvidence == null ||
         (bestEvidence['abstract']?.toString().isEmpty ?? true)) {
-      final wiki = await _lookupWikipedia(concept);
+      final wiki = await _lookupWikipedia(concept, passage: passage);
       if (wiki != null && (wiki['extract']?.isNotEmpty ?? false)) {
         bestEvidence = {
           'title': wiki['title'] ?? concept,
@@ -610,6 +632,35 @@ class LocalContextService {
       );
     }
 
+    // ISM-07: Automatic Fallback Failover if primary provider fails (429/5xx/timeout) or is unconfigured
+    if (aiCard == null) {
+      final fbApiKey = await SecureStorageService.instance
+          .getAIKey('athena_ai_fallback_api_key');
+      final fbProvider = prefs?.getString('athena_ai_fallback_provider') ?? '';
+      final fbModel = prefs?.getString('athena_ai_fallback_model');
+      final fbBaseUrl = prefs?.getString('athena_ai_fallback_base_url');
+
+      if (fbApiKey != null &&
+          fbApiKey.trim().isNotEmpty &&
+          fbProvider.trim().isNotEmpty &&
+          fbModel != null &&
+          fbModel.trim().isNotEmpty) {
+        debugPrint(
+            '[Athena BYOK Failover] Primary failed or unconfigured, retrying with fallback provider: $fbProvider');
+        aiCard = await _generateWithLLM(
+          archetype: archetype,
+          concept: concept,
+          passage: passage,
+          exactQuote: exactQuote,
+          evidence: bestEvidence,
+          provider: fbProvider,
+          apiKey: fbApiKey.trim(),
+          model: fbModel.trim(),
+          baseUrl: fbBaseUrl,
+        );
+      }
+    }
+
     final String finalTitle;
     final String finalBody;
 
@@ -625,7 +676,7 @@ class LocalContextService {
     if (aiCard != null &&
         aiCard['body'] != null &&
         aiCard['body'].toString().isNotEmpty) {
-      var rawTitle = aiCard['title']?.toString() ?? '$archetype: $concept';
+      var rawTitle = aiCard['title']?.toString() ?? concept;
       var rawBody = aiCard['body']?.toString() ?? '';
       finalTitle = _cleanEditorialTitle(rawTitle, archetype, concept);
 
@@ -650,7 +701,7 @@ class LocalContextService {
     } else {
       finalBody =
           _formatArchetypeBody(archetype, concept, evidenceAbstract);
-      finalTitle = '$archetype: $concept';
+      finalTitle = _cleanEditorialTitle(concept, archetype, concept);
     }
 
     // 6. Honest Support Tiers & Tier-Driven why_here Copy
@@ -720,7 +771,7 @@ class LocalContextService {
                 caseSensitive: false),
             '')
         .trim();
-    return '$archetype: ${t.isEmpty ? concept : t}';
+    return t.isEmpty ? concept : t;
   }
 
   String _cleanEditorialBody(String text) {
@@ -777,24 +828,12 @@ class LocalContextService {
 
   String _formatArchetypeBody(
       String archetype, String concept, String extract) {
-    final cleanExtract = _leadingSentences(extract, 65);
-    switch (archetype) {
-      case 'REAL-WORLD STUDY':
-      case 'EMPIRICAL STUDY':
-        return 'Empirical investigations into $concept demonstrate that $cleanExtract';
-      case 'COUNTER-INTUITIVE FACT':
-      case 'CRITICAL DEBATE':
-        return 'In contrast to conventional assumptions, documented findings regarding $concept show that $cleanExtract';
-      case 'HISTORICAL BACKSTORY':
-      case 'HISTORICAL CONTEXT':
-        return 'Archival records and primary historical accounts reveal that $cleanExtract';
-      case 'THE HIDDEN MECHANISM':
-      case 'CORE PARADOX':
-        return 'The underlying mechanism governing $concept operates through documented systemic dynamics: $cleanExtract';
-      default:
-        return cleanExtract;
-    }
+    return _leadingSentences(extract, 65).trim();
   }
+
+  String formatArchetypeBodyForTest(
+          String archetype, String concept, String extract) =>
+      _formatArchetypeBody(archetype, concept, extract);
 
   Future<Map<String, dynamic>?> _generateWithLLM({
     required String archetype,
@@ -885,16 +924,35 @@ Respond ONLY with valid JSON with this exact schema:
             }
           }
         }
-      } else if (pKey == 'openai' || pKey == 'openrouter' || pKey == 'groq') {
+      } else if (pKey == 'openai' ||
+          pKey == 'openrouter' ||
+          pKey == 'groq' ||
+          pKey == 'deepseek' ||
+          pKey == 'mistral' ||
+          pKey == 'together' ||
+          pKey == 'nvidia' ||
+          pKey == 'custom') {
         final host = (baseUrl != null && baseUrl.isNotEmpty)
             ? baseUrl
             : (pKey == 'openrouter'
                 ? 'https://openrouter.ai/api/v1'
                 : (pKey == 'groq'
                     ? 'https://api.groq.com/openai/v1'
-                    : 'https://api.openai.com/v1'));
+                    : (pKey == 'deepseek'
+                        ? 'https://api.deepseek.com/v1'
+                        : (pKey == 'mistral'
+                            ? 'https://api.mistral.ai/v1'
+                            : (pKey == 'together'
+                                ? 'https://api.together.xyz/v1'
+                                : (pKey == 'nvidia'
+                                    ? 'https://integrate.api.nvidia.com/v1'
+                                    : 'https://api.openai.com/v1'))))));
+        final cleanHost = host.replaceAll(RegExp(r'/+$'), '');
+        final endpoint = cleanHost.endsWith('/chat/completions')
+            ? cleanHost
+            : '$cleanHost/chat/completions';
         final res = await client.post(
-          '$host/chat/completions',
+          endpoint,
           options: Options(headers: {'Authorization': 'Bearer $apiKey'}),
           data: {
             'model': model,
@@ -982,6 +1040,142 @@ Respond ONLY with valid JSON with this exact schema:
 
   static Set<String> get negativeConceptCacheForTest => _negativeConceptCache;
 
+  static ScriptAndLang detectScriptAndLang(String text) {
+    if (text.trim().isEmpty) {
+      return const ScriptAndLang(
+          script: 'latin', lang: 'en', latinShare: 1.0, englishStopwordRatio: 1.0);
+    }
+
+    int latinCount = 0;
+    int cyrillicCount = 0;
+    int arabicCount = 0;
+    int cjkCount = 0;
+    int devanagariCount = 0;
+    int totalLetters = 0;
+
+    for (final char in text.runes) {
+      if ((char >= 0x0041 && char <= 0x005A) ||
+          (char >= 0x0061 && char <= 0x007A) ||
+          (char >= 0x00C0 && char <= 0x024F)) {
+        latinCount++;
+        totalLetters++;
+      } else if (char >= 0x0400 && char <= 0x04FF) {
+        cyrillicCount++;
+        totalLetters++;
+      } else if (char >= 0x0600 && char <= 0x06FF) {
+        arabicCount++;
+        totalLetters++;
+      } else if (char >= 0x0900 && char <= 0x097F) {
+        devanagariCount++;
+        totalLetters++;
+      } else if ((char >= 0x3040 && char <= 0x30FF) ||
+          (char >= 0x3400 && char <= 0x4DBF) ||
+          (char >= 0x4E00 && char <= 0x9FFF) ||
+          (char >= 0xF900 && char <= 0xFAFF)) {
+        cjkCount++;
+        totalLetters++;
+      } else {
+        final s = String.fromCharCode(char);
+        if (RegExp(r'^\p{L}$', unicode: true).hasMatch(s)) {
+          totalLetters++;
+        }
+      }
+    }
+
+    final total = totalLetters > 0 ? totalLetters : 1;
+    final latinShare = latinCount / total;
+    final cyrillicShare = cyrillicCount / total;
+    final arabicShare = arabicCount / total;
+    final cjkShare = cjkCount / total;
+    final devanagariShare = devanagariCount / total;
+
+    final words = text
+        .toLowerCase()
+        .split(RegExp(r'[^a-zA-Z]+'))
+        .where((w) => w.isNotEmpty)
+        .toList();
+    const enStopwords = {
+      'the', 'and', 'of', 'to', 'in', 'that', 'is', 'was', 'for', 'with',
+      'as', 'by', 'on', 'at', 'from', 'it', 'this', 'an', 'be', 'are', 'not', 'or', 'which'
+    };
+    final swCount = words.where(enStopwords.contains).length;
+    final englishStopwordRatio = words.isEmpty ? 0.0 : (swCount / words.length);
+
+    String script = 'latin';
+    String lang = 'en';
+
+    if (cyrillicShare > 0.35) {
+      script = 'cyrillic';
+      lang = 'ru';
+    } else if (arabicShare > 0.35) {
+      script = 'arabic';
+      lang = 'ar';
+    } else if (cjkShare > 0.15) {
+      script = 'cjk';
+      lang = 'zh';
+    } else if (devanagariShare > 0.35) {
+      script = 'devanagari';
+      lang = 'hi';
+    } else if (latinShare >= 0.5) {
+      script = 'latin';
+      lang = englishStopwordRatio >= 0.08 ? 'en' : 'latin';
+    }
+
+    return ScriptAndLang(
+      script: script,
+      lang: lang,
+      latinShare: latinShare,
+      cyrillicShare: cyrillicShare,
+      arabicShare: arabicShare,
+      cjkShare: cjkShare,
+      devanagariShare: devanagariShare,
+      englishStopwordRatio: englishStopwordRatio,
+    );
+  }
+
+  static bool matchesPassageLanguageAndScript({
+    required String passage,
+    required String title,
+    required String abstractText,
+  }) {
+    final passageMeta = detectScriptAndLang(passage);
+    final fullEvidence = '$title $abstractText';
+    final evidenceMeta = detectScriptAndLang(fullEvidence);
+
+    if (passageMeta.script == 'latin') {
+      if (evidenceMeta.cyrillicShare > 0.05 ||
+          evidenceMeta.cjkShare > 0.05 ||
+          evidenceMeta.arabicShare > 0.05) {
+        return false;
+      }
+
+      if (passageMeta.lang == 'en') {
+        final words = abstractText
+            .toLowerCase()
+            .split(RegExp(r'[^a-zA-Z]+'))
+            .where((w) => w.isNotEmpty)
+            .toList();
+        const enStopwords = {
+          'the', 'and', 'of', 'to', 'in', 'that', 'is', 'was', 'for', 'with',
+          'as', 'by', 'on', 'at', 'from', 'it', 'this', 'an', 'be', 'are', 'not', 'or', 'which'
+        };
+        if (words.length >= 10) {
+          final swCount = words.where(enStopwords.contains).length;
+          final ratio = swCount / words.length;
+          if (ratio < 0.12) {
+            return false;
+          }
+        }
+      }
+    } else {
+      if (evidenceMeta.script != passageMeta.script) {
+        return false;
+      }
+    }
+
+    return true;
+  }
+
   /// Filters and ranks evidence candidates using concept presence, passage keyword overlap,
   /// minimum abstract length, and valid URL/DOI.
   static List<Map<String, dynamic>> scoreAndFilterEvidence({
@@ -1014,6 +1208,15 @@ Respond ONLY with valid JSON with this exact schema:
       final abstractText = (cand['abstract']?.toString() ?? '').toLowerCase();
       final fullCandidateText = '$title $abstractText';
       final url = cand['url']?.toString().trim() ?? '';
+
+      // 0. Language and Script Match Gate
+      if (!matchesPassageLanguageAndScript(
+        passage: passage,
+        title: cand['title']?.toString() ?? '',
+        abstractText: cand['abstract']?.toString() ?? '',
+      )) {
+        continue;
+      }
 
       // 1. Must have valid URL / DOI
       if (url.isEmpty || (!url.startsWith('http://') && !url.startsWith('https://'))) {
@@ -1204,13 +1407,14 @@ Respond ONLY with valid JSON with this exact schema:
       }
     }
 
+    final passageMeta = detectScriptAndLang(passage);
     await _acquireConcurrencySlot();
     final List<Map<String, dynamic>> results = [];
     try {
       final futures = <Future<List<Map<String, dynamic>>>>[
-        _queryCrossref(concept),
+        _queryCrossref(concept, lang: passageMeta.lang),
         _queryEuropePmc(concept),
-        _queryOpenAlex(concept),
+        _queryOpenAlex(concept, lang: passageMeta.lang),
       ];
 
       final batch = await Future.wait(futures);
@@ -1253,11 +1457,11 @@ Respond ONLY with valid JSON with this exact schema:
     return filtered;
   }
 
-  Future<List<Map<String, dynamic>>> _queryCrossref(String query) async {
+  Future<List<Map<String, dynamic>>> _queryCrossref(String query, {String lang = 'en'}) async {
     try {
       final cleanQ = query.replaceAll(RegExp(r'[^\w\s-]'), ' ').trim();
       final uri = Uri.parse(
-          'https://api.crossref.org/works?query=${Uri.encodeComponent(cleanQ)}&filter=has-abstract:true&rows=2&mailto=athena-reader@example.com');
+          'https://api.crossref.org/works?query=${Uri.encodeComponent(cleanQ)}&filter=has-abstract:true,language:$lang&rows=2&mailto=athena-reader@example.com');
       final res = await _dio.getUri<Map<String, dynamic>>(uri);
       final items = res.data?['message']?['items'] as List?;
       if (items == null) return const [];
@@ -1343,11 +1547,11 @@ Respond ONLY with valid JSON with this exact schema:
     }
   }
 
-  Future<List<Map<String, dynamic>>> _queryOpenAlex(String query) async {
+  Future<List<Map<String, dynamic>>> _queryOpenAlex(String query, {String lang = 'en'}) async {
     try {
       final cleanQ = query.replaceAll(RegExp(r'[^\w\s-]'), ' ').trim();
       final uri = Uri.parse(
-          'https://api.openalex.org/works?search=${Uri.encodeComponent(cleanQ)}&per_page=2');
+          'https://api.openalex.org/works?search=${Uri.encodeComponent(cleanQ)}&filter=has_abstract:true,language:$lang&per_page=2');
       final res = await _dio.getUri<Map<String, dynamic>>(uri);
       final results = res.data?['results'] as List?;
       if (results == null) return const [];
@@ -1398,7 +1602,7 @@ Respond ONLY with valid JSON with this exact schema:
     }
   }
 
-  Future<Map<String, String>?> _lookupWikipedia(String term) async {
+  Future<Map<String, String>?> _lookupWikipedia(String term, {String? passage}) async {
     try {
       final search = await _dio.get<Map<String, dynamic>>(
           'https://en.wikipedia.org/w/api.php',
@@ -1425,6 +1629,14 @@ Respond ONLY with valid JSON with this exact schema:
         if (data?['type'] == 'standard' &&
             extract.trim().length >= 40 &&
             url != null) {
+          if (passage != null &&
+              !matchesPassageLanguageAndScript(
+                passage: passage,
+                title: title,
+                abstractText: extract,
+              )) {
+            continue;
+          }
           return {'title': title, 'extract': extract, 'url': url};
         }
       }
@@ -1449,6 +1661,86 @@ Respond ONLY with valid JSON with this exact schema:
     return termCounts;
   }
 
+  static final Set<String> _validLongConcepts = {
+    'neuroplasticity',
+    'electromagnetism',
+    'counterbalancing',
+    'interdependence',
+    'characterization',
+    'differentiation',
+    'synchronization',
+    'transformational',
+    'institutionalization',
+    'multidisciplinary',
+    'biodiversity',
+    'photosynthesis',
+    'sustainability',
+    'macroeconomics',
+    'microeconomics',
+    'telecommunications',
+    'crystallography',
+    'thermodynamics',
+    'epistemology',
+    'phenomenology',
+    'existentialism',
+  };
+
+  static bool isCorruptedOrFusedConcept(String word) {
+    final clean = word.replaceAll(RegExp(r'[^a-zA-Z]'), '').trim();
+    if (clean.isEmpty) return true;
+
+    // 1. Reject words > 15 chars not in valid long concepts
+    if (clean.length > 15 && !_validLongConcepts.contains(clean.toLowerCase())) {
+      return true;
+    }
+
+    // 2. Reject words mixing a capitalized proper noun with verb/adverb/adjective suffixes
+    final lower = clean.toLowerCase();
+    const splitWords = [
+      'intoned',
+      'solemnly',
+      'bellowed',
+      'shouted',
+      'whispered',
+      'screamed',
+      'muttered',
+      'sighed',
+      'nodded',
+      'replied',
+      'exclaimed',
+      'students',
+      'pillars',
+      'alumni',
+      'distinguished',
+      'year',
+    ];
+    for (final sfx in splitWords) {
+      if (lower.endsWith(sfx) && lower.length >= sfx.length + 2) {
+        return true;
+      }
+      if (lower.startsWith(sfx) && lower.length >= sfx.length + 2) {
+        return true;
+      }
+      if (lower.contains(sfx) && lower.length >= sfx.length + 3) {
+        return true;
+      }
+    }
+
+    // 3. Fused proper nouns with suffixes like -ed, -ly, -ing attached after a capital stem
+    final fusedNameRegex =
+        RegExp(r'^[A-Z][a-z]{2,}(?:[a-z]{3,}(?:ed|ly|ing))$');
+    if (fusedNameRegex.hasMatch(clean) && !_validLongConcepts.contains(lower)) {
+      return true;
+    }
+
+    // 4. Reject camelCase internal capitalization e.g. NolanIntoned
+    if (RegExp(r'[a-z][A-Z]').hasMatch(clean)) {
+      return true;
+    }
+
+    return false;
+  }
+
   /// Non-Fiction & Multi-Genre 4-Tier Concept Extractor (FP-12).
   /// Never returns null or empty on an eligible conceptual chunk! Fall back through:
   ///   1) Multi-word capitalized phrase (2–4 words)
@@ -1466,8 +1758,9 @@ Respond ONLY with valid JSON with this exact schema:
       final phrase = m.group(0)!.trim();
       final words = phrase.toLowerCase().split(RegExp(r'\s+'));
       if (words.length >= 2 && words.length <= 4) {
-        final hasExcluded = words.any((w) => _excludedConceptWords.contains(w));
-        if (!hasExcluded) {
+        final hasExcluded = words.any((w) =>
+            _excludedConceptWords.contains(w) || isCorruptedOrFusedConcept(w));
+        if (!hasExcluded && !isCorruptedOrFusedConcept(phrase)) {
           return phrase;
         }
       }
@@ -1477,7 +1770,8 @@ Respond ONLY with valid JSON with this exact schema:
     final singleEntities = RegExp(r'(?<![.!?]\s)\b[A-Z][a-z]{3,}\b');
     for (final m in singleEntities.allMatches(passage)) {
       final ent = m.group(0)!.trim();
-      if (!_excludedConceptWords.contains(ent.toLowerCase())) {
+      if (!_excludedConceptWords.contains(ent.toLowerCase()) &&
+          !isCorruptedOrFusedConcept(ent)) {
         return ent;
       }
     }
@@ -1491,7 +1785,10 @@ Respond ONLY with valid JSON with this exact schema:
       final passageWords = passage
           .toLowerCase()
           .split(RegExp(r'[^a-z]+'))
-          .where((w) => w.length >= 5 && !_excludedConceptWords.contains(w))
+          .where((w) =>
+              w.length >= 5 &&
+              !_excludedConceptWords.contains(w) &&
+              !isCorruptedOrFusedConcept(w))
           .toSet();
       String? bestRecurring;
       int maxFreq = 1;
@@ -1502,7 +1799,7 @@ Respond ONLY with valid JSON with this exact schema:
           bestRecurring = w;
         }
       }
-      if (bestRecurring != null) {
+      if (bestRecurring != null && !isCorruptedOrFusedConcept(bestRecurring)) {
         return bestRecurring[0].toUpperCase() + bestRecurring.substring(1);
       }
     }
@@ -1512,27 +1809,35 @@ Respond ONLY with valid JSON with this exact schema:
         .split(RegExp(r'[^A-Za-z]+'))
         .where((w) =>
             w.length >= 4 &&
-            !_excludedConceptWords.contains(w.toLowerCase()))
+            !_excludedConceptWords.contains(w.toLowerCase()) &&
+            !isCorruptedOrFusedConcept(w))
         .toList();
 
     if (contentWords.length >= 2) {
       for (int i = 0; i < contentWords.length - 1; i++) {
         final pair = '${contentWords[i]} ${contentWords[i + 1]}';
-        if (passage.toLowerCase().contains(pair.toLowerCase())) {
+        if (!isCorruptedOrFusedConcept(pair) &&
+            passage.toLowerCase().contains(pair.toLowerCase())) {
           return pair;
         }
       }
-      return '${contentWords[0]} ${contentWords[1]}';
-    } else if (contentWords.isNotEmpty) {
+      final pair = '${contentWords[0]} ${contentWords[1]}';
+      if (!isCorruptedOrFusedConcept(pair)) {
+        return pair;
+      }
+    } else if (contentWords.isNotEmpty &&
+        !isCorruptedOrFusedConcept(contentWords[0])) {
       return contentWords[0];
     }
 
     // Universal fallback: never null
-    final anyWords =
-        passage.split(RegExp(r'\s+')).where((w) => w.length >= 4).toList();
+    final anyWords = passage
+        .split(RegExp(r'\s+'))
+        .where((w) => w.length >= 4 && !isCorruptedOrFusedConcept(w))
+        .toList();
     if (anyWords.isNotEmpty) {
       final clean = anyWords.first.replaceAll(RegExp(r'[^A-Za-z]'), '');
-      if (clean.length >= 3) return clean;
+      if (clean.length >= 3 && !isCorruptedOrFusedConcept(clean)) return clean;
     }
 
     return 'Core Thesis';

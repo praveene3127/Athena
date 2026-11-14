@@ -42,6 +42,21 @@ final readerDataProvider =
 /// 1) ReaderTopBar (56px fixed)
 /// 2) Expanded Viewport (ReaderFeedView or ReaderFlowView)
 /// 3) ReaderBottomBar (60px fixed)
+enum CardSlotStatus { absent, inFlight, ready, failedCooldown }
+
+class CardSlotState {
+  final CardSlotStatus status;
+  final DateTime? cooldownUntil;
+  const CardSlotState(this.status, [this.cooldownUntil]);
+
+  bool get isInFlight => status == CardSlotStatus.inFlight;
+  bool get isReady => status == CardSlotStatus.ready;
+  bool get isInCooldown =>
+      status == CardSlotStatus.failedCooldown &&
+      cooldownUntil != null &&
+      DateTime.now().isBefore(cooldownUntil!);
+}
+
 class ReaderScreen extends ConsumerStatefulWidget {
   final String documentId;
   final String? initialChunkId;
@@ -136,8 +151,9 @@ class _ReaderScreenState extends ConsumerState<ReaderScreen>
         final currentItem = _cachedFeedItems[index];
         if (!currentItem.isReadingChunk) return;
         final chunkSeq = currentItem.sequence;
-        if (chunkSeq == null || _cardsByChunkSeq.containsKey(chunkSeq)) return;
+        if (chunkSeq == null || !_canSynthesizeCardForSeq(chunkSeq)) return;
 
+        _cardSlotStates[chunkSeq] = const CardSlotState(CardSlotStatus.inFlight);
         final chunkId = currentItem.id;
 
         try {
@@ -174,11 +190,12 @@ class _ReaderScreenState extends ConsumerState<ReaderScreen>
             cardMap = await service.generateCardForChunk(
               widget.documentId,
               chunkMap,
-              _cardsByChunkSeq.length,
+              chunkSeq,
             );
           }
 
           if (cardMap != null) {
+            _cardSlotStates[chunkSeq] = const CardSlotState(CardSlotStatus.ready);
             // ALWAYS persist valid generated cards to SQLite so the work is never lost (RC-07)
             await LocalDatabase.instance.insertCards([cardMap]);
 
@@ -206,6 +223,10 @@ class _ReaderScreenState extends ConsumerState<ReaderScreen>
             }
           }
         } catch (e) {
+          _cardSlotStates[chunkSeq] = CardSlotState(
+            CardSlotStatus.failedCooldown,
+            DateTime.now().add(const Duration(seconds: 30)),
+          );
           debugPrint('[Athena Dwell Notice] Background card generation: $e');
         }
       },
@@ -213,6 +234,16 @@ class _ReaderScreenState extends ConsumerState<ReaderScreen>
 
     _loadPreferences();
     _loadChunkEdits();
+  }
+
+  final Map<int, CardSlotState> _cardSlotStates = {};
+
+  bool _canSynthesizeCardForSeq(int seq) {
+    if (_cardsByChunkSeq.containsKey(seq)) return false;
+    final state = _cardSlotStates[seq];
+    if (state == null) return true;
+    if (state.isInFlight || state.isReady || state.isInCooldown) return false;
+    return true;
   }
 
   final Set<int> _prefetchInFlight = {};
@@ -228,14 +259,13 @@ class _ReaderScreenState extends ConsumerState<ReaderScreen>
       final item = _cachedFeedItems[i];
       if (!item.isReadingChunk) continue;
       final seq = item.sequence;
-      if (seq == null ||
-          _cardsByChunkSeq.containsKey(seq) ||
-          _prefetchInFlight.contains(seq)) {
+      if (seq == null || !_canSynthesizeCardForSeq(seq)) {
         continue;
       }
 
       if (_prefetchInFlight.length >= 2) break;
 
+      _cardSlotStates[seq] = const CardSlotState(CardSlotStatus.inFlight);
       _prefetchInFlight.add(seq);
       _executePrefetchForChunk(item);
     }
@@ -277,11 +307,12 @@ class _ReaderScreenState extends ConsumerState<ReaderScreen>
         cardMap = await service.generateCardForChunk(
           widget.documentId,
           chunkMap,
-          _cardsByChunkSeq.length,
+          seq,
         );
       }
 
       if (cardMap != null) {
+        _cardSlotStates[seq] = const CardSlotState(CardSlotStatus.ready);
         await LocalDatabase.instance.insertCards([cardMap]);
 
         final cardItem = ReaderItem.fromJson({
@@ -307,6 +338,10 @@ class _ReaderScreenState extends ConsumerState<ReaderScreen>
         }
       }
     } catch (e) {
+      _cardSlotStates[seq] = CardSlotState(
+        CardSlotStatus.failedCooldown,
+        DateTime.now().add(const Duration(seconds: 30)),
+      );
       debugPrint('[Athena Prefetch Notice] Card generation: $e');
     } finally {
       _prefetchInFlight.remove(seq);
@@ -704,6 +739,9 @@ class _ReaderScreenState extends ConsumerState<ReaderScreen>
           bionic: _bionic,
           onThemeChanged: (t) {
             setState(() => _themeId = t);
+            ref
+                .read(athenaAppearanceProvider.notifier)
+                .setAppearance(AthenaAppearance.fromId(t));
             unawaited(_persistTypography('reader_theme', t));
           },
           onFontSizeChanged: (s) {

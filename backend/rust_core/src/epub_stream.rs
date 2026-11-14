@@ -98,6 +98,73 @@ impl EpubStreamExtractor {
         }
     }
 
+    /// Resolves the ordered spine file paths from the package OPF manifest (XLG-02).
+    pub fn list_spine_entries(&self) -> Result<Vec<String>, EpubError> {
+        let opf_path = self.get_opf_path()?;
+        let opf_dir = if let Some(idx) = opf_path.rfind('/') {
+            opf_path[..idx + 1].to_string()
+        } else {
+            String::new()
+        };
+
+        let file = File::open(&self.file_path)?;
+        let mut archive = ZipArchive::new(file)?;
+        let mut opf_file = archive.by_name(&opf_path)?;
+        let mut opf_content = String::new();
+        opf_file.read_to_string(&mut opf_content)?;
+
+        let mut reader = Reader::from_str(&opf_content);
+        reader.config_mut().trim_text(true);
+
+        let mut manifest_map = std::collections::HashMap::new();
+        let mut spine_ids = Vec::new();
+        let mut buf = Vec::new();
+
+        loop {
+            match reader.read_event_into(&mut buf)? {
+                Event::Start(ref e) | Event::Empty(ref e) if e.name().as_ref() == b"item" => {
+                    let mut id = String::new();
+                    let mut href = String::new();
+                    for attr in e.attributes().flatten() {
+                        if attr.key.as_ref() == b"id" {
+                            id = String::from_utf8_lossy(&attr.value).to_string();
+                        } else if attr.key.as_ref() == b"href" {
+                            href = String::from_utf8_lossy(&attr.value).to_string();
+                        }
+                    }
+                    if !id.is_empty() && !href.is_empty() {
+                        manifest_map.insert(id, href);
+                    }
+                }
+                Event::Start(ref e) | Event::Empty(ref e) if e.name().as_ref() == b"itemref" => {
+                    for attr in e.attributes().flatten() {
+                        if attr.key.as_ref() == b"idref" {
+                            spine_ids.push(String::from_utf8_lossy(&attr.value).to_string());
+                            break;
+                        }
+                    }
+                }
+                Event::Eof => break,
+                _ => (),
+            }
+            buf.clear();
+        }
+
+        let mut entries = Vec::new();
+        for idref in spine_ids {
+            if let Some(href) = manifest_map.get(&idref) {
+                let full_path = if opf_dir.is_empty() {
+                    href.clone()
+                } else {
+                    format!("{}{}", opf_dir, href)
+                };
+                entries.push(full_path);
+            }
+        }
+
+        Ok(entries)
+    }
+
     /// Extracts plaintext blocks from an XHTML spine entry using a zero-allocation XML stream state machine.
     pub fn stream_spine_entry(&self, entry_name: &str, spine_idx: usize) -> Result<Vec<EpubBlock>, EpubError> {
         let file = File::open(&self.file_path)?;

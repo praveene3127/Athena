@@ -9,19 +9,65 @@ import 'package:athena/services/local_context_service.dart';
 /// Single-flight coordinator for document ingestion, checkpoint resumability,
 /// and Android foreground service lifecycle.
 class IngestionJobCoordinator {
-  IngestionJobCoordinator._();
+  IngestionJobCoordinator._() {
+    _fgChannel.setMethodCallHandler(_handleMethodCall);
+    _legacyChannel.setMethodCallHandler(_handleMethodCall);
+  }
 
   static final IngestionJobCoordinator instance = IngestionJobCoordinator._();
 
   static const MethodChannel _fgChannel =
+      MethodChannel('athena/foreground_ingestion');
+  static const MethodChannel _legacyChannel =
       MethodChannel('com.athena.reading/foreground_service');
 
   final Set<String> _activeDocIds = <String>{};
+  final Set<String> _cancelledDocIds = <String>{};
   DateTime _lastNotificationUpdate = DateTime.fromMillisecondsSinceEpoch(0);
 
   bool isJobActive(String docId) => _activeDocIds.contains(docId);
+  bool isJobCancelled(String docId) => _cancelledDocIds.contains(docId);
 
   Set<String> get activeDocIds => Set.unmodifiable(_activeDocIds);
+
+  Future<dynamic> _handleMethodCall(MethodCall call) async {
+    if (call.method == 'onForegroundTimeout') {
+      debugPrint('[Athena Coordinator] Received onForegroundTimeout from Android OS');
+      await _handleTimeout();
+    }
+  }
+
+  Future<void> _handleTimeout() async {
+    final activeIds = List<String>.from(_activeDocIds);
+    for (final docId in activeIds) {
+      await cancelJob(docId, markStatus: 'paused', reason: 'Foreground service timed out');
+    }
+  }
+
+  /// Cancels an active ingestion job, cleans up active state and foreground service.
+  Future<void> cancelJob(String docId, {String markStatus = 'paused', String? reason}) async {
+    _cancelledDocIds.add(docId);
+    _activeDocIds.remove(docId);
+    try {
+      final db = await LocalDatabase.instance.database;
+      await db.update(
+        'documents',
+        {
+          'status': markStatus,
+          'stage': markStatus,
+          'stage_label': reason ?? 'Ingestion paused',
+          'updated_at': DateTime.now().toIso8601String(),
+        },
+        where: 'id = ?',
+        whereArgs: [docId],
+      );
+    } catch (e) {
+      debugPrint('[Athena Coordinator] cancelJob error: $e');
+    }
+    if (_activeDocIds.isEmpty) {
+      await _stopForeground();
+    }
+  }
 
   /// Run startup recovery ONCE in main() before runApp.
   /// Any interrupted or stalled jobs are safely marked 'paused' preserving all committed chunks.
@@ -72,39 +118,30 @@ class IngestionJobCoordinator {
     }
   }
 
-  Future<void> requestNotificationPermission() async {
+  Future<void> _invokeChannel(String method, [dynamic arguments]) async {
     if (kIsWeb) return;
     try {
-      await _fgChannel.invokeMethod('requestNotificationPermission');
-    } on MissingPluginException catch (e) {
-      debugPrint(
-          '[Athena Coordinator] requestNotificationPermission notice: ${e.message}');
+      await _fgChannel.invokeMethod(method, arguments);
+    } on MissingPluginException {
+      try {
+        await _legacyChannel.invokeMethod(method, arguments);
+      } on MissingPluginException catch (e) {
+        debugPrint('[Athena Coordinator] $method notice: ${e.message}');
+      }
     } on PlatformException catch (e) {
       if (e.code == 'notImplemented') {
-        debugPrint(
-            '[Athena Coordinator] requestNotificationPermission not implemented');
+        debugPrint('[Athena Coordinator] $method not implemented');
       } else {
         rethrow;
       }
     }
   }
 
-  Future<void> _startForeground(String title) async {
-    if (kIsWeb) return;
-    try {
-      await _fgChannel.invokeMethod('startForegroundService', {'title': title});
-    } on MissingPluginException catch (e) {
-      debugPrint(
-          '[Athena Coordinator] startForegroundService notice: ${e.message}');
-    } on PlatformException catch (e) {
-      if (e.code == 'notImplemented') {
-        debugPrint(
-            '[Athena Coordinator] startForegroundService not implemented');
-      } else {
-        rethrow;
-      }
-    }
-  }
+  Future<void> requestNotificationPermission() =>
+      _invokeChannel('requestNotificationPermission');
+
+  Future<void> _startForeground(String title) =>
+      _invokeChannel('startForegroundService', {'title': title});
 
   Future<void> updateForegroundProgress({
     required String title,
@@ -120,42 +157,16 @@ class IngestionJobCoordinator {
       return;
     }
     _lastNotificationUpdate = now;
-    try {
-      await _fgChannel.invokeMethod('updateForegroundProgress', {
-        'title': title,
-        'page': page,
-        'total': total,
-        'percent': percent,
-      });
-    } on MissingPluginException catch (e) {
-      debugPrint(
-          '[Athena Coordinator] updateForegroundProgress notice: ${e.message}');
-    } on PlatformException catch (e) {
-      if (e.code == 'notImplemented') {
-        debugPrint(
-            '[Athena Coordinator] updateForegroundProgress not implemented');
-      } else {
-        rethrow;
-      }
-    }
+    await _invokeChannel('updateForegroundProgress', {
+      'title': title,
+      'page': page,
+      'total': total,
+      'percent': percent,
+    });
   }
 
-  Future<void> _stopForeground() async {
-    if (kIsWeb) return;
-    try {
-      await _fgChannel.invokeMethod('stopForegroundService');
-    } on MissingPluginException catch (e) {
-      debugPrint(
-          '[Athena Coordinator] stopForegroundService notice: ${e.message}');
-    } on PlatformException catch (e) {
-      if (e.code == 'notImplemented') {
-        debugPrint(
-            '[Athena Coordinator] stopForegroundService not implemented');
-      } else {
-        rethrow;
-      }
-    }
-  }
+  Future<void> _stopForeground() =>
+      _invokeChannel('stopForegroundService');
 
   /// Start a new ingestion or resume an unfinished/paused/interrupted document from its checkpoint.
   /// If redoFromScratch is true, clears committed chunks and restarts from page 1.
@@ -170,41 +181,42 @@ class IngestionJobCoordinator {
       return docId;
     }
 
-    if (redoFromScratch) {
-      await LocalDatabase.instance.clearDocumentContent(docId);
-      final db = await LocalDatabase.instance.database;
-      await db.update(
-        'documents',
-        {
-          'last_checkpoint_page': 0,
-          'last_chunk_sequence': 0,
-          'last_char_offset': 0,
-          'carry_over_text': null,
-          'profile_json': null,
-          'status': 'queued',
-          'percent': 0,
-          'processed_page': 0,
-          'processed_pages': 0,
-        },
-        where: 'id = ?',
-        whereArgs: [docId],
-      );
-    }
-
-    final doc = await LocalDatabase.instance.getDocument(docId);
-    if (doc == null) {
-      throw const AppError(
-        code: 'DOC_NOT_FOUND',
-        message: 'Document not found in local database.',
-      );
-    }
-
+    _cancelledDocIds.remove(docId);
     _activeDocIds.add(docId);
-    final title = (doc['title'] as String?) ?? 'Document';
-    await requestNotificationPermission();
-    await _startForeground('Reading $title...');
 
     try {
+      if (redoFromScratch) {
+        await LocalDatabase.instance.clearDocumentContent(docId);
+        final db = await LocalDatabase.instance.database;
+        await db.update(
+          'documents',
+          {
+            'last_checkpoint_page': 0,
+            'last_chunk_sequence': 0,
+            'last_char_offset': 0,
+            'carry_over_text': null,
+            'profile_json': null,
+            'status': 'queued',
+            'percent': 0,
+            'processed_page': 0,
+            'processed_pages': 0,
+          },
+          where: 'id = ?',
+          whereArgs: [docId],
+        );
+      }
+
+      final doc = await LocalDatabase.instance.getDocument(docId);
+      if (doc == null) {
+        throw const AppError(
+          code: 'DOC_NOT_FOUND',
+          message: 'Document not found in local database.',
+        );
+      }
+
+      final title = (doc['title'] as String?) ?? 'Document';
+      await requestNotificationPermission();
+      await _startForeground('Reading $title...');
       final filePath = doc['file_path'] as String?;
       final fileName = doc['filename'] as String? ?? 'document.pdf';
       final totalPages = (doc['page_count'] as num?)?.toInt() ?? 0;
@@ -337,6 +349,10 @@ class IngestionJobCoordinator {
       onProgress?.call(1.0, 'Ready to read');
       return docId;
     } catch (e) {
+      if (isJobCancelled(docId)) {
+        debugPrint('[Athena Coordinator] Ingestion cancelled cleanly for $docId');
+        return docId;
+      }
       debugPrint('[Athena Coordinator] Ingestion failed: $e');
       final appErr = AppError.fromException(e);
       await LocalDatabase.instance.updateDocumentProgress(
@@ -350,7 +366,10 @@ class IngestionJobCoordinator {
       rethrow;
     } finally {
       _activeDocIds.remove(docId);
-      await _stopForeground();
+      _cancelledDocIds.remove(docId);
+      if (_activeDocIds.isEmpty) {
+        await _stopForeground();
+      }
     }
   }
 

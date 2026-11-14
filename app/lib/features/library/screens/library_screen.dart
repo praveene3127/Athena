@@ -1101,7 +1101,14 @@ class _LibraryScreenState extends ConsumerState<LibraryScreen>
                 doc['error_message'] as String? ?? 'Document extraction failed';
             throw AppError(code: errCode, message: errMsg);
           }
-          context.push('/reader/$docId');
+          final status = doc?['status'] as String? ?? '';
+          final chunkCount = (doc?['chunk_count'] as num?)?.toInt() ?? 0;
+          // ISM-02 / SM-03: Never navigate prematurely to an empty reader before chunks exist
+          if (status == 'ready' || (status == 'partially_readable' && chunkCount > 0)) {
+            context.push('/reader/$docId');
+          } else {
+            context.push('/processing/$docId');
+          }
         } else {
           context.push('/processing/$docId');
         }
@@ -1405,10 +1412,12 @@ class _LibraryScreenState extends ConsumerState<LibraryScreen>
                   Row(
                     mainAxisAlignment: MainAxisAlignment.spaceBetween,
                     children: [
-                      const AthenaHeaderBrand(
-                        tileSize: 38,
-                        tileStyle: AthenaTileStyle.blackPrimary,
-                        subtitle: 'Never read alone',
+                      const Expanded(
+                        child: AthenaHeaderBrand(
+                          tileSize: 38,
+                          tileStyle: AthenaTileStyle.blackPrimary,
+                          subtitle: 'Never read alone',
+                        ),
                       ),
                       Row(
                         mainAxisSize: MainAxisSize.min,
@@ -1429,17 +1438,109 @@ class _LibraryScreenState extends ConsumerState<LibraryScreen>
 
                           Consumer(
                             builder: (context, ref, _) {
-                              ref.watch(themeModeProvider);
-
-                              final darkActive = isDark;
+                              final appearance = ref.watch(athenaAppearanceProvider);
+                              final darkActive = appearance.isDark;
 
                               return InkWell(
                                 onTap: () {
                                   HapticFeedback.selectionClick();
-
                                   ref
                                       .read(themeModeProvider.notifier)
                                       .toggleTheme();
+                                },
+                                onLongPress: () {
+                                  HapticFeedback.selectionClick();
+                                  showModalBottomSheet<void>(
+                                    context: context,
+                                    backgroundColor: Colors.transparent,
+                                    builder: (ctx) {
+                                      final current = ref.watch(athenaAppearanceProvider);
+                                      final tokens = ctx.tokens;
+                                      return Container(
+                                        padding: const EdgeInsets.symmetric(
+                                            horizontal: 20, vertical: 18),
+                                        decoration: BoxDecoration(
+                                          color: tokens.surface,
+                                          borderRadius: const BorderRadius.vertical(
+                                              top: Radius.circular(16)),
+                                          border: Border.all(color: tokens.hairline),
+                                        ),
+                                        child: SafeArea(
+                                          child: Column(
+                                            mainAxisSize: MainAxisSize.min,
+                                            crossAxisAlignment:
+                                                CrossAxisAlignment.start,
+                                            children: [
+                                              Text(
+                                                'Appearance',
+                                                style: TextStyle(
+                                                  fontFamily: AppTheme.fontDisplay,
+                                                  fontSize: 18,
+                                                  fontWeight: FontWeight.w500,
+                                                  color: tokens.ink,
+                                                ),
+                                              ),
+                                              const SizedBox(height: 16),
+                                              Row(
+                                                children: [
+                                                  for (final app in AthenaAppearance.values)
+                                                    Expanded(
+                                                      child: Padding(
+                                                        padding: const EdgeInsets.symmetric(
+                                                            horizontal: 4),
+                                                        child: InkWell(
+                                                          onTap: () {
+                                                            HapticFeedback.selectionClick();
+                                                            ref
+                                                                .read(athenaAppearanceProvider.notifier)
+                                                                .setAppearance(app);
+                                                            Navigator.of(ctx).pop();
+                                                          },
+                                                          borderRadius:
+                                                              BorderRadius.circular(8),
+                                                          child: Container(
+                                                            height: 48,
+                                                            decoration: BoxDecoration(
+                                                              color: AppTheme
+                                                                      .tokensForAppearance(app)
+                                                                  .canvas,
+                                                              borderRadius:
+                                                                  BorderRadius.circular(8),
+                                                              border: Border.all(
+                                                                color: current == app
+                                                                    ? AppTheme.tokensForAppearance(app)
+                                                                        .accent
+                                                                    : tokens.hairline,
+                                                                width: current == app ? 2.0 : 1.0,
+                                                              ),
+                                                            ),
+                                                            alignment: Alignment.center,
+                                                            child: Text(
+                                                              app.name[0].toUpperCase() +
+                                                                  app.name.substring(1),
+                                                              style: TextStyle(
+                                                                fontFamily: AppTheme.fontUI,
+                                                                color: AppTheme
+                                                                        .tokensForAppearance(app)
+                                                                    .ink,
+                                                                fontWeight: current == app
+                                                                    ? FontWeight.w700
+                                                                    : FontWeight.w500,
+                                                                fontSize: 12,
+                                                             ),
+                                                            ),
+                                                          ),
+                                                        ),
+                                                      ),
+                                                    ),
+                                                ],
+                                              ),
+                                            ],
+                                          ),
+                                        ),
+                                      );
+                                    },
+                                  );
                                 },
                                 borderRadius: BorderRadius.circular(20),
                                 child: Container(
@@ -1448,12 +1549,12 @@ class _LibraryScreenState extends ConsumerState<LibraryScreen>
                                   decoration: BoxDecoration(
                                     color: darkActive
                                         ? const Color(0xFF202020)
-                                        : AppTheme.surfaceWarm,
+                                        : context.tokens.surfaceWarm,
                                     borderRadius: BorderRadius.circular(20),
                                     border: Border.all(
                                       color: darkActive
                                           ? const Color(0xFF2E2E2E)
-                                          : AppTheme.border,
+                                          : context.tokens.hairline,
                                     ),
                                   ),
                                   child: Icon(
@@ -1463,7 +1564,7 @@ class _LibraryScreenState extends ConsumerState<LibraryScreen>
                                     size: 16,
                                     color: darkActive
                                         ? Colors.amberAccent
-                                        : AppTheme.ink,
+                                        : context.tokens.ink,
                                   ),
                                 ),
                               );

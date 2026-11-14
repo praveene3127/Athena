@@ -108,9 +108,9 @@ pub fn plan_chunks_utf8(
         let sentence_end = boundaries[i].1;
         let current_span_len = sentence_end - chunk_start_byte;
 
-        if current_span_len >= target_len || (i == effective_sentences - 1 && !is_last_window) {
-            // Cut chunk here
-            let chunk_text = text[chunk_start_byte..sentence_end].trim();
+        if current_span_len >= target_len || (i == effective_sentences - 1 && is_last_window) {
+            // Cut chunk here without .trim() to guarantee 100% lossless canonical text reconstruction (XLG-01)
+            let chunk_text = &text[chunk_start_byte..sentence_end];
             if !chunk_text.is_empty() {
                 chunks.push(PlannedChunk {
                     sequence: current_seq,
@@ -128,8 +128,26 @@ pub fn plan_chunks_utf8(
         }
     }
 
-    let carry_over = if chunk_start_byte < text.len() {
-        text[chunk_start_byte..].trim().to_string()
+    // If this is the last window, emit any remaining text as the final PlannedChunk
+    if is_last_window && chunk_start_byte < text.len() {
+        let chunk_text = &text[chunk_start_byte..];
+        if !chunk_text.is_empty() {
+            chunks.push(PlannedChunk {
+                sequence: current_seq,
+                raw_text: chunk_text.to_string(),
+                start_offset: global_offset,
+                end_offset: global_offset + chunk_text.len(),
+                page_start: start_page,
+                page_end: end_page,
+            });
+            current_seq += 1;
+            global_offset += chunk_text.len();
+        }
+        chunk_start_byte = text.len();
+    }
+
+    let carry_over = if !is_last_window && chunk_start_byte < text.len() {
+        text[chunk_start_byte..].to_string()
     } else {
         String::new()
     };

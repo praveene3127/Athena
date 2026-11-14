@@ -695,6 +695,7 @@ class DocumentIngestionPipeline {
       int currentOffset = params.initialOffset >= 0 ? params.initialOffset : 0;
       String? currentCarryOver = params.initialCarryOver;
       int? prevReadablePage;
+      String activeSectionTitle = 'Chapter 1';
 
       for (int startP = startFromPage; startP <= totalPages; startP += chunkWindowPages) {
         final endP = (startP + chunkWindowPages - 1).clamp(startFromPage, totalPages);
@@ -835,17 +836,22 @@ class DocumentIngestionPipeline {
             windowBuffer.write(para.text);
             final end = windowBuffer.length;
 
+            final candidateTitle = para.sectionTitle ??
+                pageHeading ??
+                (role != SectionRole.chapter ? role.displayLabel : null);
+            if (candidateTitle != null &&
+                candidateTitle.trim().isNotEmpty &&
+                candidateTitle.trim().toLowerCase() != 'chapter passage') {
+              activeSectionTitle = candidateTitle.trim();
+            }
+
             windowSpans.add({
               'start': start,
               'end': end,
               'page_start': p,
               'page_end': p,
               'type': para.isHeading ? 'heading' : 'paragraph',
-              'section_title': para.sectionTitle ??
-                  pageHeading ??
-                  (role != SectionRole.chapter
-                      ? role.displayLabel
-                      : 'Chapter Passage'),
+              'section_title': activeSectionTitle,
               'section_role': role.name,
             });
           }
@@ -865,7 +871,7 @@ class DocumentIngestionPipeline {
             'page_start': totalPages,
             'page_end': totalPages,
             'type': 'paragraph',
-            'section_title': 'Chapter Passage',
+            'section_title': activeSectionTitle,
             'section_role': 'chapter',
           });
           currentCarryOver = null;
@@ -895,7 +901,7 @@ class DocumentIngestionPipeline {
           );
 
           chunkSeq += windowChunks.length;
-          currentOffset += windowCanonical.length;
+          currentOffset += utf8.encode(windowCanonical).length;
         }
 
         // CRITICAL: Clear processed pages from RAM immediately!
@@ -1159,6 +1165,7 @@ class DocumentIngestionPipeline {
     final spans = <Map<String, dynamic>>[];
     String? currentCarryOver;
     int? prevReadablePage;
+    String activeSectionTitle = 'Chapter 1';
 
     for (int p = 1; p <= totalPages; p++) {
       final role =
@@ -1218,17 +1225,22 @@ class DocumentIngestionPipeline {
         buffer.write(para.text);
         final end = buffer.length;
 
+        final candidateTitle = para.sectionTitle ??
+            pageHeading ??
+            (role != SectionRole.chapter ? role.displayLabel : null);
+        if (candidateTitle != null &&
+            candidateTitle.trim().isNotEmpty &&
+            candidateTitle.trim().toLowerCase() != 'chapter passage') {
+          activeSectionTitle = candidateTitle.trim();
+        }
+
         spans.add({
           'start': start,
           'end': end,
           'page_start': p,
           'page_end': p,
           'type': para.isHeading ? 'heading' : 'paragraph',
-          'section_title': para.sectionTitle ??
-              pageHeading ??
-              (role != SectionRole.chapter
-                  ? role.displayLabel
-                  : 'Chapter Passage'),
+          'section_title': activeSectionTitle,
           'section_role': role.name,
         });
       }
@@ -1246,7 +1258,7 @@ class DocumentIngestionPipeline {
         'page_start': totalPages,
         'page_end': totalPages,
         'type': 'paragraph',
-        'section_title': 'Chapter Passage',
+        'section_title': activeSectionTitle,
         'section_role': 'chapter',
       });
       currentCarryOver = null;
@@ -1311,8 +1323,10 @@ class DocumentIngestionPipeline {
       for (final line in textLines) {
         final b = line.bounds;
         final words = line.wordCollection;
-        var lineText = words.map((w) => w.text).join(' ').trim();
-        if (lineText.isEmpty) lineText = line.text.trim();
+        var lineText = words.map((w) => safeSplitFusedWord(w.text)).join(' ').trim();
+        if (lineText.isEmpty) {
+          lineText = line.text.split(RegExp(r'\s+')).map(safeSplitFusedWord).join(' ').trim();
+        }
         if (lineText.isEmpty) continue;
 
         double calcFontSize = line.fontSize;
@@ -1543,9 +1557,18 @@ class DocumentIngestionPipeline {
     }
 
     final nonSpaceChars = trimmed.replaceAll(RegExp(r'\s+'), '');
-    final letters = RegExp(r'[A-Za-z]').allMatches(trimmed).length;
+    final unicodeLetters = RegExp(r'[\p{L}\p{M}\p{N}]', unicode: true).allMatches(trimmed).length;
     final alphaRatio =
-        nonSpaceChars.isEmpty ? 0.0 : letters / nonSpaceChars.length;
+        nonSpaceChars.isEmpty ? 0.0 : unicodeLetters / nonSpaceChars.length;
+
+    // Detect if text is predominantly Latin ASCII vs multilingual/non-Latin scripts (LNG-01)
+    final asciiLatinLetters = RegExp(r'[A-Za-z]').allMatches(trimmed).length;
+    final isPredominantlyLatin =
+        unicodeLetters > 0 && (asciiLatinLetters / unicodeLetters) > 0.90;
+
+    // CJK detection where space-separated tokenization does not apply
+    final cjkChars = RegExp(r'[\u3040-\u9FFF\uAC00-\uD7AF]').allMatches(trimmed).length;
+    final isCjk = nonSpaceChars.isNotEmpty && (cjkChars / nonSpaceChars.length) >= 0.25;
 
     final tokens = trimmed.split(RegExp(r'\s+')).where((t) => t.isNotEmpty).toList();
     if (tokens.isEmpty) {
@@ -1558,10 +1581,13 @@ class DocumentIngestionPipeline {
     }
 
     // OCR Corruption Symbols: \, |, ~, ^, {, }, :-, --, ll), 1\, () inside words
-    final ocrNoiseRe =
-        RegExp(r'''[\\|~^{}]|:-|--|ll\)|1\\|\(\)|[^\w\s.,!?;:’\'"“”()\-–—]{2,}''');
+    final ocrNoiseRe = RegExp(
+        r'''[\\|~^{}]|:-|--|ll\)|1\\|\(\)|[^\p{L}\p{M}\p{N}\s.,!?;:’'"“”()–—-]{2,}''',
+        unicode: true);
     final vowelRe = RegExp(r'[aeiouyAEIOUY]');
-    final cleanWordRe = RegExp(r'^[A-Za-z]+[.,!?;:]?$');
+    final cleanWordRe = RegExp(
+        r"^[\p{L}\p{M}]+(?:['’\-][\p{L}\p{M}]+)*[.,!?;:»”’।॥؟)]?$",
+        unicode: true);
 
     int noisyCount = 0;
     int validCount = 0;
@@ -1570,16 +1596,22 @@ class DocumentIngestionPipeline {
       if (ocrNoiseRe.hasMatch(token)) {
         noisyCount++;
       }
-      if (token.length >= 2 &&
-          token.length <= 22 &&
-          vowelRe.hasMatch(token) &&
-          cleanWordRe.hasMatch(token)) {
-        validCount++;
+      if (token.isNotEmpty && token.length <= 40) {
+        if (cleanWordRe.hasMatch(token)) {
+          if (!isPredominantlyLatin || vowelRe.hasMatch(token) || token.length == 1) {
+            validCount++;
+          }
+        }
       }
     }
 
     final symbolNoiseRatio = noisyCount / tokens.length;
-    final validWordRatio = validCount / tokens.length;
+    double validWordRatio = validCount / tokens.length;
+
+    // For CJK text where spaces are absent or sparse, evaluate quality by character purity
+    if (isCjk) {
+      validWordRatio = (1.0 - symbolNoiseRatio).clamp(0.0, 1.0);
+    }
 
     final isAcceptable = (alphaRatio >= 0.60 &&
         symbolNoiseRatio <= 0.15 &&

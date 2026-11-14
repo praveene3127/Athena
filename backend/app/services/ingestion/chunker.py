@@ -9,6 +9,7 @@ Boundary selection is driven by the Intelligent Reading Arrangement graph
 
 import hashlib
 import logging
+import math
 import re
 from typing import Any, Dict, List, Tuple
 
@@ -42,7 +43,18 @@ _COHESION_STOPWORDS = {
 
 
 def _word_count(text: str) -> int:
-    """Counts words in text (splitting on whitespace)."""
+    """Counts words in text, accounting for CJK characters (~2.5 chars = 1 word unit, LNG-03)."""
+    if not text.strip():
+        return 0
+    non_space = re.sub(r"\s+", "", text)
+    if not non_space:
+        return 0
+    cjk_chars = len(re.findall(r"[\u3040-\u9fff\uac00-\ud7af]", non_space))
+    if cjk_chars / len(non_space) >= 0.25:
+        non_cjk_text = re.sub(r"[\u3040-\u9fff\uac00-\ud7af]+", " ", text)
+        non_cjk_words = len(non_cjk_text.split())
+        cjk_words = math.ceil(cjk_chars / 2.5)
+        return non_cjk_words + cjk_words
     return len(text.split())
 
 
@@ -72,10 +84,21 @@ RE_CLAUSE_SPLIT = re.compile(r'(?:[;:,]\s+)|(?:\s[—–-]\s)|(?:\s—\s*)')
 
 
 def is_legal_cut(text: str, b: int) -> bool:
-    """Zero Mid-Word Cuts invariant (FP-1). Legal if at ends or adjacent to whitespace."""
+    """Zero Mid-Word Cuts invariant (FP-1). Legal if at ends, adjacent to whitespace, or CJK/multilingual cut."""
     if b <= 0 or b >= len(text):
         return True
-    return text[b - 1].isspace() or text[b].isspace()
+    if text[b - 1].isspace() or text[b].isspace():
+        return True
+    prev_char = text[b - 1]
+    curr_char = text[b]
+    if prev_char in "。！？।॥؟…»”’":
+        return True
+    # CJK character boundaries
+    is_cjk_prev = ('\u3040' <= prev_char <= '\u9fff') or ('\uac00' <= prev_char <= '\ud7af')
+    is_cjk_curr = ('\u3040' <= curr_char <= '\u9fff') or ('\uac00' <= curr_char <= '\ud7af')
+    if is_cjk_prev or is_cjk_curr:
+        return True
+    return False
 
 
 def _split_by_clauses(text: str) -> List[Tuple[int, int]]:

@@ -9,6 +9,7 @@ import 'package:path_provider/path_provider.dart';
 import 'package:sqflite/sqflite.dart';
 import 'package:athena/services/simhash_service.dart';
 import 'package:athena/services/binary_book_cache.dart';
+import 'package:athena/services/ingestion_job_coordinator.dart';
 
 /// App-private SQLite store shared by the foreground UI and background worker.
 /// PDFs stay in the app documents directory; only their private paths are kept
@@ -119,6 +120,12 @@ class LocalDatabase {
             }
             if (!chunkCols.contains('simhash_lo')) {
               await db.execute('ALTER TABLE reading_chunks ADD COLUMN simhash_lo INTEGER');
+            }
+            if (!chunkCols.contains('simhash')) {
+              await db.execute('ALTER TABLE reading_chunks ADD COLUMN simhash INTEGER');
+            }
+            if (!chunkCols.contains('chain_hash')) {
+              await db.execute('ALTER TABLE reading_chunks ADD COLUMN chain_hash TEXT');
             }
             if (!chunkCols.contains('section_role')) {
               await db.execute("ALTER TABLE reading_chunks ADD COLUMN section_role TEXT DEFAULT 'chapter'");
@@ -290,8 +297,10 @@ class LocalDatabase {
             checksum TEXT NOT NULL,
             boundary_method TEXT NOT NULL,
             canonical_sha256 TEXT NOT NULL,
+            simhash INTEGER,
             simhash_hi INTEGER,
             simhash_lo INTEGER,
+            chain_hash TEXT,
             UNIQUE(document_id, sequence)
           )
         ''');
@@ -1047,6 +1056,12 @@ class LocalDatabase {
   }
 
   Future<void> deleteDocument(String id) async {
+    try {
+      await IngestionJobCoordinator.instance
+          .cancelJob(id, markStatus: 'deleted', reason: 'Document deleted by user');
+    } catch (e) {
+      debugPrint('[Athena LocalDatabase] cancelJob on delete notice: $e');
+    }
     final db = await database;
     await db.transaction((txn) async {
       try {
@@ -1478,14 +1493,47 @@ class LocalDatabase {
 
   Future<void> setCardSaved(String cardId, bool saved) async {
     final db = await database;
-    await db.update('context_cards', {'saved': saved ? 1 : 0},
-        where: 'id = ?', whereArgs: [cardId]);
+    await db.transaction((txn) async {
+      await txn.update(
+        'context_cards',
+        {'saved': saved ? 1 : 0, if (saved) 'dismissed': 0},
+        where: 'id = ?',
+        whereArgs: [cardId],
+      );
+      if (!saved) {
+        await txn.delete('saved_quotes', where: 'id = ?', whereArgs: [cardId]);
+      }
+    });
   }
 
   Future<void> setCardDismissed(String cardId, bool dismissed) async {
     final db = await database;
-    await db.update('context_cards', {'dismissed': dismissed ? 1 : 0},
-        where: 'id = ?', whereArgs: [cardId]);
+    if (dismissed) {
+      await db.transaction((txn) async {
+        await txn.update(
+          'context_cards',
+          {'dismissed': 1, 'saved': 0},
+          where: 'id = ?',
+          whereArgs: [cardId],
+        );
+        await txn.delete('saved_quotes', where: 'id = ?', whereArgs: [cardId]);
+      });
+    } else {
+      await db.update(
+        'context_cards',
+        {'dismissed': 0},
+        where: 'id = ?',
+        whereArgs: [cardId],
+      );
+    }
+  }
+
+  Future<void> clearAllSavedCards() async {
+    final db = await database;
+    await db.transaction((txn) async {
+      await txn.update('context_cards', {'saved': 0});
+      await txn.delete('saved_quotes');
+    });
   }
 
   Future<void> deleteCard(String cardId) async {

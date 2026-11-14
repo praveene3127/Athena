@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
@@ -199,11 +200,22 @@ class AthenaAppearanceNotifier extends Notifier<AthenaAppearance> {
   static const _key = 'athena_appearance_theme';
   final AthenaAppearance? initialAppearance;
 
+  AthenaAppearance _lastLight = AthenaAppearance.paper;
+  AthenaAppearance _lastDark = AthenaAppearance.charcoal;
+
   AthenaAppearanceNotifier([this.initialAppearance]);
+
+  AthenaAppearance get lastLight => _lastLight;
+  AthenaAppearance get lastDark => _lastDark;
 
   @override
   AthenaAppearance build() {
     if (initialAppearance != null) {
+      if (initialAppearance!.isDark) {
+        _lastDark = initialAppearance!;
+      } else {
+        _lastLight = initialAppearance!;
+      }
       return initialAppearance!;
     }
     _load();
@@ -214,14 +226,41 @@ class AthenaAppearanceNotifier extends Notifier<AthenaAppearance> {
     final prefs = await SharedPreferences.getInstance();
     final saved = prefs.getString(_key);
     if (saved != null) {
-      state = AthenaAppearance.fromId(saved);
+      final app = AthenaAppearance.fromId(saved);
+      if (app.isDark) {
+        _lastDark = app;
+      } else {
+        _lastLight = app;
+      }
+      state = app;
     }
   }
 
   Future<void> setAppearance(AthenaAppearance app) async {
+    if (app.isDark) {
+      _lastDark = app;
+    } else {
+      _lastLight = app;
+    }
     state = app;
     final prefs = await SharedPreferences.getInstance();
     await prefs.setString(_key, app.id);
+    await prefs.setString('reader_theme', app.id);
+    await prefs.setString('athena_app_theme_mode', app.isDark ? 'dark' : 'light');
+  }
+
+  Future<void> toggleLightDark() async {
+    final next = state.isDark ? _lastLight : _lastDark;
+    if (next.isDark) {
+      _lastDark = next;
+    } else {
+      _lastLight = next;
+    }
+    state = next;
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setString(_key, next.id);
+    await prefs.setString('reader_theme', next.id);
+    await prefs.setString('athena_app_theme_mode', next.isDark ? 'dark' : 'light');
   }
 }
 
@@ -237,39 +276,31 @@ class ThemeModeNotifier extends Notifier<ThemeMode> {
 
   @override
   ThemeMode build() {
+    final appearance = ref.watch(athenaAppearanceProvider);
     if (initialMode != null) {
       return initialMode!;
     }
-    _loadFromPrefs();
-    return ThemeMode.light;
-  }
-
-  Future<void> _loadFromPrefs() async {
-    final prefs = await SharedPreferences.getInstance();
-    final saved = prefs.getString(_key);
-    if (saved == 'dark') {
-      state = ThemeMode.dark;
-    } else if (saved == 'light') {
-      state = ThemeMode.light;
-    } else if (saved == 'system') {
-      state = ThemeMode.system;
-    }
+    return appearance.themeMode;
   }
 
   Future<void> toggleTheme() async {
-    final next = state == ThemeMode.dark ? ThemeMode.light : ThemeMode.dark;
-    state = next;
-    final prefs = await SharedPreferences.getInstance();
-    await prefs.setString(_key, next == ThemeMode.dark ? 'dark' : 'light');
+    await ref.read(athenaAppearanceProvider.notifier).toggleLightDark();
+    state = ref.read(athenaAppearanceProvider).themeMode;
   }
 
   Future<void> setThemeMode(ThemeMode mode) async {
+    final appNotifier = ref.read(athenaAppearanceProvider.notifier);
+    if (mode == ThemeMode.dark) {
+      await appNotifier.setAppearance(appNotifier.lastDark);
+    } else if (mode == ThemeMode.light) {
+      await appNotifier.setAppearance(appNotifier.lastLight);
+    } else {
+      final prefs = await SharedPreferences.getInstance();
+      await prefs.setString(_key, 'system');
+      state = ThemeMode.system;
+      return;
+    }
     state = mode;
-    final prefs = await SharedPreferences.getInstance();
-    final str = mode == ThemeMode.dark
-        ? 'dark'
-        : (mode == ThemeMode.light ? 'light' : 'system');
-    await prefs.setString(_key, str);
   }
 }
 
@@ -280,11 +311,11 @@ class AppTheme {
   // Stripe Press / Tufte Editorial Architecture:
   // Light Palette Tokens
   static const Color background = Color(0xFFFBF9F5);
-  static const Color surface = Color(0xFFF2EFE9);
+  static const Color surface = Color(0xFFFFFFFF);
   static const Color surfaceWarm = Color(0xFFFAF7F2);
-  static const Color surfaceMuted = Color(0xFFEBE7DF);
-  static const Color border = Color(0xFFE2DDD5);
-  static const Color hairline = Color(0xFFECE7DE);
+  static const Color surfaceMuted = Color(0xFFF2EFE9);
+  static const Color border = Color(0xFFE6E1D6);
+  static const Color hairline = Color(0xFFE6E1D6);
   static const Color ink = Color(0xFF161615);
   static const Color figmaBlack = Color(0xFF161615);
   static const Color figmaGreen = Color(0xFF2D6A4F);
@@ -297,49 +328,42 @@ class AppTheme {
   static const Color cyan = Color(0xFF2D6A4F);
 
   // Dark Palette Tokens
-  static const Color darkBackground = Color(0xFF101010);
-  static const Color darkSurface = Color(0xFF181818);
-  static const Color darkSurfaceWarm = Color(0xFF202020);
-  static const Color darkSurfaceMuted = Color(0xFF242424);
-  static const Color darkBorder = Color(0xFF282828);
-  static const Color darkHairline = Color(0xFF222222);
-  static const Color darkInk = Color(0xFFF3F3F3);
-  static const Color darkTextPrimary = Color(0xFFF3F3F3);
+  static const Color darkBackground = Color(0xFF121316);
+  static const Color darkSurface = Color(0xFF1A1C20);
+  static const Color darkSurfaceWarm = Color(0xFF1F2227);
+  static const Color darkSurfaceMuted = Color(0xFF22252A);
+  static const Color darkBorder = Color(0xFF2A2E35);
+  static const Color darkHairline = Color(0xFF2A2E35);
+  static const Color darkInk = Color(0xFFECEAE4);
+  static const Color darkTextPrimary = Color(0xFFECEAE4);
   static const Color darkTextBody = Color(0xFFDDDDDD);
-  static const Color darkTextMuted = Color(0xFF9E9E9E);
+  static const Color darkTextMuted = Color(0xFF9CA0A8);
 
-  // Dynamic context-aware helpers
+  // Dynamic context-aware helpers reading directly from context.tokens
   static bool isDark(BuildContext context) =>
-      Theme.of(context).brightness == Brightness.dark;
+      context.tokens.isDark;
 
-  static Color bgOf(BuildContext context) =>
-      isDark(context) ? darkBackground : background;
+  static Color bgOf(BuildContext context) => context.tokens.canvas;
 
-  static Color surfaceOf(BuildContext context) =>
-      isDark(context) ? darkSurface : surface;
+  static Color surfaceOf(BuildContext context) => context.tokens.surface;
 
-  static Color surfaceWarmOf(BuildContext context) =>
-      isDark(context) ? darkSurfaceWarm : surfaceWarm;
+  static Color surfaceWarmOf(BuildContext context) => context.tokens.surfaceWarm;
 
-  static Color surfaceMutedOf(BuildContext context) =>
-      isDark(context) ? darkSurfaceMuted : surfaceMuted;
+  static Color surfaceMutedOf(BuildContext context) => context.tokens.surfaceSubtle;
 
-  static Color borderOf(BuildContext context) =>
-      isDark(context) ? darkBorder : border;
+  static Color borderOf(BuildContext context) => context.tokens.hairline;
 
-  static Color hairlineOf(BuildContext context) =>
-      isDark(context) ? darkHairline : hairline;
+  static Color hairlineOf(BuildContext context) => context.tokens.hairline;
 
-  static Color inkOf(BuildContext context) => isDark(context) ? darkInk : ink;
+  static Color inkOf(BuildContext context) => context.tokens.ink;
 
-  static Color textPrimaryOf(BuildContext context) =>
-      isDark(context) ? darkTextPrimary : textPrimary;
+  static Color textPrimaryOf(BuildContext context) => context.tokens.ink;
 
-  static Color textBodyOf(BuildContext context) =>
-      isDark(context) ? darkTextBody : textBody;
+  static Color textBodyOf(BuildContext context) => context.tokens.ink;
 
-  static Color textMutedOf(BuildContext context) =>
-      isDark(context) ? darkTextMuted : textMuted;
+  static Color textMutedOf(BuildContext context) => context.tokens.inkMuted;
+
+  static Color accentOf(BuildContext context) => context.tokens.accent;
 
   // Typography tokens per Brand Guide v3
   static const String fontDisplay = 'DM Serif Display';
@@ -352,6 +376,28 @@ class AppTheme {
     'Courier',
   ];
   static const String fontSerif = 'Newsreader';
+  static const List<String> fontFallbacks = [
+    'Noto Serif',
+    'Noto Sans',
+    'Roboto',
+    'Noto Sans Devanagari',
+    'Noto Sans Arabic',
+    'Noto Sans Tamil',
+    'Noto Sans CJK SC',
+    'Noto Sans CJK JP',
+    'sans-serif',
+  ];
+
+  /// Detects whether text is predominantly right-to-left (Arabic/Hebrew script share > 30%, LNG-04).
+  static bool isRtlText(String text) {
+    if (text.isEmpty) return false;
+    final nonWs = text.replaceAll(RegExp(r'\s+'), '');
+    if (nonWs.isEmpty) return false;
+    final rtlMatches = RegExp(r'[\u0590-\u05FF\u0600-\u06FF\u0750-\u077F\u08A0-\u08FF\uFB50-\uFDFF\uFE70-\uFEFF]')
+        .allMatches(nonWs)
+        .length;
+    return (rtlMatches / nonWs.length) > 0.30;
+  }
 
   static AthenaTokens tokensForAppearance(AthenaAppearance appearance) {
     switch (appearance) {
@@ -404,6 +450,7 @@ class AppTheme {
         surfaceTintColor: Colors.transparent,
         elevation: 0,
         centerTitle: false,
+        systemOverlayStyle: isDark ? SystemUiOverlayStyle.light : SystemUiOverlayStyle.dark,
         iconTheme: IconThemeData(color: tokens.ink),
         titleTextStyle: TextStyle(
           fontFamily: fontDisplay,
@@ -412,6 +459,29 @@ class AppTheme {
           fontWeight: FontWeight.w400,
           letterSpacing: 0.2,
         ),
+      ),
+      bottomSheetTheme: BottomSheetThemeData(
+        backgroundColor: tokens.surface,
+        surfaceTintColor: Colors.transparent,
+        shape: const RoundedRectangleBorder(
+          borderRadius: BorderRadius.vertical(top: Radius.circular(16)),
+        ),
+      ),
+      dialogTheme: DialogThemeData(
+        backgroundColor: tokens.surface,
+        surfaceTintColor: Colors.transparent,
+        shape: RoundedRectangleBorder(
+          borderRadius: BorderRadius.circular(16),
+          side: BorderSide(color: tokens.hairline),
+        ),
+      ),
+      dividerTheme: DividerThemeData(
+        color: tokens.hairline,
+        thickness: 1,
+        space: 1,
+      ),
+      iconTheme: IconThemeData(
+        color: tokens.ink,
       ),
       cardTheme: CardThemeData(
         color: tokens.surface,

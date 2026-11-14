@@ -1,0 +1,199 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Athena Canonical State Machines Contract",
+  "version": "1.0.0",
+  "machines": {
+    "DocumentLifecycle": {
+      "initial": "queued",
+      "states": [
+        "queued",
+        "processing",
+        "partially_readable",
+        "paused",
+        "interrupted",
+        "ready",
+        "failed",
+        "unsupported",
+        "deleted"
+      ],
+      "transitions": {
+        "queued": ["processing", "failed", "deleted"],
+        "processing": [
+          "partially_readable",
+          "ready",
+          "paused",
+          "interrupted",
+          "failed",
+          "unsupported",
+          "deleted"
+        ],
+        "partially_readable": [
+          "ready",
+          "paused",
+          "interrupted",
+          "failed",
+          "deleted"
+        ],
+        "paused": ["processing", "deleted"],
+        "interrupted": ["processing", "deleted"],
+        "ready": ["deleted"],
+        "failed": ["queued", "processing", "deleted"],
+        "unsupported": ["deleted"],
+        "deleted": []
+      },
+      "forbidden_transitions": [
+        {
+          "from": "ready",
+          "to": "processing",
+          "reason": "Once a document is ready, background enrichment must never regress status to processing"
+        },
+        {
+          "from": "ready",
+          "to": "queued",
+          "reason": "Ready documents cannot be requeued without explicit reset"
+        }
+      ]
+    },
+    "ContextEnrichment": {
+      "initial": "idle",
+      "states": [
+        "idle",
+        "finding_concepts",
+        "preparing_context",
+        "ready",
+        "partial",
+        "unavailable"
+      ],
+      "transitions": {
+        "idle": ["finding_concepts", "unavailable"],
+        "finding_concepts": ["preparing_context", "ready", "partial", "unavailable"],
+        "preparing_context": ["ready", "partial", "unavailable"],
+        "ready": ["idle", "finding_concepts"],
+        "partial": ["idle", "finding_concepts"],
+        "unavailable": ["idle", "finding_concepts"]
+      }
+    },
+    "IngestionWorkerFgs": {
+      "initial": "idle",
+      "states": [
+        "idle",
+        "starting",
+        "running",
+        "pausing",
+        "paused",
+        "stopping",
+        "timed_out"
+      ],
+      "transitions": {
+        "idle": ["starting"],
+        "starting": ["running", "idle"],
+        "running": ["pausing", "stopping", "timed_out"],
+        "pausing": ["paused", "idle"],
+        "paused": ["starting", "stopping", "idle"],
+        "timed_out": ["paused", "stopping", "idle"],
+        "stopping": ["idle"]
+      }
+    },
+    "AppearanceSettings": {
+      "initial": "paper",
+      "states": ["paper", "sepia", "charcoal", "oled"],
+      "transitions": {
+        "paper": ["sepia", "charcoal", "oled"],
+        "sepia": ["paper", "charcoal", "oled"],
+        "charcoal": ["paper", "sepia", "oled"],
+        "oled": ["paper", "sepia", "charcoal"]
+      }
+    },
+    "ConnectionMode": {
+      "initial": "standalone_local",
+      "states": [
+        "standalone_local",
+        "companion_lan",
+        "companion_tunnel",
+        "disconnected"
+      ],
+      "transitions": {
+        "standalone_local": ["companion_lan", "companion_tunnel", "disconnected"],
+        "companion_lan": ["standalone_local", "companion_tunnel", "disconnected"],
+        "companion_tunnel": ["standalone_local", "companion_lan", "disconnected"],
+        "disconnected": ["standalone_local", "companion_lan", "companion_tunnel"]
+      }
+    },
+    "ReaderViewport": {
+      "initial": "unloaded",
+      "states": [
+        "unloaded",
+        "loading",
+        "paginating",
+        "active_reading",
+        "drawer_open",
+        "sheet_open",
+        "backgrounded"
+      ],
+      "transitions": {
+        "unloaded": ["loading"],
+        "loading": ["paginating", "active_reading", "unloaded"],
+        "paginating": ["active_reading", "unloaded"],
+        "active_reading": [
+          "drawer_open",
+          "sheet_open",
+          "backgrounded",
+          "paginating",
+          "unloaded"
+        ],
+        "drawer_open": ["active_reading", "unloaded"],
+        "sheet_open": ["active_reading", "unloaded"],
+        "backgrounded": ["active_reading", "unloaded"]
+      }
+    },
+    "CardSlotSynthesis": {
+      "initial": "absent",
+      "states": ["absent", "in_flight", "ready", "failed_cooldown"],
+      "transitions": {
+        "absent": ["in_flight"],
+        "in_flight": ["ready", "failed_cooldown"],
+        "ready": ["absent"],
+        "failed_cooldown": ["in_flight", "absent"]
+      }
+    },
+    "CardUserState": {
+      "initial": "unseen",
+      "states": ["unseen", "viewed", "saved", "dismissed"],
+      "transitions": {
+        "unseen": ["viewed", "saved", "dismissed"],
+        "viewed": ["saved", "dismissed"],
+        "saved": ["viewed", "dismissed"],
+        "dismissed": ["viewed", "saved"]
+      }
+    },
+    "AIProviderSlot": {
+      "initial": "unconfigured",
+      "states": [
+        "unconfigured",
+        "verifying",
+        "active_primary",
+        "active_fallback",
+        "cooldown_429",
+        "failed_auth"
+      ],
+      "transitions": {
+        "unconfigured": ["verifying"],
+        "verifying": ["active_primary", "active_fallback", "failed_auth"],
+        "active_primary": ["cooldown_429", "failed_auth", "unconfigured"],
+        "active_fallback": ["cooldown_429", "failed_auth", "unconfigured"],
+        "cooldown_429": ["active_primary", "active_fallback", "unconfigured"],
+        "failed_auth": ["verifying", "unconfigured"]
+      }
+    },
+    "SavedVault": {
+      "initial": "empty",
+      "states": ["empty", "populated", "syncing", "cleared"],
+      "transitions": {
+        "empty": ["populated", "syncing"],
+        "populated": ["syncing", "cleared", "empty"],
+        "syncing": ["populated", "empty"],
+        "cleared": ["empty"]
+      }
+    }
+  }
+}

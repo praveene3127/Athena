@@ -58,7 +58,13 @@ def _update_doc_progress(
     if doc:
         doc.stage = stage
         doc.percent = percent
-        doc.status = status
+        # ISM-02 / SM-01: Once ready or partially_readable, background concept/card
+        # enrichment must only update context_status/stage/percent - NEVER regressing doc.status.
+        if doc.status in ("ready", "partially_readable") and status == "processing":
+            if hasattr(doc, "context_status"):
+                doc.context_status = stage
+        else:
+            doc.status = status
         doc.updated_at = utc_now()
         session.add(doc)
         session.commit()

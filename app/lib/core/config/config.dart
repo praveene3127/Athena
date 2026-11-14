@@ -1,6 +1,7 @@
 import 'package:flutter/foundation.dart'
     show kIsWeb, defaultTargetPlatform, TargetPlatform, debugPrint;
 import 'package:shared_preferences/shared_preferences.dart';
+import 'package:athena/services/secure_storage_service.dart';
 
 class AppConfig {
   static String? _runtimeBaseUrl;
@@ -79,7 +80,20 @@ class AppConfig {
       } else if (!kIsWeb && _configured.isNotEmpty) {
         _runtimeBaseUrl = _configured.trim().replaceAll(RegExp(r'/+$'), '');
       }
-      _pairingToken = prefs.getString('athena_pairing_token') ?? '';
+      if (!kIsWeb) {
+        try {
+          final secureToken =
+              await SecureStorageService.instance.getPairingToken();
+          if (secureToken.isNotEmpty) {
+            _pairingToken = secureToken;
+          }
+        } catch (e) {
+          debugPrint('Athena caught error: $e');
+        }
+      }
+      if (_pairingToken.isEmpty) {
+        _pairingToken = prefs.getString('athena_pairing_token') ?? '';
+      }
     } catch (e) {
       debugPrint('Athena caught error: $e');
     }
@@ -109,17 +123,19 @@ class AppConfig {
   static Future<void> setPairingToken(String token) async {
     final sanitized = token.trim();
     _pairingToken = sanitized;
-    if (kIsWeb) {
-      try {
+    try {
+      if (kIsWeb) {
         final prefs = await SharedPreferences.getInstance();
         if (sanitized.isEmpty) {
           await prefs.remove('athena_pairing_token');
         } else {
           await prefs.setString('athena_pairing_token', sanitized);
         }
-      } catch (e) {
-        debugPrint('Athena caught error: $e');
+      } else {
+        await SecureStorageService.instance.setPairingToken(sanitized);
       }
+    } catch (e) {
+      debugPrint('Athena caught error: $e');
     }
   }
 

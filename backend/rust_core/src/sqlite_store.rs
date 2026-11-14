@@ -26,12 +26,16 @@ impl SqliteStore {
                 source_pages_json TEXT NOT NULL,
                 page_start INTEGER DEFAULT 1,
                 page_end INTEGER DEFAULT 1,
+                page_number INTEGER DEFAULT 1,
                 start_offset INTEGER NOT NULL,
                 end_offset INTEGER NOT NULL,
                 checksum TEXT NOT NULL,
                 boundary_method TEXT NOT NULL,
                 canonical_sha256 TEXT NOT NULL,
                 simhash INTEGER,
+                simhash_hi INTEGER,
+                simhash_lo INTEGER,
+                chain_hash TEXT,
                 UNIQUE(document_id, sequence)
              );
              CREATE INDEX IF NOT EXISTS reading_chunks_document_sequence ON reading_chunks(document_id, sequence);
@@ -82,8 +86,8 @@ impl SqliteStore {
         {
             let mut insert_chunk = tx.prepare_cached(
                 "INSERT OR REPLACE INTO reading_chunks 
-                 (id, document_id, sequence, raw_text, start_offset, end_offset, page_start, page_end, section_title, section_role, source_pages_json, checksum, canonical_sha256, boundary_method, simhash)
-                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15)",
+                 (id, document_id, sequence, raw_text, start_offset, end_offset, page_start, page_end, page_number, section_title, section_role, source_pages_json, checksum, canonical_sha256, boundary_method, simhash, simhash_hi, simhash_lo, chain_hash)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19)",
             )?;
 
             for chunk in chunks {
@@ -93,8 +97,12 @@ impl SqliteStore {
                 let mut chunk_hasher = Sha256::new();
                 chunk_hasher.update(chunk.raw_text.as_bytes());
                 let checksum = hex::encode(chunk_hasher.finalize());
-                let simhash = crate::compute_simhash64(&chunk.raw_text) as i64;
+                let simhash_u64 = crate::compute_simhash64(&chunk.raw_text);
+                let simhash = simhash_u64 as i64;
+                let simhash_hi = (simhash_u64 >> 32) as i64;
+                let simhash_lo = (simhash_u64 & 0xFFFFFFFF) as i64;
                 let pages_json = format!("[{}]", chunk.page_start);
+                let intermediate_chain = hex::encode(hasher.clone().finalize());
 
                 insert_chunk.execute(params![
                     chunk_id,
@@ -105,6 +113,7 @@ impl SqliteStore {
                     chunk.end_offset as i64,
                     chunk.page_start as i64,
                     chunk.page_end as i64,
+                    chunk.page_start as i64,
                     "Chapter Passage",
                     "chapter",
                     pages_json,
@@ -112,6 +121,9 @@ impl SqliteStore {
                     checksum,
                     "paragraph",
                     simhash,
+                    simhash_hi,
+                    simhash_lo,
+                    intermediate_chain,
                 ])?;
 
                 last_seq = chunk.sequence;

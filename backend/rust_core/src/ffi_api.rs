@@ -120,11 +120,14 @@ pub extern "C" fn athena_rust_ingest_epub_windowed(
             Err(_) => return std::ptr::null_mut(),
         };
 
+        let spine_entries = extractor.list_spine_entries().unwrap_or_default();
         let mut all_blocks = Vec::new();
-        for spine_idx in start_spine..(start_spine + count) {
-            let entry_name = format!("OEBPS/chapter_{}.xhtml", spine_idx);
-            if let Ok(blocks) = extractor.stream_spine_entry(&entry_name, spine_idx) {
-                all_blocks.extend(blocks);
+        let max_idx = (start_spine + count).min(spine_entries.len());
+        for spine_idx in start_spine..max_idx {
+            if let Some(entry_name) = spine_entries.get(spine_idx) {
+                if let Ok(blocks) = extractor.stream_spine_entry(entry_name, spine_idx) {
+                    all_blocks.extend(blocks);
+                }
             }
         }
 

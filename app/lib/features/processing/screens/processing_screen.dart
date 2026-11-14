@@ -125,6 +125,14 @@ class _ProcessingScreenState extends ConsumerState<ProcessingScreen>
   bool _backendUnreachable = false;
   bool _isRetrying = false;
   bool _pollInFlight = false;
+  bool _hasNavigatedToReader = false;
+
+  void _navigateToReader() {
+    if (_hasNavigatedToReader || !mounted) return;
+    _hasNavigatedToReader = true;
+    _pollTimer?.cancel();
+    context.go('/reader/${widget.documentId}');
+  }
 
   @override
   void initState() {
@@ -178,7 +186,7 @@ class _ProcessingScreenState extends ConsumerState<ProcessingScreen>
             ref.invalidate(documentsProvider);
             if (status.isReady) {
               Future.delayed(const Duration(milliseconds: 300), () {
-                if (mounted) context.go('/reader/${widget.documentId}');
+                _navigateToReader();
               });
             }
           }
@@ -200,7 +208,7 @@ class _ProcessingScreenState extends ConsumerState<ProcessingScreen>
           ref.invalidate(documentsProvider);
           if (status.isReady) {
             Future.delayed(const Duration(milliseconds: 300), () {
-              if (mounted) context.go('/reader/${widget.documentId}');
+              _navigateToReader();
             });
           }
         }
@@ -845,7 +853,7 @@ class _ProcessingScreenState extends ConsumerState<ProcessingScreen>
                   const SizedBox(height: 14),
                   if (isDone)
                     InkWell(
-                      onTap: () => context.go('/reader/${widget.documentId}'),
+                      onTap: _navigateToReader,
                       borderRadius: BorderRadius.circular(24),
                       child: Container(
                         width: double.infinity,
@@ -895,7 +903,7 @@ class _ProcessingScreenState extends ConsumerState<ProcessingScreen>
                     )
                   else if (_status?.isPartiallyReadable == true)
                     InkWell(
-                      onTap: () => context.go('/reader/${widget.documentId}'),
+                      onTap: _navigateToReader,
                       borderRadius: BorderRadius.circular(24),
                       child: Container(
                         width: double.infinity,
