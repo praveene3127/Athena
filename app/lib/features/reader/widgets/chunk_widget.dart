@@ -170,59 +170,96 @@ class _ChunkWidgetState extends State<ChunkWidget> {
       child: Center(
         child: ConstrainedBox(
           constraints: const BoxConstraints(maxWidth: 680),
-          child: Container(
-            margin: EdgeInsets.symmetric(
-              horizontal: isMobile ? 14 : 24,
-              vertical: widget.isFeedMode ? 10 : 12,
-            ),
-            decoration: BoxDecoration(
-              color: theme.innerCardColor, // #14161B dark, #FCFBF7 paper
-              borderRadius: BorderRadius.circular(8), // Architectural 8px corner radius
-              border: Border.all(
-                color: theme.borderColor, // #262932 hairline dark, #E2DEC9 stone
-                width: 1.0,
-              ),
-              boxShadow: [
-                BoxShadow(
-                  color: theme.isDark ? const Color(0x33000000) : const Color(0x06141714),
-                  blurRadius: 16,
-                  offset: const Offset(0, 4),
-                ),
-              ],
-            ),
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                // Top Metadata Row inside Card (Fixed outside scroll area)
-                _buildMetadataHeader(theme),
+          child: LayoutBuilder(
+            builder: (context, constraints) {
+              final isBounded = constraints.hasBoundedHeight;
 
-                // Card Body: Scrollable middle prose area wrapped in Flexible + SingleChildScrollView
-                Flexible(
-                  child: SingleChildScrollView(
-                    physics: (widget.isFeedMode && !_isEditing)
-                        ? const NeverScrollableScrollPhysics()
-                        : const BouncingScrollPhysics(),
-                    child: Column(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      mainAxisSize: MainAxisSize.min,
-                      children: [
-                        if (_isEditing)
-                          _buildInlineEditor(theme, hasCode)
-                        else ...[
-                          _buildReadingContent(theme, rawText, hasCode),
-                          if (_userNote != null && _userNote!.isNotEmpty)
-                            _buildNoteCallout(theme),
+              final scrollableProse = SingleChildScrollView(
+                physics: const ClampingScrollPhysics(),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    if (_isEditing)
+                      _buildInlineEditor(theme, hasCode)
+                    else ...[
+                      _buildReadingContent(theme, rawText, hasCode),
+                      if (_userNote != null && _userNote!.isNotEmpty)
+                        _buildNoteCallout(theme),
+                    ],
+                  ],
+                ),
+              );
+
+              final Widget middleArea = isBounded
+                  ? Expanded(
+                      child: Stack(
+                        children: [
+                          Positioned.fill(child: scrollableProse),
+                          Positioned(
+                            left: 0,
+                            right: 0,
+                            bottom: 0,
+                            height: 24,
+                            child: IgnorePointer(
+                              child: DecoratedBox(
+                                decoration: BoxDecoration(
+                                  gradient: LinearGradient(
+                                    begin: Alignment.topCenter,
+                                    end: Alignment.bottomCenter,
+                                    colors: [
+                                      theme.innerCardColor.withValues(alpha: 0.0),
+                                      theme.innerCardColor,
+                                    ],
+                                  ),
+                                ),
+                              ),
+                            ),
+                          ),
                         ],
-                      ],
-                    ),
-                  ),
-                ),
+                      ),
+                    )
+                  : Flexible(
+                      fit: FlexFit.loose,
+                      child: scrollableProse,
+                    );
 
-                // Card Footer Actions (Fixed outside scroll area, 100% visible)
-                if (!_isEditing) _buildCardFooter(theme),
-              ],
-            ),
+              return Container(
+                margin: EdgeInsets.symmetric(
+                  horizontal: isMobile ? 14 : 24,
+                  vertical: widget.isFeedMode ? 10 : 12,
+                ),
+                decoration: BoxDecoration(
+                  color: theme.innerCardColor, // #14161B dark, #FCFBF7 paper
+                  borderRadius: BorderRadius.circular(8), // Architectural 8px corner radius
+                  border: Border.all(
+                    color: theme.borderColor, // #262932 hairline dark, #E2DEC9 stone
+                    width: 1.0,
+                  ),
+                  boxShadow: [
+                    BoxShadow(
+                      color: theme.isDark ? const Color(0x33000000) : const Color(0x06141714),
+                      blurRadius: 16,
+                      offset: const Offset(0, 4),
+                    ),
+                  ],
+                ),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  mainAxisSize: isBounded ? MainAxisSize.max : MainAxisSize.min,
+                  children: [
+                    // Top Metadata Row inside Card (Fixed outside scroll area)
+                    _buildMetadataHeader(theme),
+
+                    // Card Body: Scrollable middle prose area
+                    middleArea,
+
+                    // Card Footer Actions (Dedicated bottom container below middle prose area)
+                    if (!_isEditing) _buildCardFooter(theme),
+                  ],
+                ),
+              );
+            },
           ),
         ),
       ),
@@ -343,17 +380,72 @@ class _ChunkWidgetState extends State<ChunkWidget> {
   }
 
   double _getIdealFontSize(String text, double baseFontSize) {
-    final delta = baseFontSize - 18.0;
     final len = text.length;
     if (len < 160) {
-      return (19.0 + delta).clamp(14.5, 24.0);
-    } else if (len <= 260) {
-      return (17.5 + delta).clamp(14.5, 22.0);
-    } else if (len <= 340) {
-      return (16.0 + delta).clamp(14.0, 20.0);
-    } else {
-      return (14.5 + delta).clamp(13.0, 18.0);
+      return (baseFontSize + 0.5).clamp(12.0, 32.0);
+    } else if (len > 350) {
+      return (baseFontSize - 0.5).clamp(12.0, 32.0);
     }
+    return baseFontSize;
+  }
+
+  TextSpan _buildBionicTextSpan(String text, TextStyle baseStyle) {
+    final tokens = RegExp(r'(\w+|[^\w\s]+|\s+)').allMatches(text);
+    final spans = <InlineSpan>[];
+    for (final match in tokens) {
+      final token = match.group(0) ?? '';
+      if (token.isEmpty) continue;
+      if (RegExp(r'^\w+$').hasMatch(token)) {
+        final fixLen = (token.length * 0.4).ceil().clamp(1, token.length);
+        final boldPart = token.substring(0, fixLen);
+        final restPart = token.substring(fixLen);
+        spans.add(TextSpan(
+          text: boldPart,
+          style: baseStyle.copyWith(fontWeight: FontWeight.w700),
+        ));
+        if (restPart.isNotEmpty) {
+          spans.add(TextSpan(
+            text: restPart,
+            style: baseStyle.copyWith(fontWeight: FontWeight.w400),
+          ));
+        }
+      } else {
+        spans.add(TextSpan(text: token, style: baseStyle));
+      }
+    }
+    return TextSpan(children: spans);
+  }
+
+  Widget _buildContextMenu(BuildContext context, EditableTextState editableTextState) {
+    final buttonItems = editableTextState.contextMenuButtonItems;
+    final selectedText = editableTextState.textEditingValue.selection
+        .textInside(editableTextState.textEditingValue.text);
+    if (selectedText.trim().isNotEmpty) {
+      buttonItems.insert(
+        0,
+        ContextMenuButtonItem(
+          label: 'Save Quote',
+          onPressed: () {
+            editableTextState.hideToolbar();
+            widget.onSaveQuote?.call(selectedText.trim());
+          },
+        ),
+      );
+      buttonItems.insert(
+        1,
+        ContextMenuButtonItem(
+          label: 'Ask Athena',
+          onPressed: () {
+            editableTextState.hideToolbar();
+            widget.onAsk();
+          },
+        ),
+      );
+    }
+    return AdaptiveTextSelectionToolbar.buttonItems(
+      anchors: editableTextState.contextMenuAnchors,
+      buttonItems: buttonItems,
+    );
   }
 
   Widget _buildReadingContent(ReaderThemeConfig theme, String text, bool hasCode) {
@@ -369,53 +461,31 @@ class _ChunkWidgetState extends State<ChunkWidget> {
     final effectiveFontSize = _getIdealFontSize(cleanText, widget.fontSize);
     final isRtl = AppTheme.isRtlText(cleanText);
 
+    final textStyle = TextStyle(
+      fontFamily: widget.fontFamily,
+      fontFamilyFallback: AppTheme.fontFallbacks,
+      fontSize: effectiveFontSize,
+      height: widget.lineHeight,
+      letterSpacing: 0.15,
+      color: theme.textColor,
+    );
+
     return Directionality(
       textDirection: isRtl ? TextDirection.rtl : TextDirection.ltr,
       child: Padding(
         padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 18),
-        child: SelectableText(
-          cleanText,
-          textAlign: isRtl ? TextAlign.right : TextAlign.left,
-          style: TextStyle(
-            fontFamily: widget.fontFamily,
-            fontFamilyFallback: AppTheme.fontFallbacks,
-            fontSize: effectiveFontSize,
-            height: widget.lineHeight,
-            letterSpacing: 0.15,
-            color: theme.textColor,
-          ),
-          contextMenuBuilder: (context, editableTextState) {
-            final buttonItems = editableTextState.contextMenuButtonItems;
-            final selectedText = editableTextState.textEditingValue.selection
-                .textInside(editableTextState.textEditingValue.text);
-            if (selectedText.trim().isNotEmpty) {
-              buttonItems.insert(
-                0,
-                ContextMenuButtonItem(
-                  label: 'Save Quote',
-                  onPressed: () {
-                    editableTextState.hideToolbar();
-                    widget.onSaveQuote?.call(selectedText.trim());
-                  },
-                ),
-              );
-              buttonItems.insert(
-                1,
-                ContextMenuButtonItem(
-                  label: 'Ask Athena',
-                  onPressed: () {
-                    editableTextState.hideToolbar();
-                    widget.onAsk();
-                  },
-                ),
-              );
-            }
-            return AdaptiveTextSelectionToolbar.buttonItems(
-              anchors: editableTextState.contextMenuAnchors,
-              buttonItems: buttonItems,
-            );
-          },
-        ),
+        child: widget.bionicFocusEnabled
+            ? SelectableText.rich(
+                _buildBionicTextSpan(cleanText, textStyle),
+                textAlign: isRtl ? TextAlign.right : TextAlign.left,
+                contextMenuBuilder: _buildContextMenu,
+              )
+            : SelectableText(
+                cleanText,
+                textAlign: isRtl ? TextAlign.right : TextAlign.left,
+                style: textStyle,
+                contextMenuBuilder: _buildContextMenu,
+              ),
       ),
     );
   }
@@ -606,8 +676,8 @@ class _ChunkWidgetState extends State<ChunkWidget> {
   }
 
   Widget _buildCardFooter(ReaderThemeConfig theme) {
-    return Padding(
-      padding: const EdgeInsets.fromLTRB(20, 0, 16, 12),
+    return Container(
+      padding: const EdgeInsets.fromLTRB(20, 12, 16, 12),
       child: Row(
         mainAxisAlignment: MainAxisAlignment.end,
         children: [
@@ -657,6 +727,7 @@ class _ChunkWidgetState extends State<ChunkWidget> {
             ? widget.chunk.id.split('-c').first
             : 'doc');
     final seq = widget.chunk.sequence ?? 1;
+    final vibeCheckFuture = ApiClient().fetchVibeCheck(docId, seq);
 
     showModalBottomSheet(
       context: context,
@@ -664,7 +735,7 @@ class _ChunkWidgetState extends State<ChunkWidget> {
       isScrollControlled: true,
       builder: (ctx) {
         return FutureBuilder<Map<String, dynamic>>(
-          future: ApiClient().fetchVibeCheck(docId, seq),
+          future: vibeCheckFuture,
           builder: (ctx, snapshot) {
             final isDark = Theme.of(ctx).brightness == Brightness.dark;
             final data = snapshot.data;

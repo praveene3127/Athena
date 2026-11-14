@@ -316,6 +316,44 @@ class ReaderData {
     this.chunkEditsMap = const {},
   });
 
+  ReaderData copyWith({
+    String? docId,
+    String? title,
+    String? status,
+    int? pageCount,
+    int? processedPages,
+    String? layoutWarning,
+    String? contextStatus,
+    bool? integrityVerified,
+    String? originalChecksum,
+    String? reconstructedChecksum,
+    int? chunkCount,
+    int? currentChunkIndex,
+    String? readingMode,
+    List<ReaderItem>? items,
+    List<ReaderItem>? cards,
+    Map<String, Map<String, dynamic>>? chunkEditsMap,
+  }) {
+    return ReaderData(
+      docId: docId ?? this.docId,
+      title: title ?? this.title,
+      status: status ?? this.status,
+      pageCount: pageCount ?? this.pageCount,
+      processedPages: processedPages ?? this.processedPages,
+      layoutWarning: layoutWarning ?? this.layoutWarning,
+      contextStatus: contextStatus ?? this.contextStatus,
+      integrityVerified: integrityVerified ?? this.integrityVerified,
+      originalChecksum: originalChecksum ?? this.originalChecksum,
+      reconstructedChecksum: reconstructedChecksum ?? this.reconstructedChecksum,
+      chunkCount: chunkCount ?? this.chunkCount,
+      currentChunkIndex: currentChunkIndex ?? this.currentChunkIndex,
+      readingMode: readingMode ?? this.readingMode,
+      items: items ?? this.items,
+      cards: cards ?? this.cards,
+      chunkEditsMap: chunkEditsMap ?? this.chunkEditsMap,
+    );
+  }
+
   factory ReaderData.fromJson(Map<String, dynamic> json) {
     final doc = (json['document'] is Map)
         ? (json['document'] as Map).map((k, v) => MapEntry(k.toString(), v))

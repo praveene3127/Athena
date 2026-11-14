@@ -211,11 +211,26 @@ class ReaderBottomBar extends StatelessWidget {
       final total = readingChunks.isNotEmpty ? readingChunks.length : totalItems;
       return '$currentSeq / $total';
     } else if (currentItem != null && currentItem.isContextCard) {
-      final contextCards = feedItems.where((i) => i.isContextCard).toList();
-      final cardIdx = contextCards.indexWhere((c) => c.id == currentItem.id);
-      final m = cardIdx >= 0 ? cardIdx + 1 : 1;
-      final totalM = contextCards.isNotEmpty ? contextCards.length : 1;
-      return 'CARD $m OF $totalM';
+      final total = readingChunks.isNotEmpty ? readingChunks.length : totalItems;
+      int? anchorSeq;
+      if (currentItem.sourceChunkId != null) {
+        final match = readingChunks.where((c) => c.id == currentItem.sourceChunkId).firstOrNull;
+        anchorSeq = match?.sequence;
+      }
+      if (anchorSeq == null && currentItem.insertAfter != null) {
+        final match = readingChunks.where((c) => c.id == currentItem.insertAfter).firstOrNull;
+        anchorSeq = match?.sequence;
+      }
+      if (anchorSeq == null) {
+        for (int i = currentIndex - 1; i >= 0; i--) {
+          if (feedItems[i].isReadingChunk && feedItems[i].sequence != null) {
+            anchorSeq = feedItems[i].sequence;
+            break;
+          }
+        }
+      }
+      final seqStr = anchorSeq != null ? '$anchorSeq' : '${(currentIndex + 1).clamp(1, totalItems)}';
+      return '$seqStr / $total · CARD';
     } else {
       return '${(currentIndex + 1).clamp(1, totalItems)} / $totalItems';
     }

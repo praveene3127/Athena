@@ -313,6 +313,14 @@ class IngestionJobCoordinator {
         percent: 100,
       );
 
+      if (result.chapters.isNotEmpty) {
+        try {
+          await LocalDatabase.instance.insertDocumentChapters(docId, result.chapters);
+        } catch (e) {
+          debugPrint('[Athena Coordinator] Error saving chapters: $e');
+        }
+      }
+
       await LocalDatabase.instance.updateDocumentProgress(
         docId,
         status: 'ready',

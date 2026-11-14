@@ -217,7 +217,7 @@ class _AskSheetState extends State<AskSheet> {
 
     final passage = widget.selectedText ?? widget.chunk.text ?? '';
 
-    final isNotConfigured = _status == 'not_configured';
+    final isNotConfigured = _status == 'not_configured' || _status == 'no_key';
 
     return Container(
       decoration: BoxDecoration(

@@ -63,7 +63,7 @@ class LocalDatabase {
     }
     return openDatabase(
       dbPath,
-      version: 4,
+      version: 5,
       onConfigure: (db) async {
         await db.execute('PRAGMA foreign_keys = ON');
         await db.execute('PRAGMA busy_timeout = 5000');
@@ -148,12 +148,43 @@ class LocalDatabase {
           if (cardCols.isNotEmpty && !cardCols.contains('support_tier')) {
             await db.execute("ALTER TABLE context_cards ADD COLUMN support_tier TEXT DEFAULT 'verified_external'");
           }
+
+          if (oldVersion < 5) {
+            await db.execute('''
+              CREATE TABLE IF NOT EXISTS document_chapters (
+                id TEXT PRIMARY KEY,
+                document_id TEXT NOT NULL REFERENCES documents(id) ON DELETE CASCADE,
+                level INTEGER NOT NULL DEFAULT 1,
+                title TEXT NOT NULL,
+                raw_page_label TEXT,
+                is_roman INTEGER NOT NULL DEFAULT 0,
+                start_page INTEGER,
+                start_chunk_index INTEGER,
+                created_at TEXT NOT NULL
+              )
+            ''');
+            await db.execute('CREATE INDEX IF NOT EXISTS idx_doc_chapters_doc ON document_chapters(document_id, level)');
+          }
         } catch (e) {
           debugPrint('Athena SQLite upgrade notice: $e');
         }
       },
       onOpen: (db) async {
         try {
+          await db.execute('''
+            CREATE TABLE IF NOT EXISTS document_chapters (
+              id TEXT PRIMARY KEY,
+              document_id TEXT NOT NULL REFERENCES documents(id) ON DELETE CASCADE,
+              level INTEGER NOT NULL DEFAULT 1,
+              title TEXT NOT NULL,
+              raw_page_label TEXT,
+              is_roman INTEGER NOT NULL DEFAULT 0,
+              start_page INTEGER,
+              start_chunk_index INTEGER,
+              created_at TEXT NOT NULL
+            )
+          ''');
+          await db.execute('CREATE INDEX IF NOT EXISTS idx_doc_chapters_doc ON document_chapters(document_id, level)');
           await db.execute('''
             CREATE TABLE IF NOT EXISTS reading_positions (
               document_id TEXT PRIMARY KEY,
@@ -347,6 +378,22 @@ class LocalDatabase {
           )
         ''');
         await db.execute('''
+          CREATE TABLE document_chapters (
+            id TEXT PRIMARY KEY,
+            document_id TEXT NOT NULL REFERENCES documents(id) ON DELETE CASCADE,
+            level INTEGER NOT NULL DEFAULT 1,
+            title TEXT NOT NULL,
+            raw_page_label TEXT,
+            is_roman INTEGER NOT NULL DEFAULT 0,
+            start_page INTEGER,
+            start_chunk_index INTEGER,
+            created_at TEXT NOT NULL
+          )
+        ''');
+        await db.execute(
+          'CREATE INDEX IF NOT EXISTS idx_doc_chapters_doc ON document_chapters(document_id, level)',
+        );
+        await db.execute('''
           CREATE TABLE chunk_user_edits (
             chunk_id TEXT PRIMARY KEY,
             document_id TEXT NOT NULL,
@@ -477,6 +524,55 @@ class LocalDatabase {
         },
       'context_status': doc['context_status'],
     };
+  }
+
+  Future<void> insertDocumentChapters(
+    String documentId,
+    List<Map<String, Object?>> chapters,
+  ) async {
+    if (chapters.isEmpty) return;
+    final db = await database;
+    final now = DateTime.now().toUtc().toIso8601String();
+    await db.transaction((txn) async {
+      await txn.delete(
+        'document_chapters',
+        where: 'document_id = ?',
+        whereArgs: [documentId],
+      );
+      final batch = txn.batch();
+      for (int i = 0; i < chapters.length; i++) {
+        final ch = chapters[i];
+        final id = ch['id']?.toString() ?? '${documentId}_ch_$i';
+        final isRomanVal = ch['is_roman'];
+        final int isRomanInt = isRomanVal is bool
+            ? (isRomanVal ? 1 : 0)
+            : (isRomanVal is num ? isRomanVal.toInt() : 0);
+
+        batch.insert('document_chapters', {
+          'id': id,
+          'document_id': documentId,
+          'level': (ch['level'] as num?)?.toInt() ?? 1,
+          'title': ch['title']?.toString() ?? 'Chapter',
+          'raw_page_label': ch['raw_page_label']?.toString() ?? '',
+          'is_roman': isRomanInt,
+          'start_page': (ch['start_page'] as num?)?.toInt(),
+          'start_chunk_index': (ch['start_chunk_index'] as num?)?.toInt(),
+          'created_at': now,
+        });
+      }
+      await batch.commit(noResult: true);
+    });
+  }
+
+  Future<List<Map<String, dynamic>>> getDocumentChapters(String documentId) async {
+    final db = await database;
+    final rows = await db.query(
+      'document_chapters',
+      where: 'document_id = ?',
+      whereArgs: [documentId],
+      orderBy: 'rowid ASC',
+    );
+    return rows.map((r) => Map<String, dynamic>.from(r)).toList();
   }
 
   Future<String?> getCachedAcademicEvidence(String queryKey) async {
@@ -659,7 +755,28 @@ class LocalDatabase {
     String? carryOverText,
     String? profileJson,
   }) async {
-    if (chunks.isEmpty) return;
+    if (chunks.isEmpty) {
+      if (documentId != null && checkpointPage != null) {
+        final db = await database;
+        await db.update(
+          'documents',
+          {
+            'last_checkpoint_page': checkpointPage,
+            'processed_pages': checkpointPage,
+            'processed_page': checkpointPage,
+            if (chunkSequence != null) 'last_chunk_sequence': chunkSequence,
+            if (charOffset != null) 'last_char_offset': charOffset,
+            if (carryOverText != null) 'carry_over_text': carryOverText,
+            if (profileJson != null) 'profile_json': profileJson,
+            'heartbeat_at': DateTime.now().millisecondsSinceEpoch,
+            'updated_at': DateTime.now().toIso8601String(),
+          },
+          where: 'id = ?',
+          whereArgs: [documentId],
+        );
+      }
+      return;
+    }
     final db = await database;
     final indexedChunks = chunks.map((chunk) {
       final fingerprint =
@@ -1186,6 +1303,17 @@ class LocalDatabase {
       orderBy: 'sequence ASC',
       limit: limit,
       offset: offset,
+    );
+    return rows.map((r) => Map<String, dynamic>.from(r)).toList();
+  }
+
+  Future<List<Map<String, dynamic>>> getChunksAfterSequence(String documentId, int sequence) async {
+    final db = await database;
+    final rows = await db.query(
+      'reading_chunks',
+      where: 'document_id = ? AND sequence > ?',
+      whereArgs: [documentId, sequence],
+      orderBy: 'sequence ASC',
     );
     return rows.map((r) => Map<String, dynamic>.from(r)).toList();
   }

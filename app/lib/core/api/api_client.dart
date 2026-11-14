@@ -24,6 +24,20 @@ import 'package:athena/services/local_database.dart';
 import 'package:athena/services/lossless_chunker.dart';
 import 'package:athena/services/secure_storage_service.dart';
 
+String humanizeTitle(String raw) {
+  var title = raw.trim();
+  title = title.replaceAll(RegExp(r'\.(pdf|epub)$', caseSensitive: false), '');
+  title = title.replaceAll(RegExp(r'\.[a-zA-Z0-9]+$'), '');
+  title = title.replaceAll(
+      RegExp(r'[\s_\-]+(?:\(?\d+\)?|EnglishPDF)\s*$', caseSensitive: false),
+      '');
+  title = title.replaceAll(RegExp(r'\s*\(\d+\)\s*$'), '');
+  title = title.replaceAll(RegExp(r'[_]+'), ' ').replaceAll(RegExp(r'[\-]+'), ' ');
+  title = title.replaceAll(RegExp(r'\s+'), ' ').trim();
+  if (title.isEmpty) return 'Untitled Document';
+  return title;
+}
+
 String extractEpubText(List<int> bytes) {
   try {
     final archive = ZipDecoder().decodeBytes(bytes);
@@ -445,7 +459,7 @@ class ApiClient {
     }
 
     // 2. On-device standalone extraction and lossless chunking via unified DocumentIngestionPipeline
-    final cleanTitle = fileName.replaceAll(RegExp(r'\.[a-zA-Z0-9]+$'), '');
+    final cleanTitle = humanizeTitle(fileName);
 
     // Resolve bytes from fileStream if neither filePath nor fileBytes was provided
     List<int>? bytes = fileBytes;
@@ -679,32 +693,43 @@ class ApiClient {
       // ISM-04: If companion server returns a windowed response (< total_chunks),
       // fetch remaining windows so books > 200 chunks are never truncated!
       final chunkCount = (data['integrity'] as Map?)?['chunk_count'] as int? ??
+          ((data['document'] as Map?)?['integrity'] as Map?)?['chunk_count'] as int? ??
           (data['total_chunks'] as int? ?? (data['chunk_count'] as int? ?? 0));
       var chunksList = ((data['chunks'] as List?)?.cast<dynamic>() ?? []).toList();
-      if (chunkCount > chunksList.length) {
+      var itemsList = ((data['items'] as List?)?.cast<dynamic>() ?? []).toList();
+      final currentLoadedChunks = chunksList.isNotEmpty
+          ? chunksList.length
+          : itemsList.where((it) => (it as Map)['type'] == 'reading_chunk').length;
+
+      if (chunkCount > currentLoadedChunks) {
         int nextSeq = chunksList.isNotEmpty
             ? ((chunksList.last as Map)['sequence'] as int? ?? chunksList.length) + 1
-            : 1;
-        while (chunksList.length < chunkCount) {
+            : (itemsList.isNotEmpty ? ((itemsList.last as Map)['sequence'] as int? ?? itemsList.length) + 1 : 1);
+        while (chunksList.length < chunkCount && (itemsList.isEmpty || itemsList.where((it) => (it as Map)['type'] == 'reading_chunk').length < chunkCount)) {
           final nextResponse = await dio.get(
             '/api/documents/$id/reader',
             queryParameters: {'from_seq': nextSeq, 'limit': 500},
           ).timeout(const Duration(seconds: 30));
           final nextData = nextResponse.data as Map<String, dynamic>;
           final nextChunks = (nextData['chunks'] as List?)?.cast<dynamic>() ?? [];
-          if (nextChunks.isEmpty) break;
-          chunksList.addAll(nextChunks);
+          final nextItems = (nextData['items'] as List?)?.cast<dynamic>() ?? [];
+          if (nextChunks.isEmpty && nextItems.isEmpty) break;
+          if (nextChunks.isNotEmpty) chunksList.addAll(nextChunks);
+          if (nextItems.isNotEmpty) itemsList.addAll(nextItems);
           final nextCards = (nextData['cards'] as List?)?.cast<dynamic>() ?? [];
           if (nextCards.isNotEmpty) {
             final cardsList = ((data['cards'] as List?)?.cast<dynamic>() ?? []).toList();
             cardsList.addAll(nextCards);
             data['cards'] = cardsList;
           }
-          final lastChunk = nextChunks.last as Map;
-          nextSeq = (lastChunk['sequence'] as int? ?? (nextSeq + nextChunks.length - 1)) + 1;
-          if (nextChunks.length < 500) break;
+          final lastChunk = nextChunks.isNotEmpty
+              ? nextChunks.last as Map
+              : (nextItems.isNotEmpty ? nextItems.last as Map : null);
+          nextSeq = (lastChunk?['sequence'] as int? ?? (nextSeq + (nextChunks.isNotEmpty ? nextChunks.length : nextItems.length) - 1)) + 1;
+          if (nextChunks.length < 500 && nextItems.length < 500) break;
         }
         data['chunks'] = chunksList;
+        if (itemsList.isNotEmpty) data['items'] = itemsList;
       }
 
       _sanitizeReaderData(data);
@@ -1166,81 +1191,129 @@ class ApiClient {
       }
     }
 
-    // Native Anthropic fallback for the brief on-scroll insight card.
+    // BYOK LLM routing for all 10 providers with automatic failover
     if (!kIsWeb) {
       try {
-        final prefs = await SharedPreferences.getInstance();
-        final provider = prefs.getString('athena_ai_primary_provider') ?? '';
-        final key = await SecureStorageService.instance
-                .getAIKey('athena_ai_primary_api_key') ??
-            '';
-        if (provider == 'anthropic' && key.isNotEmpty) {
-          final chunk = chunkId != null
-              ? await LocalDatabase.instance.getChunk(chunkId)
-              : (chunkIndex > 0
-                  ? await LocalDatabase.instance.getChunkBySequence(docId, chunkIndex)
-                  : null);
-          final passage = chunk?['raw_text']?.toString() ?? '';
-          if (passage.isNotEmpty) {
-            final configuredModel =
-                prefs.getString('athena_ai_primary_model') ?? '';
-            final discovered = configuredModel.isEmpty
-                ? await fetchModels(provider: provider, apiKey: key)
-                : const <AIModelOption>[];
-            final model = configuredModel.isNotEmpty
-                ? configuredModel
-                : (discovered.isNotEmpty ? discovered.first.id : '');
-            if (model.isEmpty) {
-              throw StateError(
-                  'No live Anthropic model is available for this API key.');
+        final chunk = chunkId != null
+            ? await LocalDatabase.instance.getChunkById(chunkId)
+            : (chunkIndex > 0
+                ? await LocalDatabase.instance.getChunkBySequence(docId, chunkIndex)
+                : null);
+        final passage = chunk?['raw_text']?.toString() ?? '';
+        if (passage.isNotEmpty) {
+          final prefs = await SharedPreferences.getInstance();
+          final primaryProvider =
+              prefs.getString('athena_ai_primary_provider') ?? 'gemini';
+          final primaryKey = await SecureStorageService.instance
+                  .getAIKey('athena_ai_primary_api_key') ??
+              '';
+          var primaryModel = prefs.getString('athena_ai_primary_model') ?? '';
+          final primaryBaseUrl = prefs.getString('athena_ai_primary_base_url');
+
+          if (primaryKey.trim().isNotEmpty) {
+            if (primaryModel.isEmpty) {
+              final available = await fetchModels(
+                provider: primaryProvider,
+                apiKey: primaryKey,
+                baseUrl: primaryBaseUrl,
+              );
+              if (available.isNotEmpty) primaryModel = available.first.id;
             }
-            final response = await Dio().post(
-              'https://api.anthropic.com/v1/messages',
-              data: {
-                'model': model,
-                'max_tokens': 140,
-                'messages': [
-                  {
-                    'role': 'user',
-                    'content':
-                        'In 1–2 sentences, identify the key idea in this passage. Stay grounded in the passage.\n\n$passage'
-                  }
-                ],
-              },
-              options: Options(
-                headers: {
-                  'x-api-key': key,
-                  'anthropic-version': '2023-06-01',
-                  'content-type': 'application/json'
-                },
-                receiveTimeout: const Duration(seconds: 15),
-              ),
+
+            final prompt =
+                'You are Athena, a thoughtful literary reading companion.\n'
+                'Analyze this passage:\n"$passage"\n\n'
+                'Respond with ONLY a JSON object in this format:\n'
+                '{\n'
+                '  "plain_take": "The core takeaway in 1–2 direct, clear sentences without academic jargon.",\n'
+                '  "analogy": "A brief, vivid real-world analogy illuminating the core concept."\n'
+                '}';
+
+            var result = await _callLlmChat(
+              provider: primaryProvider,
+              key: primaryKey.trim(),
+              model: primaryModel,
+              baseUrl: primaryBaseUrl,
+              prompt: prompt,
             );
-            final parts = (response.data is Map
-                    ? response.data['content'] as List?
-                    : null) ??
-                [];
-            final summary = parts
-                .whereType<Map>()
-                .map((part) => part['text']?.toString() ?? '')
-                .join('\n')
-                .trim();
-            if (summary.isNotEmpty) {
+
+            // Failover to secondary/fallback provider if primary rate limited or network error
+            if (result['status'] == 'rate_limited' || result['status'] == 'network_error') {
+              final fallbackKey = await SecureStorageService.instance
+                      .getAIKey('athena_ai_fallback_api_key') ??
+                  await SecureStorageService.instance
+                      .getAIKey('athena_ai_secondary_api_key') ??
+                  '';
+              if (fallbackKey.trim().isNotEmpty) {
+                final fallbackProvider =
+                    prefs.getString('athena_ai_fallback_provider') ??
+                    prefs.getString('athena_ai_secondary_provider') ??
+                    'groq';
+                var fallbackModel =
+                    prefs.getString('athena_ai_fallback_model') ??
+                    prefs.getString('athena_ai_secondary_model') ??
+                    '';
+                final fallbackBaseUrl =
+                    prefs.getString('athena_ai_fallback_base_url') ??
+                    prefs.getString('athena_ai_secondary_base_url');
+
+                if (fallbackModel.isEmpty) {
+                  final fbModels = await fetchModels(
+                    provider: fallbackProvider,
+                    apiKey: fallbackKey,
+                    baseUrl: fallbackBaseUrl,
+                  );
+                  if (fbModels.isNotEmpty) fallbackModel = fbModels.first.id;
+                }
+
+                if (fallbackModel.isNotEmpty) {
+                  final fbResult = await _callLlmChat(
+                    provider: fallbackProvider,
+                    key: fallbackKey.trim(),
+                    model: fallbackModel,
+                    baseUrl: fallbackBaseUrl,
+                    prompt: prompt,
+                  );
+                  if (fbResult['status'] == 'ok') {
+                    result = fbResult;
+                  }
+                }
+              }
+            }
+
+            if (result['status'] == 'ok' && result['answer'] != null) {
+              final answer = result['answer'].toString().trim();
+              String plainTake = answer;
+              String? analogy;
+
+              try {
+                final jsonStr = answer
+                    .replaceAll(RegExp(r'^```json\s*|^```\s*|```$', multiLine: true), '')
+                    .trim();
+                final parsed = jsonDecode(jsonStr);
+                if (parsed is Map) {
+                  if (parsed['plain_take'] != null) plainTake = parsed['plain_take'].toString();
+                  if (parsed['analogy'] != null) analogy = parsed['analogy'].toString();
+                }
+              } catch (e) {
+                debugPrint('[Athena] fetchVibeCheck JSON parse notice: $e');
+              }
+
               return {
                 'chunk_index': chunkIndex,
-                'plain_take': summary,
-                'simplified': summary,
-                'analogy': null,
+                'plain_take': plainTake,
+                'simplified': plainTake,
+                'analogy': analogy,
                 'fallback': false,
                 'vibe': 'Key Insight',
-                'summary': summary,
-                'source': 'direct_anthropic',
+                'summary': plainTake,
+                'source': 'direct_llm',
               };
             }
           }
         }
       } catch (e) {
-        debugPrint('Athena Anthropic vibe-check fallback notice: $e');
+        debugPrint('[Athena Plain Take BYOK notice] $e');
       }
     }
 

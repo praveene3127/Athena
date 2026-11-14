@@ -25,6 +25,7 @@ class IngestionResult {
   final int totalWords;
   final int totalCharacters;
   final int chunkCount;
+  final List<Map<String, Object?>> chapters;
 
   const IngestionResult({
     required this.canonicalText,
@@ -35,6 +36,7 @@ class IngestionResult {
     this.totalWords = 0,
     this.totalCharacters = 0,
     this.chunkCount = 0,
+    this.chapters = const [],
   });
 }
 
@@ -378,6 +380,10 @@ class DocumentIngestionPipeline {
 
             final bool integrityVerified = (canonicalSha256 == reconstructedSha256);
 
+            if (message.chapters.isNotEmpty) {
+              unawaited(LocalDatabase.instance.insertDocumentChapters(docId, message.chapters));
+            }
+
             final result = IngestionResult(
               canonicalText: inMemoryCanonicalBuffer?.toString() ?? '',
               canonicalSha256: canonicalSha256,
@@ -387,6 +393,7 @@ class DocumentIngestionPipeline {
               totalWords: totalWords,
               totalCharacters: totalCharacters,
               chunkCount: totalChunkCount,
+              chapters: message.chapters,
             );
 
             if (!completer.isCompleted) {
@@ -695,7 +702,8 @@ class DocumentIngestionPipeline {
       int currentOffset = params.initialOffset >= 0 ? params.initialOffset : 0;
       String? currentCarryOver = params.initialCarryOver;
       int? prevReadablePage;
-      String activeSectionTitle = 'Chapter 1';
+      String? activeSectionTitle;
+      final allExtractedChapters = <Map<String, Object?>>[];
 
       for (int startP = startFromPage; startP <= totalPages; startP += chunkWindowPages) {
         final endP = (startP + chunkWindowPages - 1).clamp(startFromPage, totalPages);
@@ -749,6 +757,14 @@ class DocumentIngestionPipeline {
             tocPages.add(p);
             for (final entry in tocRes.entries) {
               tocTitles.add(entry.title.toLowerCase());
+              allExtractedChapters.add({
+                'level': entry.level,
+                'title': entry.title,
+                'raw_page_label': entry.rawPageLabel,
+                'is_roman': entry.isRoman ? 1 : 0,
+                'start_page': entry.pageNumber,
+                'start_chunk_index': null,
+              });
             }
           }
           for (final l in cleanLines) {
@@ -779,9 +795,19 @@ class DocumentIngestionPipeline {
 
         for (int p = startP; p <= endP; p++) {
           final roleIdx = p - startP;
-          final role = (roleIdx >= 0 && roleIdx < roles.length)
+          var role = (roleIdx >= 0 && roleIdx < roles.length)
               ? roles[roleIdx]
               : SectionRole.chapter;
+
+          final bool isTocOrDirectory = tocPages.contains(p) ||
+              SectionRole.fromString(activeSectionTitle ?? '') == SectionRole.toc ||
+              RegExp(r'^(?:table\s+of\s+)?contents\b|^list\s+of\s+(?:bibliographic\s+)?abbreviations|^members\s+of\s+the\s+seminar', caseSensitive: false)
+                  .hasMatch((activeSectionTitle ?? '').trim());
+
+          if (isTocOrDirectory) {
+            role = SectionRole.toc;
+          }
+
           if (role.isMatter) {
             continue;
           }
@@ -845,13 +871,16 @@ class DocumentIngestionPipeline {
               activeSectionTitle = candidateTitle.trim();
             }
 
+            final effectiveTitle = activeSectionTitle ??
+                (role != SectionRole.chapter ? role.displayLabel : 'Chapter 1');
+
             windowSpans.add({
               'start': start,
               'end': end,
               'page_start': p,
               'page_end': p,
               'type': para.isHeading ? 'heading' : 'paragraph',
-              'section_title': activeSectionTitle,
+              'section_title': effectiveTitle,
               'section_role': role.name,
             });
           }
@@ -928,6 +957,7 @@ class DocumentIngestionPipeline {
         canonicalText: '',
         canonicalSha256: '',
         pageCount: totalPages,
+        chapters: allExtractedChapters,
       ));
     } catch (e, stack) {
       params.sendPort.send(_WorkerErrorEvent(
@@ -1120,6 +1150,7 @@ class DocumentIngestionPipeline {
     final tocPages = <int>{};
     final tocTitles = <String>{};
     final explicitHeadingMap = <int, String>{};
+    final singleIsolateChapters = <Map<String, Object?>>[];
 
     for (int p = 1; p <= totalPages; p++) {
       final lines = cleanLinesMap[p] ?? const [];
@@ -1135,6 +1166,14 @@ class DocumentIngestionPipeline {
         tocPages.add(p);
         for (final entry in tocRes.entries) {
           tocTitles.add(entry.title.toLowerCase());
+          singleIsolateChapters.add({
+            'level': entry.level,
+            'title': entry.title,
+            'raw_page_label': entry.rawPageLabel,
+            'is_roman': entry.isRoman ? 1 : 0,
+            'start_page': entry.pageNumber,
+            'start_chunk_index': null,
+          });
         }
       }
       for (final l in lines) {
@@ -1165,11 +1204,21 @@ class DocumentIngestionPipeline {
     final spans = <Map<String, dynamic>>[];
     String? currentCarryOver;
     int? prevReadablePage;
-    String activeSectionTitle = 'Chapter 1';
+    String? activeSectionTitle;
 
     for (int p = 1; p <= totalPages; p++) {
-      final role =
-          (p - 1 < roles.length) ? roles[p - 1] : SectionRole.chapter;
+      final roleIdx = p - 1;
+      var role = (roleIdx < roles.length) ? roles[roleIdx] : SectionRole.chapter;
+
+      final bool isTocOrDirectory = tocPages.contains(p) ||
+          SectionRole.fromString(activeSectionTitle ?? '') == SectionRole.toc ||
+          RegExp(r'^(?:table\s+of\s+)?contents\b|^list\s+of\s+(?:bibliographic\s+)?abbreviations|^members\s+of\s+the\s+seminar', caseSensitive: false)
+              .hasMatch((activeSectionTitle ?? '').trim());
+
+      if (isTocOrDirectory) {
+        role = SectionRole.toc;
+      }
+
       // Exclude non-reading matter (TOC, copyright, index, etc.)
       if (role.isMatter) {
         continue;
@@ -1234,13 +1283,16 @@ class DocumentIngestionPipeline {
           activeSectionTitle = candidateTitle.trim();
         }
 
+        final effectiveTitle = activeSectionTitle ??
+            (role != SectionRole.chapter ? role.displayLabel : 'Chapter 1');
+
         spans.add({
           'start': start,
           'end': end,
           'page_start': p,
           'page_end': p,
           'type': para.isHeading ? 'heading' : 'paragraph',
-          'section_title': activeSectionTitle,
+          'section_title': effectiveTitle,
           'section_role': role.name,
         });
       }
@@ -1258,7 +1310,7 @@ class DocumentIngestionPipeline {
         'page_start': totalPages,
         'page_end': totalPages,
         'type': 'paragraph',
-        'section_title': activeSectionTitle,
+        'section_title': activeSectionTitle ?? 'Chapter 1',
         'section_role': 'chapter',
       });
       currentCarryOver = null;
@@ -1281,12 +1333,38 @@ class DocumentIngestionPipeline {
         sha256.convert(utf8.encode(reconstructedText)).toString();
     final bool integrityVerified = (canonicalSha256 == reconstructedSha256);
 
+    if (singleIsolateChapters.isNotEmpty) {
+      for (final ch in singleIsolateChapters) {
+        final startPage = ch['start_page'] as int?;
+        final title = (ch['title'] as String?)?.toLowerCase();
+        if (startPage != null && startPage > 0) {
+          final matchedIdx = chunks.indexWhere((c) {
+            final pStart = (c['page_start'] as num?)?.toInt() ?? 0;
+            final secTitle = (c['section_title'] as String?)?.toLowerCase();
+            return pStart >= startPage || (title != null && secTitle != null && secTitle.contains(title));
+          });
+          if (matchedIdx >= 0) {
+            ch['start_chunk_index'] = (chunks[matchedIdx]['sequence'] as num?)?.toInt() ?? matchedIdx;
+          }
+        }
+      }
+      try {
+        unawaited(LocalDatabase.instance.insertDocumentChapters(docId, singleIsolateChapters));
+      } catch (e) {
+        debugPrint('[Athena] Error saving chapters: $e');
+      }
+    }
+
     return IngestionResult(
       canonicalText: canonicalStr,
       canonicalSha256: canonicalSha256,
       pageCount: totalPages,
       chunks: chunks,
       integrityVerified: integrityVerified,
+      totalWords: StructureResolver._countWordsStatic(canonicalStr),
+      totalCharacters: canonicalStr.length,
+      chunkCount: chunks.length,
+      chapters: singleIsolateChapters,
     );
   }
 
@@ -1323,11 +1401,6 @@ class DocumentIngestionPipeline {
       for (final line in textLines) {
         final b = line.bounds;
         final words = line.wordCollection;
-        var lineText = words.map((w) => safeSplitFusedWord(w.text)).join(' ').trim();
-        if (lineText.isEmpty) {
-          lineText = line.text.split(RegExp(r'\s+')).map(safeSplitFusedWord).join(' ').trim();
-        }
-        if (lineText.isEmpty) continue;
 
         double calcFontSize = line.fontSize;
         if (calcFontSize <= 0 && words.isNotEmpty) {
@@ -1346,6 +1419,35 @@ class DocumentIngestionPipeline {
         }
         if (calcFontSize <= 0) calcFontSize = 12.0;
 
+        String lineText;
+        double rightCoord = b.left + b.width;
+        if (words.isNotEmpty) {
+          final buf = StringBuffer();
+          for (int wIdx = 0; wIdx < words.length; wIdx++) {
+            final w = words[wIdx];
+            final wordSplit = safeSplitFusedWord(w.text);
+            if (wIdx == 0) {
+              buf.write(wordSplit);
+            } else {
+              final prevWord = words[wIdx - 1];
+              final gap = w.bounds.left - (prevWord.bounds.left + prevWord.bounds.width);
+              if (gap > calcFontSize * 1.8) {
+                buf.write('    ');
+              } else {
+                buf.write(' ');
+              }
+              buf.write(wordSplit);
+            }
+          }
+          lineText = buf.toString().trim();
+          final lastW = words.last;
+          final lastRight = lastW.bounds.left + lastW.bounds.width;
+          if (lastRight > rightCoord) rightCoord = lastRight;
+        } else {
+          lineText = line.text.split(RegExp(r'\s+')).map(safeSplitFusedWord).join(' ').trim();
+        }
+        if (lineText.isEmpty) continue;
+
         final bool isBold = line.fontStyle.contains(PdfFontStyle.bold);
 
         rawFragments.add(LineFragment(
@@ -1353,7 +1455,7 @@ class DocumentIngestionPipeline {
           top: b.top,
           bottom: b.bottom,
           left: b.left,
-          right: b.left + b.width,
+          right: rightCoord,
           height: b.height > 0 ? b.height : 12.0,
           width: b.width,
           fontSize: calcFontSize,
@@ -1382,12 +1484,6 @@ class DocumentIngestionPipeline {
         } else {
           // Flush previous row sorted left-to-right
           currentRow.sort((a, b) => a.left.compareTo(b.left));
-          final combinedText = _joinRowFragments(currentRow);
-          final minTop = currentRow.map((f) => f.top).reduce(min);
-          final maxBottom = currentRow.map((f) => f.bottom).reduce(max);
-          final minLeft = currentRow.map((f) => f.left).reduce(min);
-          final maxRight = currentRow.map((f) => f.right).reduce(max);
-
           int totalWeight = 0;
           double weightedFont = 0.0;
           for (final f in currentRow) {
@@ -1397,6 +1493,11 @@ class DocumentIngestionPipeline {
           }
           final double rowFont = totalWeight > 0 ? (weightedFont / totalWeight) : currentRow.first.fontSize;
           final bool rowBold = currentRow.any((f) => f.isBold);
+          final combinedText = _joinRowFragments(currentRow, calcFontSize: rowFont);
+          final minTop = currentRow.map((f) => f.top).reduce(min);
+          final maxBottom = currentRow.map((f) => f.bottom).reduce(max);
+          final minLeft = currentRow.map((f) => f.left).reduce(min);
+          final maxRight = currentRow.map((f) => f.right).reduce(max);
 
           groupedLines.add(LineFragment(
             text: combinedText.trim(),
@@ -1417,12 +1518,6 @@ class DocumentIngestionPipeline {
 
       if (currentRow.isNotEmpty) {
         currentRow.sort((a, b) => a.left.compareTo(b.left));
-        final combinedText = _joinRowFragments(currentRow);
-        final minTop = currentRow.map((f) => f.top).reduce(min);
-        final maxBottom = currentRow.map((f) => f.bottom).reduce(max);
-        final minLeft = currentRow.map((f) => f.left).reduce(min);
-        final maxRight = currentRow.map((f) => f.right).reduce(max);
-
         int totalWeight = 0;
         double weightedFont = 0.0;
         for (final f in currentRow) {
@@ -1432,6 +1527,11 @@ class DocumentIngestionPipeline {
         }
         final double rowFont = totalWeight > 0 ? (weightedFont / totalWeight) : currentRow.first.fontSize;
         final bool rowBold = currentRow.any((f) => f.isBold);
+        final combinedText = _joinRowFragments(currentRow, calcFontSize: rowFont);
+        final minTop = currentRow.map((f) => f.top).reduce(min);
+        final maxBottom = currentRow.map((f) => f.bottom).reduce(max);
+        final minLeft = currentRow.map((f) => f.left).reduce(min);
+        final maxRight = currentRow.map((f) => f.right).reduce(max);
 
         groupedLines.add(LineFragment(
           text: combinedText.trim(),
@@ -1453,14 +1553,22 @@ class DocumentIngestionPipeline {
     }
   }
 
-  static String _joinRowFragments(List<LineFragment> fragments) {
+  static String _joinRowFragments(List<LineFragment> fragments, {double calcFontSize = 12.0}) {
     if (fragments.isEmpty) return '';
     final buf = StringBuffer(fragments.first.text.trim());
     for (int i = 1; i < fragments.length; i++) {
-      final prevText = fragments[i - 1].text.trim();
-      final currText = fragments[i].text.trim();
+      final prev = fragments[i - 1];
+      final curr = fragments[i];
+      final prevText = prev.text.trim();
+      final currText = curr.text.trim();
+      final gap = curr.left - prev.right;
+      final effectiveFontSize = curr.fontSize > 0 ? curr.fontSize : calcFontSize;
+
       // Drop cap detection: single uppercase letter followed by lowercase token
       if (RegExp(r'^[A-Z]$').hasMatch(prevText) && RegExp(r'^[a-z]').hasMatch(currText)) {
+        buf.write(currText);
+      } else if (gap > effectiveFontSize * 1.8) {
+        buf.write('    ');
         buf.write(currText);
       } else {
         buf.write(' ');
@@ -1630,14 +1738,21 @@ class DocumentIngestionPipeline {
   static int scoreFrontOrBackMatter(List<LineFragment> lines, String pageText) {
     int score = 0;
     final lower = pageText.toLowerCase();
-    final compact = lower.replaceAll(' ', '');
+    final compact = lower.replaceAll(RegExp(r'[^a-z0-9]'), '');
 
     // 1. Explicit blank page declaration
     if (compact.contains('intentionallyleftblank')) {
       score += 100;
     }
 
-    // 2. Imprint & publishing markers
+    // 2. Bollingen series & publisher markers
+    if ((compact.contains('bolling') && compact.contains('series')) ||
+        compact.contains('bollingenseries') ||
+        compact.contains('bollingerseries')) {
+      score += 40;
+    }
+
+    // 3. Imprint & publishing markers
     const markers = [
       'copyright',
       '©',
@@ -1656,12 +1771,13 @@ class DocumentIngestionPipeline {
     ];
 
     for (final marker in markers) {
-      if (lower.contains(marker)) {
+      if (lower.contains(marker) ||
+          compact.contains(marker.replaceAll(RegExp(r'[^a-z0-9]'), ''))) {
         score += 25;
       }
     }
 
-    // 3. Structural front-matter indicators: High uppercase/titlecase ratio + low punctuation
+    // 4. Structural front-matter indicators: High uppercase/titlecase ratio + low punctuation
     int upperLines = 0;
     for (final l in lines) {
       final t = l.text.trim();
@@ -1674,7 +1790,7 @@ class DocumentIngestionPipeline {
     final wordCount = pageText.split(RegExp(r'\s+')).where((w) => w.isNotEmpty).length;
     final avgWordsPerLine = lines.isEmpty ? 0.0 : wordCount / lines.length;
 
-    if (upperRatio >= 0.50 && sentencePunctCount < 3 && avgWordsPerLine < 6) {
+    if (upperRatio >= 0.45 && sentencePunctCount < 3 && avgWordsPerLine < 6.5) {
       score += 30;
     }
 
@@ -3175,11 +3291,13 @@ class _WorkerDoneEvent {
   final String canonicalText;
   final String canonicalSha256;
   final int pageCount;
+  final List<Map<String, Object?>> chapters;
 
   const _WorkerDoneEvent({
     required this.canonicalText,
     required this.canonicalSha256,
     required this.pageCount,
+    this.chapters = const [],
   });
 }
 
@@ -3231,7 +3349,29 @@ class ReflowResult {
 class TocEntry {
   final String title;
   final int pageNumber;
-  const TocEntry({required this.title, required this.pageNumber});
+  final String rawPageLabel;
+  final bool isRoman;
+  final int level;
+
+  const TocEntry({
+    required this.title,
+    required this.pageNumber,
+    this.rawPageLabel = '',
+    this.isRoman = false,
+    this.level = 1,
+  });
+}
+
+class TocPageMatch {
+  final int pageNumber;
+  final bool isRoman;
+  final String rawLabel;
+
+  const TocPageMatch({
+    required this.pageNumber,
+    required this.isRoman,
+    required this.rawLabel,
+  });
 }
 
 class TocDetectionResult {
@@ -3244,20 +3384,154 @@ class TocDetector {
   static final contentsHeaderRe =
       RegExp(r'^(?:table\s+of\s+)?contents\b', caseSensitive: false);
 
-  static const _romanMap = {
-    'i': 1, 'ii': 2, 'iii': 3, 'iv': 4, 'v': 5,
-    'vi': 6, 'vii': 7, 'viii': 8, 'ix': 9, 'x': 10,
-    'xi': 11, 'xii': 12, 'xiii': 13, 'xiv': 14, 'xv': 15,
-    'xvi': 16, 'xvii': 17, 'xviii': 18, 'xix': 19, 'xx': 20,
-    'xxi': 21, 'xxii': 22, 'xxiii': 23, 'xxiv': 24, 'xxv': 25,
-    'xxvi': 26, 'xxvii': 27, 'xxviii': 28, 'xxix': 29, 'xxx': 30,
-    'xxxi': 31, 'xxxii': 32, 'xxxiii': 33, 'xxxiv': 34, 'xxxv': 35,
-    'xxxvi': 36, 'xxxvii': 37, 'xxxviii': 38, 'xxxix': 39, 'xl': 40,
-    'xli': 41, 'xlii': 42, 'xliii': 43, 'xliv': 44, 'xlv': 45,
-    'xlvi': 46, 'xlvii': 47, 'xlviii': 48, 'xlix': 49, 'l': 50,
-  };
+  static final Map<String, int> _romanMap = _buildRomanMap();
+
+  static Map<String, int> _buildRomanMap() {
+    final map = <String, int>{};
+    const hundreds = ['', 'c', 'cc', 'ccc', 'cd', 'd'];
+    const tens = ['', 'x', 'xx', 'xxx', 'xl', 'l', 'lx', 'lxx', 'lxxx', 'xc'];
+    const ones = ['', 'i', 'ii', 'iii', 'iv', 'v', 'vi', 'vii', 'viii', 'ix'];
+
+    for (int num = 1; num <= 500; num++) {
+      final h = (num % 1000) ~/ 100;
+      final t = (num % 100) ~/ 10;
+      final o = num % 10;
+      final s = '${hundreds[h]}${tens[t]}${ones[o]}';
+      if (s.isNotEmpty) {
+        map[s] = num;
+      }
+    }
+    return map;
+  }
 
   static int? parseRoman(String s) => _romanMap[s.trim().toLowerCase()];
+
+  static String cleanTocTitle(String rawTitle) {
+    var t = rawTitle.trim();
+    t = t.replaceAll(RegExp(r'[\.…\-_]+$'), '').trim();
+
+    // Fix OCR date tokens like "r6May1934" -> "16 May 1934"
+    t = t.replaceAllMapped(
+      RegExp(r'\b([0-9lr]{1,2})([A-Z][a-z]{2,8})(\d{4})\b'),
+      (m) {
+        var d = m.group(1)!;
+        d = d.replaceAll('l', '1').replaceAll('r', '1');
+        final month = m.group(2)!;
+        final year = m.group(3)!;
+        return '$d $month $year';
+      },
+    );
+
+    // Vintage scanner OCR glyph corruptions
+    t = t.replaceAll(RegExp(r"['`]?r[il]O[!1|l\\]+", caseSensitive: false), 'tion');
+    t = t.replaceAll(RegExp(r"['`]?t[il]O[!1|l\\]+", caseSensitive: false), 'tion');
+    t = t.replaceAll(RegExp(r"I['`\\]+\s*S\b", caseSensitive: false), 'NS');
+    t = t.replaceAll(RegExp(r"I['`\\]+", caseSensitive: false), 'N');
+    t = t.replaceAll(RegExp(r"![\\/]+"), 'n');
+
+    t = t.replaceAll(RegExp(r'\s+'), ' ').trim();
+
+    final prefixMatch =
+        RegExp(r'^([IVXLCDM]+\.\s*)(.*)$', caseSensitive: false).firstMatch(t);
+    if (prefixMatch != null) {
+      final prefix = prefixMatch.group(1)!.toUpperCase();
+      final rest = prefixMatch.group(2)!;
+      return '$prefix${_toTitleCase(rest)}';
+    } else {
+      return _toTitleCase(t);
+    }
+  }
+
+  static String _toTitleCase(String text) {
+    if (text.isEmpty) return text;
+    final upperCount = text.replaceAll(RegExp(r'[^A-Z]'), '').length;
+    final lowerCount = text.replaceAll(RegExp(r'[^a-z]'), '').length;
+    final shouldTitleCase = (upperCount > 0 && lowerCount == 0) ||
+        (upperCount >= lowerCount && upperCount >= 3);
+    if (!shouldTitleCase) return text;
+
+    const minorWords = {
+      'a', 'an', 'the', 'and', 'but', 'or', 'for', 'nor', 'on', 'at', 'to', 'from', 'by', 'of', 'in', 'with'
+    };
+    final words = text.toLowerCase().split(' ');
+    final result = <String>[];
+    for (int i = 0; i < words.length; i++) {
+      final w = words[i];
+      if (w.isEmpty) continue;
+      if (i == 0 || !minorWords.contains(w)) {
+        result.add(w[0].toUpperCase() + w.substring(1));
+      } else {
+        result.add(w);
+      }
+    }
+    return result.join(' ');
+  }
+
+  static TocPageMatch? parseTocPageToken(
+    String rawToken, {
+    bool hasContentsHeader = false,
+    bool isContinuation = false,
+  }) {
+    final t = rawToken.trim();
+    if (t.isEmpty) return null;
+
+    final directNum = int.tryParse(t);
+    if (directNum != null && directNum > 0 && directNum < 10000) {
+      return TocPageMatch(pageNumber: directNum, isRoman: false, rawLabel: t);
+    }
+
+    final lower = t.toLowerCase();
+    if (_romanMap.containsKey(lower)) {
+      return TocPageMatch(
+        pageNumber: _romanMap[lower]!,
+        isRoman: true,
+        rawLabel: t.toUpperCase(),
+      );
+    }
+
+    // Roman OCR normalization:
+    var normRoman = lower;
+    if (RegExp(r'''[ivx][\\'"!]+$''').hasMatch(normRoman)) {
+      if (normRoman.endsWith(r"i\'") ||
+          normRoman.endsWith('i"') ||
+          normRoman.endsWith("i'")) {
+        normRoman = normRoman.replaceAll(RegExp(r'''i[\\'"!]+$'''), 'iv');
+      } else {
+        normRoman = normRoman.replaceAll(RegExp(r'''[\\'"!]+$'''), 'v');
+      }
+    }
+    normRoman = normRoman.replaceAll(RegExp(r'[1l|!]'), 'i');
+
+    if (_romanMap.containsKey(normRoman)) {
+      return TocPageMatch(
+        pageNumber: _romanMap[normRoman]!,
+        isRoman: true,
+        rawLabel: normRoman.toUpperCase(),
+      );
+    }
+
+    // Arabic OCR digit repairs
+    if (hasContentsHeader || isContinuation) {
+      var normArabic = t;
+      normArabic = normArabic.replaceAll(RegExp(r'^[;:]\)?'), '3');
+      if (normArabic.toLowerCase() == 'sg' || normArabic == '5G' || normArabic == 'sG') {
+        normArabic = '56';
+      }
+      normArabic = normArabic
+          .replaceAll(RegExp(r'^[lr](\d+)'), '1\$1')
+          .replaceAll(RegExp(r'(\d)[oO]'), '\$10')
+          .replaceAll(RegExp(r'[oO](\d)'), '0\$1')
+          .replaceAll(RegExp(r'(\d)[gG]'), '\$16')
+          .replaceAll(RegExp(r'(\d)[sS]'), '\$15');
+
+      final arabicNum = int.tryParse(normArabic);
+      if (arabicNum != null && arabicNum > 0 && arabicNum < 10000) {
+        return TocPageMatch(pageNumber: arabicNum, isRoman: false, rawLabel: normArabic);
+      }
+    }
+
+    return null;
+  }
 
   static TocDetectionResult analyzePage({
     required List<LineFragment> lines,
@@ -3265,6 +3539,7 @@ class TocDetector {
     required String rawPageText,
     int? pageNum,
     int? totalPages,
+    bool isContinuation = false,
   }) {
     bool hasContentsHeader = false;
     for (int i = 0; i < lines.length && i < 4; i++) {
@@ -3285,27 +3560,36 @@ class TocDetector {
     // OR pages with an explicit Contents / Table of Contents heading (S-1)
     if (pageNum != null && totalPages != null && totalPages > 0) {
       final isEarlyPage = pageNum <= 30 || pageNum <= (totalPages * 0.15).ceil();
-      if (!isEarlyPage && !hasContentsHeader) {
+      if (!isEarlyPage && !hasContentsHeader && !isContinuation) {
         return const TocDetectionResult(isToc: false, entries: []);
       }
     }
 
     final entries = <TocEntry>[];
-    final candidatePages = <int>[];
+    final romanPages = <int>[];
+    final arabicPages = <int>[];
 
-    // Dot leader regex: title followed by >= 2 dots/periods and standalone page number token
     final dotLeaderRe = RegExp(
-      r'^(.+?\S)[.…](?:[.…\s]){1,}\s*(\d{1,4}|[a-zA-Z]{1,6})$',
+      r'^(.+?\S)[.…](?:[.…\s]){1,}\s*(\S+)$',
       caseSensitive: false,
     );
-    // Explicit space gap regex: title followed by >= 2 spaces or tab and standalone page number token
     final spaceGapRe = RegExp(
-      r'^(.+?\S)(?:\s{2,}|\t+)(\d{1,4}|[a-zA-Z]{1,6})$',
+      r'^(.+?\S)(?:\s{2,}|\t+)(\S+)$',
+      caseSensitive: false,
+    );
+    final singleSpaceRe = RegExp(
+      r'^(.+?\S)\s+(\S+)$',
+    );
+    final subheaderRe = RegExp(
+      r'^(?:spring|summer|autumn|fall|winter|part|book|volume|section)\b',
       caseSensitive: false,
     );
 
     for (final line in lines) {
       final t = line.text.trim();
+      if (t.isEmpty) continue;
+      if (contentsHeaderRe.hasMatch(t)) continue;
+
       String? titleCandidate;
       String? pageCandidate;
 
@@ -3318,53 +3602,83 @@ class TocDetector {
         if (spaceMatch != null) {
           titleCandidate = spaceMatch.group(1)!.trim();
           pageCandidate = spaceMatch.group(2)!.trim();
+        } else if (hasContentsHeader || isContinuation || (line.right >= 0.72 * bodyRight)) {
+          final singleMatch = singleSpaceRe.firstMatch(t);
+          if (singleMatch != null) {
+            titleCandidate = singleMatch.group(1)!.trim();
+            pageCandidate = singleMatch.group(2)!.trim();
+          }
         }
       }
 
       if (titleCandidate != null && pageCandidate != null) {
-        int? pgNum = int.tryParse(pageCandidate);
-        if (pgNum == null && RegExp(r'^[a-zA-Z]+$').hasMatch(pageCandidate)) {
-          pgNum = parseRoman(pageCandidate);
-        }
+        final pageMatch = parseTocPageToken(
+          pageCandidate,
+          hasContentsHeader: hasContentsHeader,
+          isContinuation: isContinuation,
+        );
 
-        if (pgNum != null) {
+        if (pageMatch != null) {
           final words = titleCandidate
               .split(RegExp(r'\s+'))
               .where((w) => w.isNotEmpty)
               .toList();
 
-          // Title must be <= 14 words and NOT end with sentence-closing punctuation
           final endsWithPeriod = RegExp(r'[.!?:;]$').hasMatch(titleCandidate);
           if (words.length <= 14 && !endsWithPeriod) {
-            final cleanTitle = titleCandidate
-                .replaceAll(RegExp(r'[\.…\-_]+$'), '')
-                .trim();
+            final cleanTitle = cleanTocTitle(titleCandidate);
             if (cleanTitle.isNotEmpty) {
-              entries.add(TocEntry(title: cleanTitle, pageNumber: pgNum));
-              candidatePages.add(pgNum);
+              entries.add(TocEntry(
+                title: cleanTitle,
+                pageNumber: pageMatch.pageNumber,
+                rawPageLabel: pageMatch.rawLabel,
+                isRoman: pageMatch.isRoman,
+                level: 2,
+              ));
+              if (pageMatch.isRoman) {
+                romanPages.add(pageMatch.pageNumber);
+              } else {
+                arabicPages.add(pageMatch.pageNumber);
+              }
+              continue;
             }
           }
         }
       }
+
+      // Recognize section subheaders inside a TOC page as level-1 TOC group headers
+      if (hasContentsHeader && subheaderRe.hasMatch(t)) {
+        final words = t.split(RegExp(r'\s+')).where((w) => w.isNotEmpty).toList();
+        if (words.length <= 5 && !RegExp(r'[.!?:;]$').hasMatch(t)) {
+          entries.add(TocEntry(
+            title: t,
+            pageNumber: 0,
+            rawPageLabel: '',
+            isRoman: false,
+            level: 1,
+          ));
+        }
+      }
     }
 
-    bool isStrictlyIncreasing = false;
-    if (candidatePages.length >= 2) {
+    bool checkMonotonic(List<int> pages) {
+      if (pages.length < 2) return true;
       int strictlyIncreasingSteps = 0;
-      for (int i = 0; i < candidatePages.length - 1; i++) {
-        if (candidatePages[i + 1] > candidatePages[i]) {
+      for (int i = 0; i < pages.length - 1; i++) {
+        if (pages[i + 1] >= pages[i]) {
           strictlyIncreasingSteps++;
         }
       }
-      final ratio = strictlyIncreasingSteps / (candidatePages.length - 1);
-      if (ratio >= 0.75) {
-        isStrictlyIncreasing = true;
-      }
+      return (strictlyIncreasingSteps / (pages.length - 1)) >= 0.75;
     }
 
+    final romanOk = checkMonotonic(romanPages);
+    final arabicOk = checkMonotonic(arabicPages);
+    final dualRegimeMonotonic = romanOk && arabicOk;
+
     final isToc = hasContentsHeader
-        ? (entries.length >= 2 && (candidatePages.length < 2 || isStrictlyIncreasing))
-        : (entries.length >= 4 && isStrictlyIncreasing);
+        ? (entries.length >= 2)
+        : (entries.length >= 4 && dualRegimeMonotonic);
 
     return TocDetectionResult(isToc: isToc, entries: entries);
   }
@@ -3731,6 +4045,34 @@ class StructureResolver {
     return count;
   }
 
+  static bool _hasCompleteProseSentence(List<LineFragment> lines, String rawText) {
+    const functionWords = {
+      'the', 'of', 'and', 'to', 'a', 'in', 'that', 'is', 'was', 'for', 'it', 'with', 'as', 'by', 'on', 'this', 'from', 'at'
+    };
+    for (final l in lines) {
+      final t = l.text.trim();
+      if (RegExp(r'[.!?]$').hasMatch(t)) {
+        final words = t.split(RegExp(r'\s+')).where((w) => w.isNotEmpty).toList();
+        if (words.length >= 8) {
+          final hasFunctionWord = words.any((w) => functionWords.contains(w.toLowerCase()));
+          if (hasFunctionWord) return true;
+        }
+      }
+    }
+    final sentences = rawText.split(RegExp(r'(?<=[.!?])\s+'));
+    for (final s in sentences) {
+      final trimmed = s.trim();
+      if (RegExp(r'[.!?]$').hasMatch(trimmed)) {
+        final words = trimmed.split(RegExp(r'\s+')).where((w) => w.isNotEmpty).toList();
+        if (words.length >= 8) {
+          final hasFunctionWord = words.any((w) => functionWords.contains(w.toLowerCase()));
+          if (hasFunctionWord) return true;
+        }
+      }
+    }
+    return false;
+  }
+
   static List<SectionRole> smoothRolesForWindow({
     required int startPage,
     required int endPage,
@@ -3760,6 +4102,27 @@ class StructureResolver {
               r'(?:copyright|©|all rights reserved|isbn|library of congress|cataloging|printed in|published by)\b',
               caseSensitive: false)
           .hasMatch(rawText);
+
+      int upperLines = 0;
+      for (final l in lines) {
+        final t = l.text.trim();
+        if (t.isNotEmpty && t == t.toUpperCase() && t.length > 3) {
+          upperLines++;
+        }
+      }
+      final upperRatio = lines.isEmpty ? 0.0 : upperLines / lines.length;
+      final avgWordsPerLine = lines.isEmpty ? 0.0 : words / lines.length;
+      final frontScore = DocumentIngestionPipeline.scoreFrontOrBackMatter(lines, rawText);
+      final hasProseSentence = _hasCompleteProseSentence(lines, rawText);
+
+      final isEarlyPage = totalPages <= 30
+          ? (pageNum <= (totalPages * 0.20).ceil())
+          : (pageNum <= 30 || pageNum <= (totalPages * 0.15).ceil());
+      final isNonProseMatter = isEarlyPage &&
+          !hasProseSentence &&
+          (upperRatio >= 0.45 ||
+              frontScore >= 40 ||
+              (avgWordsPerLine < 6.5 && (words < 40 || lines.length <= 8)));
 
       final bool isLatePage = totalPages > 4 && pageNum >= (totalPages * 0.75).floor();
       final hasBackHeading = RegExp(
@@ -3799,13 +4162,15 @@ class StructureResolver {
                     .hasMatch(t);
           });
 
-      if (pageNum <= (totalPages * 0.20).ceil()) {
-        if (hasFrontMarkers) {
-          roles.add(SectionRole.titlePage);
-        } else if (isToc) {
+      if (pageNum <= (totalPages * 0.20).ceil() || isEarlyPage) {
+        if (isToc) {
           roles.add(SectionRole.toc);
-        } else if (hasReadableFrontHeader) {
+        } else if (hasReadableFrontHeader && !isNonProseMatter) {
           roles.add(SectionRole.preface);
+        } else if (hasFrontMarkers || isNonProseMatter) {
+          roles.add(hasFrontMarkers && rawText.contains('copyright')
+              ? SectionRole.copyright
+              : SectionRole.titlePage);
         } else {
           roles.add(SectionRole.chapter);
         }
@@ -3910,32 +4275,53 @@ class StructureResolver {
                     .hasMatch(t);
           });
 
+      int upperLines = 0;
+      for (final l in lines) {
+        final t = l.text.trim();
+        if (t.isNotEmpty && t == t.toUpperCase() && t.length > 3) {
+          upperLines++;
+        }
+      }
+      final upperRatio = lines.isEmpty ? 0.0 : upperLines / lines.length;
+      final avgWordsPerLine = lines.isEmpty ? 0.0 : words / lines.length;
+      final frontScore = DocumentIngestionPipeline.scoreFrontOrBackMatter(lines, rawText);
+      final hasProseSentence = _hasCompleteProseSentence(lines, rawText);
+
+      final isEarlyPage = totalPages <= 30
+          ? (pageNum <= (totalPages * 0.20).ceil())
+          : (pageNum <= 30 || pageNum <= (totalPages * 0.15).ceil());
+      final isNonProseMatter = isEarlyPage &&
+          !hasProseSentence &&
+          (upperRatio >= 0.45 ||
+              frontScore >= 40 ||
+              (avgWordsPerLine < 6.5 && (words < 40 || lines.length <= 8)));
+
       final e = List<double>.filled(numStates, 0.0);
 
-      if (hasFrontMarkers) {
-        e[0] = 0.0;
-        e[1] = 40.0;
-        e[2] = 40.0;
-        e[3] = 60.0;
-        e[4] = 80.0;
-      } else if (isToc) {
+      if (isToc) {
         e[1] = 0.0;
         e[0] = 50.0;
         e[2] = 50.0;
         e[3] = 60.0;
         e[4] = 70.0;
+      } else if (hasReadableFrontHeader && !isNonProseMatter) {
+        e[2] = 0.0;
+        e[0] = 40.0;
+        e[1] = 40.0;
+        e[3] = 30.0;
+        e[4] = 50.0;
+      } else if (hasFrontMarkers || isNonProseMatter) {
+        e[0] = 0.0;
+        e[1] = 40.0;
+        e[2] = 40.0;
+        e[3] = 60.0;
+        e[4] = 80.0;
       } else if (hasBackMarkers || (isLatePage && isIndexDense)) {
         e[4] = 0.0;
         e[0] = 70.0;
         e[1] = 70.0;
         e[2] = 60.0;
         e[3] = 50.0;
-      } else if (hasReadableFrontHeader) {
-        e[2] = 0.0;
-        e[0] = 40.0;
-        e[1] = 40.0;
-        e[3] = 30.0;
-        e[4] = 50.0;
       } else if (hasChapterHeader) {
         e[3] = 0.0;
         e[0] = 50.0;

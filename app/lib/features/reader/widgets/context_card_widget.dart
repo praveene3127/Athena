@@ -78,17 +78,20 @@ class ContextCardWidget extends StatelessWidget {
       resolveVariant(item, body);
 
   static ({String label, IconData icon, Color color}) _resolveLens(
-      ReaderItem card, String rawTitle, String body) {
+      ReaderItem card, String rawTitle, String body, {bool isDark = false}) {
     final bool isInternal = card.isInternalExtractive ||
+        card.supportTier == 'internal_extractive' ||
+        card.supportTier == 'book_deep_insight' ||
         (!card.isVerifiedExternal &&
             !card.isSingleSource &&
+            card.supportTier != 'encyclopedic' &&
             (card.citations == null || card.citations!.isEmpty));
 
     if (isInternal) {
       return (
         label: 'PASSAGE INSIGHT',
         icon: Icons.auto_stories_outlined,
-        color: const Color(0xFF6E5D53),
+        color: isDark ? const Color(0xFFA78BFA) : const Color(0xFF4B5563),
       );
     }
 
@@ -98,7 +101,7 @@ class ContextCardWidget extends StatelessWidget {
       return (
         label: 'REAL-WORLD STUDY',
         icon: Icons.science_outlined,
-        color: const Color(0xFF2D6A4F), // Emerald #2D6A4F
+        color: isDark ? const Color(0xFF34D399) : const Color(0xFF1B5E40),
       );
     }
     if (upTitle.contains('COUNTER-INTUITIVE') ||
@@ -107,7 +110,7 @@ class ContextCardWidget extends StatelessWidget {
       return (
         label: 'COUNTER-INTUITIVE FACT',
         icon: Icons.balance_outlined,
-        color: const Color(0xFFC84B31), // Terracotta #C84B31
+        color: isDark ? const Color(0xFFFB923C) : const Color(0xFFB9381E),
       );
     }
     if (upTitle.contains('HISTORICAL BACKSTORY') ||
@@ -117,7 +120,7 @@ class ContextCardWidget extends StatelessWidget {
       return (
         label: 'HISTORICAL BACKSTORY',
         icon: Icons.history_edu_outlined,
-        color: const Color(0xFF1D3557), // Navy #1D3557
+        color: isDark ? const Color(0xFF60A5FA) : const Color(0xFF1D3557),
       );
     }
     if (upTitle.contains('THE HIDDEN MECHANISM') ||
@@ -127,7 +130,7 @@ class ContextCardWidget extends StatelessWidget {
       return (
         label: 'THE HIDDEN MECHANISM',
         icon: Icons.menu_book_outlined,
-        color: const Color(0xFFB45309), // Ochre #B45309
+        color: isDark ? const Color(0xFFFBBF24) : const Color(0xFF92400E),
       );
     }
 
@@ -138,7 +141,7 @@ class ContextCardWidget extends StatelessWidget {
       return (
         label: 'REAL-WORLD STUDY',
         icon: Icons.science_outlined,
-        color: const Color(0xFF2D6A4F),
+        color: isDark ? const Color(0xFF34D399) : const Color(0xFF1B5E40),
       );
     }
     if (combined.contains('HISTORICAL') ||
@@ -148,7 +151,7 @@ class ContextCardWidget extends StatelessWidget {
       return (
         label: 'HISTORICAL BACKSTORY',
         icon: Icons.history_edu_outlined,
-        color: const Color(0xFF1D3557),
+        color: isDark ? const Color(0xFF60A5FA) : const Color(0xFF1D3557),
       );
     }
     if (combined.contains('COUNTER') ||
@@ -158,7 +161,7 @@ class ContextCardWidget extends StatelessWidget {
       return (
         label: 'COUNTER-INTUITIVE FACT',
         icon: Icons.balance_outlined,
-        color: const Color(0xFFC84B31),
+        color: isDark ? const Color(0xFFFB923C) : const Color(0xFFB9381E),
       );
     }
     if (combined.contains('MECHANISM') ||
@@ -168,13 +171,13 @@ class ContextCardWidget extends StatelessWidget {
       return (
         label: 'THE HIDDEN MECHANISM',
         icon: Icons.menu_book_outlined,
-        color: const Color(0xFFB45309),
+        color: isDark ? const Color(0xFFFBBF24) : const Color(0xFF92400E),
       );
     }
     return (
       label: 'REAL-WORLD STUDY',
       icon: Icons.science_outlined,
-      color: const Color(0xFF2D6A4F),
+      color: isDark ? const Color(0xFF34D399) : const Color(0xFF1B5E40),
     );
   }
 
@@ -242,7 +245,7 @@ class ContextCardWidget extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final theme = ReaderThemeConfig.getById(themeId);
-    final lens = _resolveLens(card, card.title ?? '', card.body ?? '');
+    final lens = _resolveLens(card, card.title ?? '', card.body ?? '', isDark: theme.isDark);
     final displayTitle = _cleanTitle(card.title ?? 'Context Insight');
     final displayBody = _cleanBody(card.body ?? '');
     final sourceInfo = _extractSource(card);
@@ -683,10 +686,17 @@ class ContextCardWidget extends StatelessWidget {
 
   Widget _buildSourceFooter(
       ReaderThemeConfig theme, Map<String, String>? sourceInfo) {
+    final supportTier = (card.supportTier ?? '').toLowerCase();
     final hasVerifiedSource =
-        card.isVerifiedExternal && card.sourceUrl.isNotEmpty && sourceInfo != null;
+        (card.isVerifiedExternal || supportTier == 'verified_external') &&
+        card.sourceUrl.isNotEmpty &&
+        sourceInfo != null;
+    final isEncyclopedic = supportTier == 'encyclopedic' && sourceInfo != null;
     final isSingleSource =
-        card.isSingleSource && card.sourceUrl.isNotEmpty && sourceInfo != null;
+        (card.isSingleSource || supportTier == 'single_source') &&
+        card.sourceUrl.isNotEmpty &&
+        sourceInfo != null;
+    final isBookDeepInsight = supportTier == 'book_deep_insight';
 
     return Row(
       children: [
@@ -713,7 +723,50 @@ class ContextCardWidget extends StatelessWidget {
                     const SizedBox(width: 6),
                     Flexible(
                       child: Text(
-                        'VERIFIED SOURCE: ${sourceInfo['publisher']!.toUpperCase()}',
+                        'VERIFIED RESEARCH · SOURCE: ${sourceInfo['publisher']!.toUpperCase()}',
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                        style: TextStyle(
+                          fontFamily: AppTheme.fontUI,
+                          fontSize: 11,
+                          fontWeight: FontWeight.w600,
+                          letterSpacing: 0.5,
+                          color: theme.accentColor,
+                        ),
+                      ),
+                    ),
+                    const SizedBox(width: 4),
+                    Icon(Icons.open_in_new_rounded,
+                        size: 12, color: theme.accentColor),
+                  ],
+                ),
+              ),
+            ),
+          )
+        else if (isEncyclopedic)
+          Expanded(
+            child: InkWell(
+              borderRadius: BorderRadius.circular(8),
+              onTap: () => _openUrl(sourceInfo['url']),
+              child: Container(
+                padding:
+                    const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+                decoration: BoxDecoration(
+                  color: theme.pillBackground,
+                  borderRadius: BorderRadius.circular(8),
+                  border: Border.all(
+                    color: theme.borderColor.withValues(alpha: 0.8),
+                  ),
+                ),
+                child: Row(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    Icon(Icons.auto_stories_rounded,
+                        size: 14, color: theme.accentColor),
+                    const SizedBox(width: 6),
+                    Flexible(
+                      child: Text(
+                        'ENCYCLOPEDIC SOURCE · ${sourceInfo['publisher']!.toUpperCase()}',
                         maxLines: 1,
                         overflow: TextOverflow.ellipsis,
                         style: TextStyle(
@@ -756,7 +809,7 @@ class ContextCardWidget extends StatelessWidget {
                     const SizedBox(width: 6),
                     Flexible(
                       child: Text(
-                        'CONTEXTUAL NOTE: ${sourceInfo['publisher']!.toUpperCase()}',
+                        'PUBLISHED SOURCE · ${sourceInfo['publisher']!.toUpperCase()}',
                         maxLines: 1,
                         overflow: TextOverflow.ellipsis,
                         style: TextStyle(
@@ -773,6 +826,42 @@ class ContextCardWidget extends StatelessWidget {
                         size: 12, color: theme.accentColor),
                   ],
                 ),
+              ),
+            ),
+          )
+        else if (isBookDeepInsight)
+          Expanded(
+            child: Container(
+              padding:
+                  const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+              decoration: BoxDecoration(
+                color: theme.pillBackground,
+                borderRadius: BorderRadius.circular(8),
+                border: Border.all(
+                  color: theme.borderColor.withValues(alpha: 0.8),
+                ),
+              ),
+              child: Row(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  Icon(Icons.lightbulb_rounded,
+                      size: 14, color: theme.accentColor),
+                  const SizedBox(width: 6),
+                  Flexible(
+                    child: Text(
+                      'ATHENA SYNTHESIS · PASSAGE DEEP DIVE',
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: TextStyle(
+                        fontFamily: AppTheme.fontUI,
+                        fontSize: 11,
+                        fontWeight: FontWeight.w600,
+                        letterSpacing: 0.5,
+                        color: theme.accentColor,
+                      ),
+                    ),
+                  ),
+                ],
               ),
             ),
           )

@@ -27,6 +27,7 @@ import 'package:athena/features/reader/widgets/chapters_drawer.dart';
 import 'package:athena/features/reader/widgets/original_page_sheet.dart';
 import 'package:athena/features/ask/widgets/ask_sheet.dart';
 import 'package:athena/features/saved/screens/saved_screen.dart';
+import 'package:athena/services/ingestion_job_coordinator.dart';
 
 /// Provider for loading ReaderData for a given documentId.
 final readerDataProvider =
@@ -42,7 +43,7 @@ final readerDataProvider =
 /// 1) ReaderTopBar (56px fixed)
 /// 2) Expanded Viewport (ReaderFeedView or ReaderFlowView)
 /// 3) ReaderBottomBar (60px fixed)
-enum CardSlotStatus { absent, inFlight, ready, failedCooldown }
+enum CardSlotStatus { absent, inFlight, ready, failedCooldown, skipped }
 
 class CardSlotState {
   final CardSlotStatus status;
@@ -51,6 +52,7 @@ class CardSlotState {
 
   bool get isInFlight => status == CardSlotStatus.inFlight;
   bool get isReady => status == CardSlotStatus.ready;
+  bool get isSkipped => status == CardSlotStatus.skipped;
   bool get isInCooldown =>
       status == CardSlotStatus.failedCooldown &&
       cooldownUntil != null &&
@@ -94,6 +96,7 @@ class _ReaderScreenState extends ConsumerState<ReaderScreen>
   final Map<String, String> _chunkNotes = {};
   final Map<String, ReaderItem> _chunksById = {};
   Timer? _flowSaveDebounceTimer;
+  Timer? _partialSyncTimer;
   List<ReaderItem> _currentFeed = const [];
   List<ReaderItem> _cachedFeedItems = const [];
   ReaderData? _lastReaderData;
@@ -221,6 +224,8 @@ class _ReaderScreenState extends ConsumerState<ReaderScreen>
                 });
               }
             }
+          } else {
+            _cardSlotStates[chunkSeq] = const CardSlotState(CardSlotStatus.skipped);
           }
         } catch (e) {
           _cardSlotStates[chunkSeq] = CardSlotState(
@@ -242,7 +247,7 @@ class _ReaderScreenState extends ConsumerState<ReaderScreen>
     if (_cardsByChunkSeq.containsKey(seq)) return false;
     final state = _cardSlotStates[seq];
     if (state == null) return true;
-    if (state.isInFlight || state.isReady || state.isInCooldown) return false;
+    if (state.isInFlight || state.isReady || state.isSkipped || state.isInCooldown) return false;
     return true;
   }
 
@@ -336,6 +341,8 @@ class _ReaderScreenState extends ConsumerState<ReaderScreen>
             });
           }
         }
+      } else {
+        _cardSlotStates[seq] = const CardSlotState(CardSlotStatus.skipped);
       }
     } catch (e) {
       _cardSlotStates[seq] = CardSlotState(
@@ -348,8 +355,90 @@ class _ReaderScreenState extends ConsumerState<ReaderScreen>
     }
   }
 
+  void _startPartialSyncTimer() {
+    _partialSyncTimer?.cancel();
+    _partialSyncTimer = Timer.periodic(const Duration(seconds: 2), (_) {
+      _syncPartialIngestion();
+    });
+  }
+
+  Future<void> _syncPartialIngestion() async {
+    if (!mounted) return;
+    try {
+      final docMap = await LocalDatabase.instance.getDocument(widget.documentId);
+      if (docMap == null) return;
+      final status = docMap['status']?.toString() ?? 'ready';
+      final processedPages = (docMap['processed_pages'] as num?)?.toInt() ??
+          (docMap['processed_page'] as num?)?.toInt() ??
+          _lastReaderData?.processedPages;
+      final pageCount = (docMap['page_count'] as num?)?.toInt() ?? _lastReaderData?.pageCount ?? 0;
+
+      int maxLoadedSeq = 0;
+      if (_lastReaderData != null) {
+        for (final item in _lastReaderData!.items) {
+          if (item.isReadingChunk && item.sequence != null && item.sequence! > maxLoadedSeq) {
+            maxLoadedSeq = item.sequence!;
+          }
+        }
+      }
+
+      final newChunkMaps = await LocalDatabase.instance.getChunksAfterSequence(widget.documentId, maxLoadedSeq);
+      final newItems = newChunkMaps.map((m) => ReaderItem.fromJson({
+        ...m,
+        'type': 'reading_chunk',
+        'text': m['raw_text'],
+      })).toList();
+
+      final statusChanged = status != _lastReaderData?.status;
+      final pagesChanged = processedPages != _lastReaderData?.processedPages;
+
+      if (newItems.isNotEmpty || statusChanged || pagesChanged) {
+        if (!mounted) return;
+
+        final updatedItems = [
+          ...?_lastReaderData?.items,
+          ...newItems,
+        ];
+
+        final updatedData = (_lastReaderData ?? ReaderData(
+          docId: widget.documentId,
+          title: docMap['title']?.toString() ?? '',
+          pageCount: pageCount,
+          integrityVerified: false,
+          chunkCount: updatedItems.length,
+          items: updatedItems,
+        )).copyWith(
+          status: status,
+          processedPages: processedPages,
+          pageCount: pageCount,
+          items: updatedItems,
+          chunkCount: updatedItems.length,
+        );
+
+        setState(() {
+          _lastReaderData = updatedData;
+          _recomputeCachedFeed();
+        });
+      }
+
+      if (status == 'ready' || status == 'failed' || status == 'unsupported') {
+        _partialSyncTimer?.cancel();
+        _partialSyncTimer = null;
+      }
+    } catch (e) {
+      debugPrint('[Athena Partial Sync Notice] $e');
+    }
+  }
+
   void _syncData(ReaderData data) {
     _lastReaderData = data;
+
+    if (data.status == 'partially_readable' ||
+        data.status == 'processing' ||
+        data.status == 'paused' ||
+        data.status == 'interrupted') {
+      _startPartialSyncTimer();
+    }
 
     if (data.chunkEditsMap.isNotEmpty) {
       for (final entry in data.chunkEditsMap.entries) {
@@ -488,6 +577,7 @@ class _ReaderScreenState extends ConsumerState<ReaderScreen>
   void dispose() {
     WidgetsBinding.instance.removeObserver(this);
     _flowSaveDebounceTimer?.cancel();
+    _partialSyncTimer?.cancel();
     _flowPositionsListener.itemPositions
         .removeListener(_onFlowPositionsChanged);
     _governor.dispose();
@@ -774,6 +864,7 @@ class _ReaderScreenState extends ConsumerState<ReaderScreen>
             if (_lastReaderData == null) {
               _syncData(data);
             }
+            final currentData = _lastReaderData ?? data;
             final feedItems = _cachedFeedItems;
             if (feedItems.isEmpty) {
               return Center(
@@ -957,39 +1048,7 @@ class _ReaderScreenState extends ConsumerState<ReaderScreen>
                                   onAskAthenaForCard: (card) => _openAsk(card),
                                 ),
                         ),
-                        if (data.status == 'partially_readable')
-                          Container(
-                            width: double.infinity,
-                            padding: const EdgeInsets.symmetric(vertical: 8, horizontal: 16),
-                            decoration: BoxDecoration(
-                              color: theme.innerCardColor,
-                              border: Border(
-                                top: BorderSide(color: theme.borderColor, width: 0.8),
-                              ),
-                            ),
-                            child: Row(
-                              mainAxisAlignment: MainAxisAlignment.center,
-                              children: [
-                                SizedBox(
-                                  width: 12,
-                                  height: 12,
-                                  child: CircularProgressIndicator(
-                                    strokeWidth: 1.5,
-                                    color: theme.accentColor,
-                                  ),
-                                ),
-                                const SizedBox(width: 8),
-                                Text(
-                                  'Still preparing pages ${data.processedPages ?? 0}/${data.pageCount}...',
-                                  style: TextStyle(
-                                    fontFamily: AppTheme.fontMono,
-                                    fontSize: 11,
-                                    color: theme.textMutedColor,
-                                  ),
-                                ),
-                              ],
-                            ),
-                          ),
+                        _buildPartialProgressBanner(currentData, theme),
                       ],
                     ),
                   ),
@@ -1023,6 +1082,97 @@ class _ReaderScreenState extends ConsumerState<ReaderScreen>
     );
   }
 
+
+  Widget _buildPartialProgressBanner(ReaderData data, ReaderThemeConfig theme) {
+    final status = data.status;
+    final isPartial = status == 'partially_readable' || status == 'processing';
+    final isPaused = status == 'paused' || status == 'interrupted';
+
+    if (!isPartial && !isPaused) return const SizedBox.shrink();
+
+    final processed = data.processedPages ?? 0;
+    final total = data.pageCount;
+
+    return Container(
+      width: double.infinity,
+      padding: const EdgeInsets.symmetric(vertical: 8, horizontal: 16),
+      decoration: BoxDecoration(
+        color: theme.innerCardColor,
+        border: Border(
+          top: BorderSide(color: theme.borderColor, width: 0.8),
+        ),
+      ),
+      child: Row(
+        mainAxisAlignment: MainAxisAlignment.center,
+        children: [
+          if (isPartial) ...[
+            SizedBox(
+              width: 12,
+              height: 12,
+              child: CircularProgressIndicator(
+                strokeWidth: 1.5,
+                color: theme.accentColor,
+              ),
+            ),
+            const SizedBox(width: 8),
+            Text(
+              'Still preparing pages $processed/$total...',
+              style: TextStyle(
+                fontFamily: AppTheme.fontMono,
+                fontSize: 11,
+                color: theme.textMutedColor,
+              ),
+            ),
+          ] else if (isPaused) ...[
+            Icon(Icons.pause_circle_outline_rounded,
+                size: 14, color: theme.textMutedColor),
+            const SizedBox(width: 8),
+            Text(
+              'Paused at page $processed/$total',
+              style: TextStyle(
+                fontFamily: AppTheme.fontMono,
+                fontSize: 11,
+                color: theme.textMutedColor,
+              ),
+            ),
+            const SizedBox(width: 12),
+            InkWell(
+              onTap: () {
+                HapticFeedback.selectionClick();
+                IngestionJobCoordinator.instance.startOrResume(widget.documentId);
+                _startPartialSyncTimer();
+              },
+              borderRadius: BorderRadius.circular(4),
+              child: Container(
+                padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
+                decoration: BoxDecoration(
+                  color: theme.accentColor.withValues(alpha: 0.15),
+                  borderRadius: BorderRadius.circular(4),
+                  border: Border.all(color: theme.accentColor, width: 0.8),
+                ),
+                child: Row(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    Icon(Icons.play_arrow_rounded, size: 12, color: theme.accentColor),
+                    const SizedBox(width: 3),
+                    Text(
+                      'Resume',
+                      style: TextStyle(
+                        fontFamily: AppTheme.fontMono,
+                        fontSize: 10.5,
+                        fontWeight: FontWeight.w700,
+                        color: theme.accentColor,
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            ),
+          ],
+        ],
+      ),
+    );
+  }
 
   void _showOriginalPage(ReaderItem chunk) {
     int page = 1;

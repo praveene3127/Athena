@@ -170,6 +170,25 @@ SanitizationResult sanitizeProseSpacingWithAudit(String text) {
   var result = normalizeUnicodeArtifacts(text);
   final repairs = <SpacingRepair>[];
 
+  // 0. Letter-spaced title normalizer: collapses >= 4 single uppercase letters separated by single spaces
+  // e.g. Z A R A T H U S T R A -> ZARATHUSTRA, C O N T E N T S -> CONTENTS
+  result = result.replaceAllMapped(
+    RegExp(r'\b[A-Z](?:\s+[A-Z]){3,}\b'),
+    (m) {
+      final orig = m.group(0)!;
+      final collapsed = orig.replaceAll(RegExp(r'\s+'), '');
+      repairs.add(SpacingRepair(
+        startOffset: m.start,
+        endOffset: m.end,
+        originalText: orig,
+        repairedText: collapsed,
+        reason: 'letter_spaced_title',
+        confidence: 0.98,
+      ));
+      return collapsed;
+    },
+  );
+
   // 1. Conditional punctuation spacing (protecting abbreviations, numbers, and URLs)
   result = _spaceConditionalPunctuationWithAudit(result, repairs);
   result = _applyEllipsisFixesWithAudit(result, repairs);
@@ -453,8 +472,12 @@ String _segmentFusedWordWithAudit(String rawWord, List<SpacingRepair> repairs) {
     return safeSplit;
   }
 
+  final bool isAllCapsToken = core.length >= 12 &&
+      core == core.toUpperCase() &&
+      core != core.toLowerCase();
+
   // SHORT TOKEN: Don't attempt to break short tokens
-  if (end - start < 15) return rawWord;
+  if (end - start < 15 && !isAllCapsToken) return rawWord;
 
   // PROTECT: Internal hyphens/slashes
   if (core.contains('-') || core.contains('/')) return rawWord;
@@ -496,7 +519,7 @@ String _segmentFusedWordWithAudit(String rawWord, List<SpacingRepair> repairs) {
     final sourceIsAllCaps = sourceSegment.isNotEmpty &&
         sourceSegment == sourceSegment.toUpperCase() &&
         sourceSegment != sourceSegment.toLowerCase();
-    if (sourceIsAllCaps) {
+    if (isAllCapsToken || sourceIsAllCaps) {
       seg = seg.toUpperCase();
     } else if ((i == 0 && isFirstUpper || sourceStartsUpper) && seg.isNotEmpty) {
       seg = seg[0].toUpperCase() + seg.substring(1);
@@ -630,6 +653,20 @@ String safeSplitFusedWord(String rawWord) {
       if (tailSegments != null && tailSegments.isNotEmpty) {
         final head = core.substring(0, i);
         return '$prefixPunct$head ${tailSegments.join(' ')}$suffixPunct';
+      }
+    }
+  }
+
+  // 3. ALL-CAPS fused tokens >= 12 chars: e.g. "NOTESOFTHESEMINAR" -> "NOTES OF THE SEMINAR"
+  if (core.length >= 12 &&
+      core == core.toUpperCase() &&
+      core != core.toLowerCase()) {
+    final segments = _wordBreakDP(lower);
+    if (segments != null && segments.length > 1) {
+      final allInDict = segments.every((s) => _fusedDictWords.contains(s));
+      if (allInDict) {
+        final upperWords = segments.map((s) => s.toUpperCase()).toList();
+        return '$prefixPunct${upperWords.join(' ')}$suffixPunct';
       }
     }
   }
@@ -792,6 +829,25 @@ const Set<String> _singleDictionaryWords = {
 final Set<String> _fusedDictWords = <String>{
   ..._scientificCompounds,
   ..._singleDictionaryWords,
+  'seminar',
+  'seminars',
+  'lecture',
+  'lectures',
+  'volume',
+  'volumes',
+  'introduction',
+  'acknowledgment',
+  'acknowledgments',
+  'abbreviation',
+  'abbreviations',
+  'bibliographic',
+  'bollingen',
+  'series',
+  'edition',
+  'university',
+  'press',
+  'chapter',
+  'chapters',
   'a',
   'about',
   'above',

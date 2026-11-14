@@ -4,6 +4,7 @@ import 'package:athena/core/config/config.dart';
 import 'package:athena/core/theme/theme.dart';
 import 'package:athena/core/theme/reader_theme.dart';
 import 'package:athena/models/document.dart';
+import 'package:athena/services/local_database.dart';
 
 /// L7 Modular Widget: Chapters and Outline Drawer.
 ///
@@ -42,11 +43,26 @@ class _ChaptersDrawerState extends State<ChaptersDrawer> {
   }
 
   Future<void> _loadChapters() async {
+    if (widget.documentId == null) return;
+    setState(() => _loading = true);
+
+    try {
+      final localChapters =
+          await LocalDatabase.instance.getDocumentChapters(widget.documentId!);
+      if (mounted && localChapters.isNotEmpty) {
+        setState(() {
+          _chapters = localChapters;
+          _loading = false;
+        });
+        return;
+      }
+    } catch (e) {
+      debugPrint('[Athena ChaptersDrawer] Error loading local chapters: $e');
+    }
+
     if (widget.apiClient != null &&
-        widget.documentId != null &&
         !AppConfig.isStandaloneMobile &&
         AppConfig.apiBaseUrl.isNotEmpty) {
-      setState(() => _loading = true);
       try {
         final serverChapters =
             await widget.apiClient!.getChapters(widget.documentId!);
@@ -60,8 +76,8 @@ class _ChaptersDrawerState extends State<ChaptersDrawer> {
       } catch (e) {
         debugPrint('[Athena ChaptersDrawer] Error loading server chapters: $e');
       }
-      if (mounted) setState(() => _loading = false);
     }
+    if (mounted) setState(() => _loading = false);
   }
 
   @override
@@ -73,22 +89,33 @@ class _ChaptersDrawerState extends State<ChaptersDrawer> {
       for (final ch in _chapters) {
         final title = ch['title']?.toString() ?? 'Chapter';
         if (title.toLowerCase() == 'chapter passage') continue;
-        final seq = (ch['chunk_sequence'] as num?)?.toInt() ?? 1;
+        final seq = (ch['chunk_sequence'] ?? ch['start_chunk_index']) as num?;
         final level = (ch['level'] as num?)?.toInt() ?? 1;
-        final page = ch['page']?.toString() ??
-            (ch['page_reference']?.toString() ?? '');
+        final rawPage = ch['raw_page_label']?.toString() ??
+            ch['page']?.toString() ??
+            ch['page_reference']?.toString() ??
+            '';
+        final isRoman = ch['is_roman'] == 1 || ch['is_roman'] == true;
 
-        int targetIdx = widget.feedItems.indexWhere(
-            (it) => it.isReadingChunk && (it.sequence ?? 0) >= seq);
+        int targetIdx = -1;
+        if (seq != null) {
+          final targetSeq = seq.toInt();
+          targetIdx = widget.feedItems.indexWhere(
+              (it) => it.isReadingChunk && (it.sequence ?? 0) >= targetSeq);
+        }
         if (targetIdx < 0) targetIdx = 0;
+
+        String pageLabel = '';
+        if (rawPage.isNotEmpty) {
+          pageLabel = isRoman ? rawPage.toLowerCase() : 'p. $rawPage';
+        }
 
         displayedSections.add({
           'index': targetIdx,
           'title': title,
           'level': level,
-          'page': page.isNotEmpty
-              ? (page.startsWith('Page') ? page : 'Page $page')
-              : '',
+          'page': pageLabel,
+          'is_roman': isRoman,
         });
       }
     } else {
@@ -173,8 +200,13 @@ class _ChaptersDrawerState extends State<ChaptersDrawer> {
                         final targetIndex = s['index'] as int;
                         final level = (s['level'] as int?) ?? 1;
                         final indent = (level - 1) * 14.0;
+                        final hasRoman = displayedSections.any((x) => x['is_roman'] == true);
+                        final isFirstRoman = hasRoman && idx == 0 && (s['is_roman'] == true);
+                        final isFirstBody = hasRoman &&
+                            (s['is_roman'] != true) &&
+                            (idx == 0 || displayedSections[idx - 1]['is_roman'] == true);
 
-                        return Padding(
+                        final tile = Padding(
                           padding: EdgeInsets.only(left: indent),
                           child: ListTile(
                             title: Text(
@@ -204,6 +236,32 @@ class _ChaptersDrawerState extends State<ChaptersDrawer> {
                             },
                           ),
                         );
+
+                        if (isFirstRoman || isFirstBody) {
+                          final label = isFirstRoman ? 'FRONT MATTER' : 'CHAPTERS / SEMINARS';
+                          return Column(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            mainAxisSize: MainAxisSize.min,
+                            children: [
+                              Padding(
+                                padding: const EdgeInsets.fromLTRB(20, 12, 20, 4),
+                                child: Text(
+                                  label,
+                                  style: TextStyle(
+                                    fontFamily: AppTheme.fontMono,
+                                    fontSize: 9.5,
+                                    fontWeight: FontWeight.w700,
+                                    letterSpacing: 0.8,
+                                    color: theme.accentColor,
+                                  ),
+                                ),
+                              ),
+                              tile,
+                            ],
+                          );
+                        }
+
+                        return tile;
                       },
                     ),
             ),
