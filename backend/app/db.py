@@ -43,6 +43,10 @@ def _migrate_columns():
                 conn.execute(text("ALTER TABLE documents ADD COLUMN repairs_count INTEGER DEFAULT 0"))
             if "processed_page" not in doc_cols:
                 conn.execute(text("ALTER TABLE documents ADD COLUMN processed_page INTEGER DEFAULT 0"))
+            if "last_checkpoint_page" not in doc_cols:
+                conn.execute(text("ALTER TABLE documents ADD COLUMN last_checkpoint_page INTEGER DEFAULT 0"))
+            if "force_accept" not in doc_cols:
+                conn.execute(text("ALTER TABLE documents ADD COLUMN force_accept INTEGER DEFAULT 0"))
 
         # Check reading_chunks columns
         rc_cols = {r[1] for r in conn.execute(text("PRAGMA table_info(reading_chunks)")).fetchall()}
@@ -51,6 +55,14 @@ def _migrate_columns():
                 conn.execute(text("ALTER TABLE reading_chunks ADD COLUMN boundary_method TEXT DEFAULT 'paragraph'"))
             if "canonical_sha256" not in rc_cols:
                 conn.execute(text("ALTER TABLE reading_chunks ADD COLUMN canonical_sha256 TEXT DEFAULT NULL"))
+            if "section_role" not in rc_cols:
+                conn.execute(text("ALTER TABLE reading_chunks ADD COLUMN section_role TEXT DEFAULT 'chapter'"))
+            if "page_start" not in rc_cols:
+                conn.execute(text("ALTER TABLE reading_chunks ADD COLUMN page_start INTEGER DEFAULT 1"))
+            if "page_end" not in rc_cols:
+                conn.execute(text("ALTER TABLE reading_chunks ADD COLUMN page_end INTEGER DEFAULT 1"))
+            if "simhash_low" not in rc_cols:
+                conn.execute(text("ALTER TABLE reading_chunks ADD COLUMN simhash_low INTEGER DEFAULT 0"))
 
         # Check context_cards columns
         cc_cols = {r[1] for r in conn.execute(text("PRAGMA table_info(context_cards)")).fetchall()}
@@ -70,12 +82,20 @@ def _migrate_columns():
             if "canonical_sha256" not in cc_cols:
                 conn.execute(text("ALTER TABLE context_cards ADD COLUMN canonical_sha256 TEXT DEFAULT NULL"))
 
+        # Enforce saved ⊕ dismissed mutual exclusivity invariant (B02)
+        try:
+            conn.execute(text("UPDATE context_cards SET saved = 0 WHERE dismissed = 1"))
+        except Exception:
+            pass
+
 
 def _ensure_indexes() -> None:
     """Adds missing performance indexes via CREATE INDEX IF NOT EXISTS (strictly no ALTER TABLE)."""
     from sqlalchemy import text
     with engine.begin() as conn:
         conn.execute(text("CREATE INDEX IF NOT EXISTS idx_chunks_doc_seq ON reading_chunks(document_id, sequence)"))
+        conn.execute(text("CREATE INDEX IF NOT EXISTS idx_chunks_role ON reading_chunks(section_role)"))
+        conn.execute(text("CREATE INDEX IF NOT EXISTS idx_chunks_page_start ON reading_chunks(page_start)"))
         conn.execute(text("CREATE INDEX IF NOT EXISTS idx_cards_doc_chunk ON context_cards(document_id, source_chunk_id)"))
 
 

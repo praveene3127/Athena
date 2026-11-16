@@ -81,6 +81,7 @@ async def require_lan_pairing_token(request: Request, call_next):
             token = (
                 request.headers.get("X-Athena-Pairing-Token", "").strip()
                 or request.cookies.get("athena_session_token", "").strip()
+                or request.query_params.get("token", "").strip()
             )
             import secrets
             if not token or not secrets.compare_digest(token, pairing_token):
@@ -211,6 +212,7 @@ def get_root():
 def get_health():
     """Liveness & readiness check; verifies SQLite reachability."""
     from app.services.edge.novelty import embedding_readiness
+    from app.config import is_llm_configured
     db_status = "ok"
     try:
         from app.db import engine
@@ -223,13 +225,18 @@ def get_health():
 
     model_status = embedding_readiness()
 
+    try:
+        import athena_rust_core
+        has_rust = True
+    except ImportError:
+        has_rust = False
+
     return {
         "status": "ok" if db_status == "ok" else "degraded",
         "database": db_status,
         "model_status": model_status,
-        "llm_configured": any(os.environ.get(name, "").strip() for name in (
-            "LLM_API_KEY", "GEMINI_API_KEY_PRIMARY", "GEMINI_API_KEY_SECONDARY"
-        )),
+        "llm_configured": is_llm_configured(),
+        "rust_core": {"available": has_rust},
     }
 
 

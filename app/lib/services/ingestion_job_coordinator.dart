@@ -254,6 +254,7 @@ class IngestionJobCoordinator {
         initialCarryOver: carryOverText,
         savedProfileJson: profileJson,
         onProgress: (p, s) {
+          if (isJobCancelled(docId)) return;
           onProgress?.call(p, s);
         },
         onBatch: (batchChunks, processedPages, totalPagesCount, isFinalBatch, {
@@ -262,6 +263,7 @@ class IngestionJobCoordinator {
           String? carryOverText,
           String? profileJson,
         }) async {
+          if (isJobCancelled(docId)) return;
           await LocalDatabase.instance.insertChunksBatch(
             batchChunks,
             documentId: docId,
@@ -272,6 +274,8 @@ class IngestionJobCoordinator {
             profileJson: profileJson,
             isFinalBatch: isFinalBatch,
           );
+
+          if (isJobCancelled(docId)) return;
 
           final denom = totalPagesCount <= 0 ? 1 : totalPagesCount;
           final pct = (5 + ((processedPages / denom) * 90)).round().clamp(5, 95);
@@ -285,6 +289,8 @@ class IngestionJobCoordinator {
             percent: pct,
           );
 
+          if (isJobCancelled(docId)) return;
+
           await LocalDatabase.instance.updateDocumentProgress(
             docId,
             status: processedPages >= 16 ? 'partially_readable' : 'processing',
@@ -296,6 +302,11 @@ class IngestionJobCoordinator {
           );
         },
       );
+
+      if (isJobCancelled(docId)) {
+        debugPrint('[Athena Coordinator] Ingestion cancelled, aborting finalization for $docId');
+        return docId;
+      }
 
       // Finalize document upon completion
       final finalPageCount =

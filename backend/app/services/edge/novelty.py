@@ -352,3 +352,44 @@ def is_semantic_duplicate(
     except Exception as e:
         logger.debug("FastEmbed error during is_semantic_duplicate: %s", e)
         return False
+
+
+def compute_simhash64_pure_python(text: str) -> int:
+    """Computes a 64-bit SimHash locality-sensitive fingerprint using FNV-1a."""
+    if not text or not text.strip():
+        return 0
+    v = [0] * 64
+    for word in text.split():
+        clean = "".join(c for c in word if c.isalnum()).lower()
+        if len(clean) < 3:
+            continue
+        # 64-bit FNV-1a hash matching Rust compute_simhash64
+        h = 0xcbf29ce484222325
+        for b in clean.encode("utf-8"):
+            h ^= b
+            h = (h * 0x100000001b3) & 0xFFFFFFFFFFFFFFFF
+        for i in range(64):
+            if (h >> i) & 1:
+                v[i] += 1
+            else:
+                v[i] -= 1
+    fingerprint = 0
+    for i in range(64):
+        if v[i] > 0:
+            fingerprint |= (1 << i)
+    return fingerprint
+
+
+def compute_simhash64(text: str) -> int:
+    """Computes 64-bit SimHash with Rust acceleration and pure-Python fallback."""
+    try:
+        from athena_rust_core import rust_simhash64
+        return int(rust_simhash64(text))
+    except Exception:
+        return compute_simhash64_pure_python(text)
+
+
+def compute_simhash_low(text: str) -> int:
+    """Returns 32-bit low word of 64-bit SimHash fingerprint."""
+    return compute_simhash64(text) & 0xFFFFFFFF
+

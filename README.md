@@ -11,7 +11,7 @@
   <img src="https://img.shields.io/badge/Rust_Core-PyO3%20%7C%20Rayon-DEA584?logo=rust&logoColor=white" alt="Rust Core" />
   <img src="https://img.shields.io/badge/Zero--JSON-Binary%20Book%20Tape-8B5CF6" alt="Binary Book Tape" />
   <img src="https://img.shields.io/badge/SHA--256-Lossless%20Canonical-10B981" alt="Lossless Canonical" />
-  <img src="https://img.shields.io/badge/Tests-216%20passing-brightgreen" alt="Tests" />
+  <img src="https://img.shields.io/badge/Tests-282%20passing-brightgreen" alt="Tests" />
   <a href="LICENSE"><img src="https://img.shields.io/badge/License-GPLv3-blue.svg" alt="License: GPL v3" /></a>
 </p>
 
@@ -326,7 +326,7 @@ Athena/
 │   │   │   └── settings/                # BYOKSettingsSheet (live model discovery)
 │   │   ├── models/                      # Document, Chunk, and ContextCard schemas
 │   │   └── services/                    # BookRepository, LocalDatabase (SQLite FTS5), RustEngineBridge
-│   ├── test/                            # 24 Flutter unit, widget, and contract conformance test suites
+│   ├── test/                            # 169 Flutter unit, widget, and contract conformance test suites
 │   ├── web/index.html                   # Standalone Web & PWA configuration & meta tags
 │   └── pubspec.yaml                     # Flutter dependencies
 │
@@ -337,6 +337,7 @@ Athena/
 │   │   │   ├── edge/                    # Document Bouncer, Shannon Hygiene & Novelty Gate
 │   │   │   ├── ingestion/               # Lossless chunker, PDF block parsing, repairs, triage
 │   │   │   └── marginalia/              # Academic evidence fetchers, card synthesis & live LLM
+│   │   ├── state/                       # Formal state machine validators (contracts/state-machines.json)
 │   │   ├── db.py                        # SQLModel SQLite database engine
 │   │   ├── models.py                    # Schema definitions (documents, chunks, cards, positions)
 │   │   ├── security.py                  # Fail-closed secret encryption & network security
@@ -344,11 +345,12 @@ Athena/
 │   ├── rust_core/                       # High-performance Rust text processing engine (PyO3)
 │   │   ├── Cargo.toml                   # Rayon, Aho-Corasick, Regex, Serde, SHA-2
 │   │   └── src/                         # chunker.rs, ffi_api.rs, sqlite_store.rs, lib.rs
-│   ├── tests/                           # Backend pytest suite (90 tests)
+│   ├── tests/                           # Backend pytest suite (113 tests)
 │   └── requirements.txt                 # Backend Python production dependencies
 │
-├── contracts/                           # Single canonical cross-language contract
-│   └── athena-contract.json             # Enforced across Python, Dart, Kotlin, and Rust
+├── contracts/                           # Canonical cross-language contracts & state machines
+│   ├── athena-contract.json             # Enforced across Python, Dart, Kotlin, and Rust
+│   └── state-machines.json              # Formal specification of the 10 system state machines
 │
 ├── releases/                            # Distribution release binaries
 │   └── athena-release.apk               # Verified production Android APK
@@ -401,6 +403,7 @@ When running the Companion Engine, the FastAPI server mounts the Flutter Web cli
 | `/api/cards/{id}/dismiss` | `POST` | None | `{"status": "dismissed"}` | Hides an unhelpful card from the active reading feed |
 | `/api/cards/{id}/restore` | `POST` | None | `{"status": "restored"}` | Unhides a previously dismissed card |
 | `/api/saved` | `GET` | None | `{"cards": [...]}` | Retrieves saved marginalia cards and highlights |
+| `/api/saved/clear` | `POST` | None | `{"status": "cleared"}` | Atomically clears all saved cards and highlights |
 | `/api/app-update` | `GET` | `?current_version=1.1.0&platform=android` | `{"update_available": false}` | Checks for client updates |
 | `/api/download/android` | `GET` | None | Streams APK | Downloads latest `Athena-Android.apk` binary |
 
@@ -409,17 +412,20 @@ When running the Companion Engine, the FastAPI server mounts the Flutter Web cli
 ## 9. Development & Verification Workflow
 
 ```bash
-# Backend pytest suite (90 tests)
+# Backend pytest suite (113 tests)
 pytest backend/tests -q
 
 # Flutter static analysis (0 issues)
 cd app && flutter analyze
 
-# Flutter unit & widget test suites (126 tests)
+# Flutter unit & widget test suites (169 tests)
 cd app && flutter test
 
-# Comprehensive 8-Gate Release Verification Suite
+# Comprehensive 9-Gate Release Verification Suite
 python scripts/verify_release.py
+
+# Un-gameable 8-Gate Strict Goal Judge
+python scripts/strict_goal_judge.py
 
 # Build Android production APK
 cd app && flutter build apk --release

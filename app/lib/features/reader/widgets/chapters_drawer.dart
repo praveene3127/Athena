@@ -4,6 +4,7 @@ import 'package:athena/core/config/config.dart';
 import 'package:athena/core/theme/theme.dart';
 import 'package:athena/core/theme/reader_theme.dart';
 import 'package:athena/models/document.dart';
+import 'package:athena/models/section_role.dart';
 import 'package:athena/services/local_database.dart';
 
 /// L7 Modular Widget: Chapters and Outline Drawer.
@@ -85,6 +86,23 @@ class _ChaptersDrawerState extends State<ChaptersDrawer> {
     final theme = widget.theme;
     final List<Map<String, dynamic>> displayedSections = [];
 
+    String computeZone(String roleStr, bool isRoman) {
+      if (isRoman) return 'front';
+      const frontRoles = {
+        'cover', 'titlepage', 'halftitle', 'copyright', 'dedication',
+        'epigraph', 'toc', 'preface', 'foreword', 'introduction', 'prologue'
+      };
+      const backRoles = {
+        'epilogue', 'afterword', 'appendix', 'acknowledgments', 'acknowledgements',
+        'notes', 'endnotes', 'glossary', 'bibliography', 'references',
+        'bookindex', 'index', 'aboutauthor'
+      };
+      final rNorm = roleStr.replaceAll('_', '').toLowerCase().trim();
+      if (frontRoles.contains(rNorm)) return 'front';
+      if (backRoles.contains(rNorm)) return 'back';
+      return 'body';
+    }
+
     if (_chapters.isNotEmpty) {
       for (final ch in _chapters) {
         final title = ch['title']?.toString() ?? 'Chapter';
@@ -96,6 +114,10 @@ class _ChaptersDrawerState extends State<ChaptersDrawer> {
             ch['page_reference']?.toString() ??
             '';
         final isRoman = ch['is_roman'] == 1 || ch['is_roman'] == true;
+        final rawRole = ch['section_role']?.toString() ?? '';
+        final rawZone = ch['zone']?.toString() ?? '';
+        final roleStr = rawRole.isNotEmpty ? rawRole : SectionRole.fromString(title).name;
+        final zone = rawZone.isNotEmpty ? rawZone : computeZone(roleStr, isRoman);
 
         int targetIdx = -1;
         if (seq != null) {
@@ -116,6 +138,8 @@ class _ChaptersDrawerState extends State<ChaptersDrawer> {
           'level': level,
           'page': pageLabel,
           'is_roman': isRoman,
+          'role': roleStr,
+          'zone': zone,
         });
       }
     } else {
@@ -123,6 +147,8 @@ class _ChaptersDrawerState extends State<ChaptersDrawer> {
         final it = widget.feedItems[i];
         if (it.isReadingChunk) {
           final sec = it.sectionTitle?.trim();
+          final roleStr = it.sectionRole ?? (sec != null ? SectionRole.fromString(sec).name : 'chapter');
+          final zone = computeZone(roleStr, false);
           if (sec != null && sec.isNotEmpty && sec.toLowerCase() != 'chapter passage') {
             if (displayedSections.isEmpty ||
                 displayedSections.last['title'] != sec) {
@@ -131,6 +157,8 @@ class _ChaptersDrawerState extends State<ChaptersDrawer> {
                 'title': sec,
                 'level': 1,
                 'page': it.pageReference ?? '',
+                'role': roleStr,
+                'zone': zone,
               });
             }
           }
@@ -200,25 +228,52 @@ class _ChaptersDrawerState extends State<ChaptersDrawer> {
                         final targetIndex = s['index'] as int;
                         final level = (s['level'] as int?) ?? 1;
                         final indent = (level - 1) * 14.0;
-                        final hasRoman = displayedSections.any((x) => x['is_roman'] == true);
-                        final isFirstRoman = hasRoman && idx == 0 && (s['is_roman'] == true);
-                        final isFirstBody = hasRoman &&
-                            (s['is_roman'] != true) &&
-                            (idx == 0 || displayedSections[idx - 1]['is_roman'] == true);
+                        final zone = (s['zone'] as String? ?? 'body').toLowerCase();
+                        final prevZone = idx > 0 ? (displayedSections[idx - 1]['zone'] as String? ?? 'body').toLowerCase() : null;
+                        final isZoneHeader = idx == 0 || zone != prevZone;
+
+                        final roleStr = (s['role'] as String? ?? '').toLowerCase().replaceAll('_', ' ').trim();
+                        final showBadge = roleStr.isNotEmpty && roleStr != 'chapter' && roleStr != 'unknown';
+                        final badgeLabel = roleStr == 'bookindex' ? 'INDEX' : roleStr.toUpperCase();
 
                         final tile = Padding(
                           padding: EdgeInsets.only(left: indent),
                           child: ListTile(
-                            title: Text(
-                              secTitle,
-                              style: TextStyle(
-                                fontFamily: AppTheme.fontUI,
-                                fontSize: level > 1 ? 12.5 : 13.5,
-                                fontWeight: level == 1
-                                    ? FontWeight.w600
-                                    : FontWeight.w500,
-                                color: theme.textColor,
-                              ),
+                            title: Row(
+                              children: [
+                                if (showBadge) ...[
+                                  Container(
+                                    margin: const EdgeInsets.only(right: 8),
+                                    padding: const EdgeInsets.symmetric(horizontal: 5, vertical: 2),
+                                    decoration: BoxDecoration(
+                                      color: theme.accentColor.withValues(alpha: 0.12),
+                                      borderRadius: BorderRadius.circular(4),
+                                    ),
+                                    child: Text(
+                                      badgeLabel,
+                                      style: TextStyle(
+                                        fontSize: 9,
+                                        fontWeight: FontWeight.w700,
+                                        letterSpacing: 0.5,
+                                        color: theme.accentColor,
+                                      ),
+                                    ),
+                                  ),
+                                ],
+                                Expanded(
+                                  child: Text(
+                                    secTitle,
+                                    style: TextStyle(
+                                      fontFamily: AppTheme.fontUI,
+                                      fontSize: level > 1 ? 12.5 : 13.5,
+                                      fontWeight: level == 1
+                                          ? FontWeight.w600
+                                          : FontWeight.w500,
+                                      color: theme.textColor,
+                                    ),
+                                  ),
+                                ),
+                              ],
                             ),
                             trailing: page.isNotEmpty
                                 ? Text(
@@ -237,14 +292,19 @@ class _ChaptersDrawerState extends State<ChaptersDrawer> {
                           ),
                         );
 
-                        if (isFirstRoman || isFirstBody) {
-                          final label = isFirstRoman ? 'FRONT MATTER' : 'CHAPTERS / SEMINARS';
+                        if (isZoneHeader) {
+                          String label = 'CHAPTERS';
+                          if (zone == 'front') {
+                            label = 'FRONT MATTER';
+                          } else if (zone == 'back') {
+                            label = 'BACK MATTER & NOTES';
+                          }
                           return Column(
                             crossAxisAlignment: CrossAxisAlignment.start,
                             mainAxisSize: MainAxisSize.min,
                             children: [
                               Padding(
-                                padding: const EdgeInsets.fromLTRB(20, 12, 20, 4),
+                                padding: const EdgeInsets.fromLTRB(20, 14, 20, 4),
                                 child: Text(
                                   label,
                                   style: TextStyle(

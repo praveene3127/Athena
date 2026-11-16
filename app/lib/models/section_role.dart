@@ -104,22 +104,76 @@ enum SectionRole {
     for (final role in SectionRole.values) {
       if (role.name.toLowerCase() == clean) return role;
     }
-    // Heuristics for common variations
-    if (clean.contains('contents') || clean.contains('toc')) return SectionRole.toc;
-    if (clean.contains('preface')) return SectionRole.preface;
-    if (clean.contains('foreword')) return SectionRole.foreword;
-    if (clean.contains('intro')) return SectionRole.introduction;
-    if (clean.contains('prologue')) return SectionRole.prologue;
-    if (clean.contains('ack')) return SectionRole.acknowledgments;
-    if (clean.contains('chapter')) return SectionRole.chapter;
-    if (clean.contains('part')) return SectionRole.part;
-    if (clean.contains('epilogue')) return SectionRole.epilogue;
-    if (clean.contains('afterword')) return SectionRole.afterword;
-    if (clean.contains('appendix')) return SectionRole.appendix;
-    if (clean.contains('copyright')) return SectionRole.copyright;
-    if (clean.contains('biblio') || clean.contains('references')) return SectionRole.bibliography;
-    if (clean.contains('index')) return SectionRole.bookIndex;
-    if (clean.contains('notes')) return SectionRole.notes;
+    // Check standard Python snake_case role mappings
+    if (clean == 'index' || clean == 'book_index') return SectionRole.bookIndex;
+    if (clean == 'about_author') return SectionRole.aboutAuthor;
+    if (clean == 'title_page') return SectionRole.titlePage;
+    if (clean == 'half_title') return SectionRole.halfTitle;
+    if (clean == 'list_of_figures') return SectionRole.listOfFigures;
+
+    final words = clean.split(RegExp(r'[^a-z0-9]+')).where((w) => w.isNotEmpty).toList();
+    if (words.isEmpty) return SectionRole.unknown;
+
+    final first = words.first;
+
+    // Whole token or start-of-title matches
+    if (words.any((w) => w.startsWith('acknowledg') || w == 'thanks')) {
+      return SectionRole.acknowledgments;
+    }
+    if (words.any((w) => w == 'introduction' || w == 'intro')) {
+      return SectionRole.introduction;
+    }
+    if (words.any((w) => w == 'preface')) {
+      return SectionRole.preface;
+    }
+    if (words.any((w) => w == 'foreword')) {
+      return SectionRole.foreword;
+    }
+    if (words.any((w) => w == 'prologue')) {
+      return SectionRole.prologue;
+    }
+    if (words.any((w) => w == 'epilogue')) {
+      return SectionRole.epilogue;
+    }
+    if (words.any((w) => w == 'afterword')) {
+      return SectionRole.afterword;
+    }
+    if (words.any((w) => w == 'appendix')) {
+      return SectionRole.appendix;
+    }
+    if (words.any((w) => w == 'copyright')) {
+      return SectionRole.copyright;
+    }
+    if (words.any((w) => w == 'dedication')) {
+      return SectionRole.dedication;
+    }
+    if (words.any((w) => w.startsWith('biblio') || w == 'references')) {
+      return SectionRole.bibliography;
+    }
+    if (words.any((w) => w == 'notes' || w == 'endnotes')) {
+      return SectionRole.notes;
+    }
+    if (words.any((w) => w == 'glossary')) {
+      return SectionRole.glossary;
+    }
+    if (clean.contains('table of contents') || clean == 'contents' || clean == 'toc') {
+      return SectionRole.toc;
+    }
+    if (words.any((w) => w == 'contents' || w == 'toc')) {
+      return SectionRole.toc;
+    }
+    if (words.any((w) => w == 'index' && w != 'index_split')) {
+      return SectionRole.bookIndex;
+    }
+    // Chapter: starts with 'chapter' or 'ch'
+    if (first == 'chapter' || first == 'ch') {
+      return SectionRole.chapter;
+    }
+    // Part: first token equals 'part'
+    if (first == 'part') {
+      return SectionRole.part;
+    }
+
     return SectionRole.unknown;
   }
 }

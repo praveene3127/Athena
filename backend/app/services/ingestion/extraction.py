@@ -409,32 +409,125 @@ def extract_document_content(
         doc.close()
 
 
-def extract_toc_with_chunk_mapping(raw_toc: list, page_to_first_chunk: dict[int, int]) -> list[dict]:
+def extract_toc_with_chunk_mapping(
+    raw_toc: list,
+    page_to_first_chunk: dict[int, int],
+    chunks: Optional[list[dict]] = None,
+) -> list[dict]:
     """
-    Maps PyMuPDF's native TOC [level, title, page_1_based] to exact chunk sequence boundaries.
+    Maps TOC [level, title, page_1_based] to chunk sequence boundaries.
+    Calculates median page offset Delta = median(P_physical_heading - P_printed_toc)
+    from headings found in body text, and prioritizes title-matching for back-matter
+    and overflow sections instead of clamping everything to chunks[-1].
     """
     if not raw_toc:
         return []
+
+    import re
+    import statistics
+    from app.services.ingestion.blocks import detect_section_role_from_title
+
+    def _norm(s: str) -> str:
+        return re.sub(r"[^\w\s]", "", str(s or "")).lower().strip()
+
+    title_to_chunk: dict[str, dict] = {}
+    role_to_chunk: dict[str, dict] = {}
+    if chunks:
+        for cd in chunks:
+            st = cd.get("section_title")
+            if st:
+                nst = _norm(st)
+                if nst and nst not in title_to_chunk:
+                    title_to_chunk[nst] = cd
+            sr = cd.get("section_role")
+            if sr and sr not in role_to_chunk:
+                role_to_chunk[sr] = cd
+
+    # Calculate median page offset Delta = median(P_physical_heading - P_printed_toc)
+    offsets: list[int] = []
+    if chunks:
+        for item in raw_toc:
+            if len(item) < 3:
+                continue
+            _, title, p_printed = item[0], str(item[1]).strip(), int(item[2])
+            norm_t = _norm(title)
+            matched_cd = title_to_chunk.get(norm_t)
+            if not matched_cd:
+                for nst, cd in title_to_chunk.items():
+                    if norm_t and (norm_t in nst or nst in norm_t):
+                        matched_cd = cd
+                        break
+            if matched_cd:
+                p_phys = int(matched_cd.get("page_start", 1))
+                offsets.append(p_phys - p_printed)
+
+    delta = int(statistics.median(offsets)) if offsets else 0
+
+    back_matter_roles = {
+        "notes", "endnotes", "index", "acknowledgments",
+        "acknowledgements", "bibliography", "references", "glossary"
+    }
+
+    max_phys_page = max(page_to_first_chunk.keys()) if page_to_first_chunk else 1
+
     chapters = []
     for item in raw_toc:
         if len(item) < 3:
             continue
-        level, title, page_1_based = item[0], str(item[1]).strip(), item[2]
-        page_0 = max(0, page_1_based - 1)
-        # Find closest chunk index starting on or after this page
-        chunk_idx = page_to_first_chunk.get(page_0)
-        if chunk_idx is None:
-            candidates_after = [p for p in page_to_first_chunk if p >= page_0]
-            if candidates_after:
-                chunk_idx = page_to_first_chunk[min(candidates_after)]
-            else:
-                candidates_before = [p for p in page_to_first_chunk if p < page_0]
-                chunk_idx = page_to_first_chunk[max(candidates_before)] if candidates_before else 1
+        level, title, page_1_based = int(item[0]), str(item[1]).strip(), int(item[2])
+        norm_t = _norm(title)
+        role = detect_section_role_from_title(title)
+
+        matched_cd = None
+        # Match by normalized heading title first if back matter or matching title exists!
+        if role in back_matter_roles or norm_t in title_to_chunk:
+            matched_cd = title_to_chunk.get(norm_t)
+            if not matched_cd:
+                for nst, cd in title_to_chunk.items():
+                    if norm_t and (norm_t in nst or nst in norm_t):
+                        matched_cd = cd
+                        break
+            if not matched_cd and role in role_to_chunk:
+                matched_cd = role_to_chunk[role]
+
+        if matched_cd:
+            chunk_idx = int(matched_cd["sequence"])
+            resolved_page = int(matched_cd.get("page_start", 1))
+        else:
+            resolved_page = page_1_based + delta
+            # Convert to 0-based page for page_to_first_chunk lookup
+            page_0 = max(0, resolved_page - 1)
+            chunk_idx = page_to_first_chunk.get(page_0)
+
+            if chunk_idx is None:
+                if resolved_page > max_phys_page:
+                    # Exceeds available chunks: match by normalized title in reading_chunks first!
+                    for nst, cd in title_to_chunk.items():
+                        if norm_t and (norm_t in nst or nst in norm_t):
+                            matched_cd = cd
+                            break
+                    if matched_cd:
+                        chunk_idx = int(matched_cd["sequence"])
+                        resolved_page = int(matched_cd.get("page_start", 1))
+                    else:
+                        candidates_before = [p for p in page_to_first_chunk if p < page_0]
+                        chunk_idx = page_to_first_chunk[max(candidates_before)] if candidates_before else 1
+                        resolved_page = max(1, page_0 + 1)
+                else:
+                    candidates_after = [p for p in page_to_first_chunk if p >= page_0]
+                    if candidates_after:
+                        target_p = min(candidates_after)
+                        chunk_idx = page_to_first_chunk[target_p]
+                        resolved_page = target_p + 1
+                    else:
+                        candidates_before = [p for p in page_to_first_chunk if p < page_0]
+                        chunk_idx = page_to_first_chunk[max(candidates_before)] if candidates_before else 1
+                        resolved_page = max(1, page_0 + 1)
 
         chapters.append({
             "level": int(level),
             "title": title,
-            "start_page": page_0,
+            "start_page": max(1, resolved_page),
             "start_chunk_index": int(chunk_idx),
         })
     return chapters

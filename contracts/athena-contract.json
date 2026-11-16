@@ -37,6 +37,37 @@
     "card_max_words": 80,
     "status_poll_ms": 1500
   },
+  "schemas": {
+    "Document": [
+      "id",
+      "filename",
+      "title",
+      "status",
+      "stage",
+      "percent",
+      "page_count",
+      "processed_page",
+      "last_checkpoint_page",
+      "integrity_verified",
+      "context_status"
+    ],
+    "ReadingChunk": [
+      "id",
+      "document_id",
+      "sequence",
+      "section_title",
+      "section_role",
+      "page_start",
+      "page_end",
+      "simhash_low",
+      "raw_text",
+      "start_offset",
+      "end_offset",
+      "checksum",
+      "boundary_method",
+      "canonical_sha256"
+    ]
+  },
   "golden_fixture": {
     "sample_text": "Athena provides an immersive feed of books with context marginalia. By decomposing literature into bite-sized, rhythmically balanced passages, reading feels as effortless as scrolling. Each passage is enriched by orthogonally curious facts, historical parallels, and scientific findings that stimulate deeper reflection without interrupting reading momentum.",
     "expected_word_count": 45

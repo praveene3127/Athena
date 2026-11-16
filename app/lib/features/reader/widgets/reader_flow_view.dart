@@ -152,26 +152,90 @@ class ReaderFlowView extends StatelessWidget {
         final item = feedItems[index];
 
         if (item.isReadingChunk) {
-          return Center(
-            child: ChunkWidget(
-              documentId: documentId,
-              chunk: item,
-              fontSize: fontSize,
-              fontFamily: fontFamily,
-              lineHeight: lineHeight,
-              themeId: themeId,
-              isFeedMode: false,
-              bionicFocusEnabled: bionicFocusEnabled,
-              layoutWarning: layoutWarning,
-              initialEditedText: chunkEdits?[item.id],
-              initialUserNote: chunkNotes?[item.id],
-              onEditSaved: onEditSaved,
-              onViewOriginalPage: () => onViewOriginalPage(item),
-              onAsk: () => onAsk(item),
-              onSaveQuote: ([q]) => onSaveQuote(item, q),
-              onDeepDive: onDeepDive != null ? () => onDeepDive!(item) : null,
-            ),
+          // Check if section title changed from previous reading chunk (B3.1)
+          bool showSectionDivider = false;
+          final currentTitle = item.sectionTitle?.trim();
+          if (currentTitle != null && currentTitle.isNotEmpty) {
+            String? prevTitle;
+            for (int p = index - 1; p >= 0; p--) {
+              if (feedItems[p].isReadingChunk) {
+                prevTitle = feedItems[p].sectionTitle?.trim();
+                break;
+              }
+            }
+            if (prevTitle != currentTitle) {
+              showSectionDivider = true;
+            }
+          }
+
+          final chunkWidget = ChunkWidget(
+            documentId: documentId,
+            chunk: item,
+            fontSize: fontSize,
+            fontFamily: fontFamily,
+            lineHeight: lineHeight,
+            themeId: themeId,
+            isFeedMode: false,
+            bionicFocusEnabled: bionicFocusEnabled,
+            layoutWarning: layoutWarning,
+            initialEditedText: chunkEdits?[item.id],
+            initialUserNote: chunkNotes?[item.id],
+            onEditSaved: onEditSaved,
+            onViewOriginalPage: () => onViewOriginalPage(item),
+            onAsk: () => onAsk(item),
+            onSaveQuote: ([q]) => onSaveQuote(item, q),
+            onDeepDive: onDeepDive != null ? () => onDeepDive!(item) : null,
           );
+
+          if (showSectionDivider && currentTitle != null) {
+            return Center(
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                crossAxisAlignment: CrossAxisAlignment.stretch,
+                children: [
+                  Container(
+                    padding: const EdgeInsets.only(top: 28, bottom: 12, left: 24, right: 24),
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Container(
+                          padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
+                          decoration: BoxDecoration(
+                            color: theme.accentColor.withValues(alpha: 0.12),
+                            borderRadius: BorderRadius.circular(4),
+                          ),
+                          child: Text(
+                            (item.sectionRole ?? 'chapter').toUpperCase(),
+                            style: TextStyle(
+                              fontSize: 10,
+                              letterSpacing: 1.1,
+                              fontWeight: FontWeight.w700,
+                              color: theme.accentColor,
+                            ),
+                          ),
+                        ),
+                        const SizedBox(height: 6),
+                        Text(
+                          currentTitle,
+                          style: TextStyle(
+                            fontFamily: fontFamily,
+                            fontSize: fontSize * 1.25,
+                            fontWeight: FontWeight.bold,
+                            color: theme.textColor,
+                          ),
+                        ),
+                        const SizedBox(height: 8),
+                        Divider(color: theme.borderColor, height: 1),
+                      ],
+                    ),
+                  ),
+                  chunkWidget,
+                ],
+              ),
+            );
+          }
+
+          return Center(child: chunkWidget);
         } else if (item.isContextCard) {
           return Center(
             child: ContextCardWidget(

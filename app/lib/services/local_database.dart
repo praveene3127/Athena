@@ -10,6 +10,7 @@ import 'package:sqflite/sqflite.dart';
 import 'package:athena/services/simhash_service.dart';
 import 'package:athena/services/binary_book_cache.dart';
 import 'package:athena/services/ingestion_job_coordinator.dart';
+import 'package:athena/core/state/machines.dart';
 
 /// App-private SQLite store shared by the foreground UI and background worker.
 /// PDFs stay in the app documents directory; only their private paths are kept
@@ -491,20 +492,6 @@ class LocalDatabase {
     return rows.map((r) => Map<String, dynamic>.from(r)).toList();
   }
 
-  Future<int> recoverStaleProcessingDocuments() async {
-    final db = await database;
-    return await db.update(
-      'documents',
-      {
-        'status': 'failed',
-        'error_code': 'EXTRACTION_INTERRUPTED',
-        'error_message': 'Extraction was interrupted when the app was closed.',
-        'updated_at': DateTime.now().toIso8601String(),
-      },
-      where: "status = 'processing' OR status = 'queued'",
-    );
-  }
-
   Future<Map<String, dynamic>?> getDocumentStatus(String id) async {
     final doc = await getDocument(id);
     if (doc == null) return null;
@@ -960,12 +947,18 @@ class LocalDatabase {
       'updated_at': DateTime.now().toIso8601String(),
     };
 
-    if (currentStatus == 'ready') {
-      // Do not allow downgrade of status or percent once document is ready
-      if (status != null && status != 'processing' && status != 'queued') {
-        updates['status'] = status;
-      }
-      if (percent != null && percent >= currentPercent) {
+    if (currentStatus != null && status != null) {
+      final nextStatus = applyTransition(
+        'DocumentLifecycle',
+        id,
+        currentStatus,
+        status,
+        reason: 'stage=$stage percent=$percent',
+      );
+      updates['status'] = nextStatus;
+      if (currentStatus == 'ready' && percent != null && percent >= currentPercent) {
+        updates['percent'] = percent;
+      } else if (currentStatus != 'ready' && percent != null) {
         updates['percent'] = percent;
       }
     } else {
@@ -1533,12 +1526,151 @@ class LocalDatabase {
         (r['chunk_id'] as String): Map<String, dynamic>.from(r),
     };
 
+    // Build document structure map
+    final sections = <Map<String, dynamic>>[];
+    final zones = <Map<String, dynamic>>[];
+    if (chunks.isNotEmpty) {
+      String getMacroZone(String role) {
+        const frontRoles = {
+          'cover', 'title_page', 'half_title', 'copyright', 'dedication',
+          'epigraph', 'toc', 'preface', 'foreword', 'introduction', 'prologue'
+        };
+        const backRoles = {
+          'epilogue', 'afterword', 'appendix', 'acknowledgments', 'acknowledgements',
+          'notes', 'endnotes', 'glossary', 'bibliography', 'references',
+          'index', 'book_index', 'about_author'
+        };
+        final r = role.toLowerCase().trim();
+        if (frontRoles.contains(r)) return 'front';
+        if (backRoles.contains(r)) return 'back';
+        return 'body';
+      }
+
+      bool isRoleInFeed(String role) {
+        const outOfFeedRoles = {
+          'acknowledgments', 'acknowledgements', 'dedication', 'notes',
+          'endnotes', 'bibliography', 'references', 'index', 'book_index',
+          'copyright', 'toc', 'title_page', 'cover'
+        };
+        final r = role.toLowerCase().trim();
+        return !outOfFeedRoles.contains(r);
+      }
+
+      String? currRole;
+      String? currTitle;
+      String? currZone;
+      int currFromSeq = 1;
+      int currToSeq = 1;
+
+      for (var i = 0; i < chunks.length; i++) {
+        final c = chunks[i];
+        final role = (c['section_role']?.toString() ?? 'chapter').toLowerCase();
+        final title = c['section_title']?.toString() ?? (role == 'chapter' ? 'Chapter' : role);
+        final zone = getMacroZone(role);
+        final seq = (c['sequence'] as num?)?.toInt() ?? (i + 1);
+
+        if (currRole == null) {
+          currRole = role;
+          currTitle = title;
+          currZone = zone;
+          currFromSeq = seq;
+          currToSeq = seq;
+        } else if (currRole == role && currTitle == title && currZone == zone) {
+          currToSeq = seq;
+        } else {
+          sections.add({
+            'role': currRole,
+            'zone': currZone,
+            'title': currTitle,
+            'from_seq': currFromSeq,
+            'to_seq': currToSeq,
+            'in_feed': isRoleInFeed(currRole),
+          });
+          currRole = role;
+          currTitle = title;
+          currZone = zone;
+          currFromSeq = seq;
+          currToSeq = seq;
+        }
+      }
+      if (currRole != null) {
+        sections.add({
+          'role': currRole,
+          'zone': currZone,
+          'title': currTitle,
+          'from_seq': currFromSeq,
+          'to_seq': currToSeq,
+          'in_feed': isRoleInFeed(currRole),
+        });
+      }
+
+      String? activeZone;
+      int zoneFrom = 1;
+      int zoneTo = 1;
+      for (final s in sections) {
+        final z = s['zone'] as String;
+        final f = s['from_seq'] as int;
+        final t = s['to_seq'] as int;
+        if (activeZone == null) {
+          activeZone = z;
+          zoneFrom = f;
+          zoneTo = t;
+        } else if (activeZone == z) {
+          zoneTo = t;
+        } else {
+          final label = activeZone == 'front'
+              ? 'Front Matter'
+              : (activeZone == 'body' ? 'Body' : 'Back Matter');
+          zones.add({
+            'zone': activeZone,
+            'from_seq': zoneFrom,
+            'to_seq': zoneTo,
+            'label': label,
+          });
+          activeZone = z;
+          zoneFrom = f;
+          zoneTo = t;
+        }
+      }
+      if (activeZone != null) {
+        final label = activeZone == 'front'
+            ? 'Front Matter'
+            : (activeZone == 'body' ? 'Body' : 'Back Matter');
+        zones.add({
+          'zone': activeZone,
+          'from_seq': zoneFrom,
+          'to_seq': zoneTo,
+          'label': label,
+        });
+      }
+    }
+
+    final chapCount = sections.where((s) => s['role'] == 'chapter').length;
+    final specialTitles = sections
+        .where((s) => s['role'] != 'chapter' && s['title'] != null && (s['title'] as String).isNotEmpty)
+        .map((s) => s['title'] as String)
+        .toSet()
+        .toList();
+    final digestParts = <String>[];
+    if (chapCount > 0) {
+      digestParts.add('$chapCount chapter${chapCount == 1 ? '' : 's'}');
+    }
+    if (specialTitles.isNotEmpty) {
+      digestParts.add(specialTitles.take(3).join(' & '));
+    }
+    final structureMap = {
+      'digest': digestParts.isNotEmpty ? digestParts.join(' · ') : 'Book Structure',
+      'zones': zones,
+      'sections': sections,
+    };
+
     return {
       'document': docMap,
       'items': items,
       'chunks': chunks,
       'cards': cards,
       'chunk_edits': chunkEditsMap,
+      'structure': structureMap,
     };
   }
 

@@ -19,8 +19,10 @@ class Document(SQLModel, table=True):
     percent: int = Field(default=0)
     error_code: Optional[str] = None
     error_message: Optional[str] = None
+    force_accept: bool = Field(default=False)
     page_count: int = Field(default=0)
     processed_page: int = Field(default=0)
+    last_checkpoint_page: int = Field(default=0)
 
     # Text layer & integrity
     canonical_text: Optional[str] = None
@@ -37,6 +39,12 @@ class Document(SQLModel, table=True):
     created_at: datetime = Field(default_factory=utc_now)
     updated_at: datetime = Field(default_factory=utc_now)
 
+    @property
+    def effective_lifecycle_status(self) -> str:
+        if self.status == "ready" or (self.status != "failed" and self.stage == "done" and self.percent == 100):
+            return "ready"
+        return self.status
+
     # Relationships for cascade and dependency ordering with SQLite foreign keys
     chunks: List["ReadingChunk"] = Relationship(sa_relationship_kwargs={"cascade": "all, delete-orphan"})
     concepts: List["Concept"] = Relationship(sa_relationship_kwargs={"cascade": "all, delete-orphan"})
@@ -51,6 +59,10 @@ class ReadingChunk(SQLModel, table=True):
     document_id: str = Field(index=True, foreign_key="documents.id")
     sequence: int = Field(index=True)  # 1-based
     section_title: Optional[str] = None
+    section_role: str = Field(default="chapter", index=True)
+    page_start: int = Field(default=1, index=True)
+    page_end: int = Field(default=1)
+    simhash_low: int = Field(default=0)
     raw_text: str
     source_pages_json: str = "[]"  # list of pages (1-indexed) stored as TEXT
     start_offset: int

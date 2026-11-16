@@ -12,7 +12,7 @@ from app.models import Concept, ConceptCache, ContextCard, Document, ReadingChun
 from app.services.marginalia.cards import find_exact_quote, _fetch_multi_source_evidence
 from app.services.marginalia.concepts import extract_concepts, build_search_query_for_concept
 from app.services.edge.novelty import compute_semantic_similarity, is_semantic_duplicate
-from app.services.marginalia.llm import LLMService
+from app.services.marginalia.llm import LLMService, verify_grounding
 from app.services.marginalia.wikipedia import WikipediaClient
 
 logger = logging.getLogger("athena.pipeline")
@@ -422,6 +422,17 @@ class ReadAheadPipeline:
                         cached_body = re.sub(r"^(?:Question|Q):\s*.*?\n+(?:Answer|A|Evidence|Finding|Result):\s*", "", cached_body, flags=re.I)
                         cached_body = re.sub(r"\s+", " ", cached_body).strip()
 
+                        citations_present = False
+                        if cached.citations_json:
+                            try:
+                                c_list = json.loads(cached.citations_json)
+                                citations_present = isinstance(c_list, list) and len(c_list) > 0
+                            except Exception:
+                                citations_present = False
+                        is_grounded = verify_grounding(cached_body, cached.body or "") if cached.body else False
+                        is_verified = citations_present and is_grounded
+                        support_status = "fully_supported" if is_verified else "partially_supported"
+
                         card = ContextCard(
                             document_id=doc_id,
                             source_chunk_id=chunk.id,
@@ -432,9 +443,9 @@ class ReadAheadPipeline:
                             why_here="Grounded context from verified primary sources.",
                             citations_json=cached.citations_json,
                             exact_quote=exact_quote,
-                            support_status="fully_supported",
+                            support_status=support_status,
                             generation_mode="concept_cache",
-                            verified=True,
+                            verified=is_verified,
                         )
                         session.add(card)
                         session.commit()
@@ -558,6 +569,11 @@ class ReadAheadPipeline:
                             )
                         session.add(cache_entry)
 
+                        grounding_extract = " ".join([ev.get("snippet", "") or ev.get("title", "") for ev in evidence_list]) if evidence_list else body
+                        is_grounded = verify_grounding(body, grounding_extract) if evidence_list else True
+                        is_verified = bool(citations) and is_grounded
+                        support_status = "fully_supported" if is_verified else "partially_supported"
+
                         card = ContextCard(
                             document_id=doc_id,
                             source_chunk_id=chunk.id,
@@ -568,9 +584,9 @@ class ReadAheadPipeline:
                             why_here=card_why_here,
                             citations_json=citations_str,
                             exact_quote=exact_quote,
-                            support_status="fully_supported",
+                            support_status=support_status,
                             generation_mode="gemini_search_grounded",
-                            verified=True,
+                            verified=is_verified,
                         )
                         session.add(card)
                         session.commit()
@@ -656,6 +672,11 @@ class ReadAheadPipeline:
                         )
                     session.add(cache_entry)
 
+                    grounding_extract = evidence_body or " ".join([ev.get("snippet", "") or ev.get("title", "") for ev in evidence_list])
+                    is_grounded = verify_grounding(final_body, grounding_extract) if grounding_extract else True
+                    is_verified = bool(citations_list) and is_grounded
+                    support_status = "fully_supported" if is_verified else "partially_supported"
+
                     card = ContextCard(
                         document_id=doc_id,
                         source_chunk_id=chunk.id,
@@ -666,9 +687,9 @@ class ReadAheadPipeline:
                         why_here="Evidence summary from multi-source research repository.",
                         citations_json=citations_str,
                         exact_quote=exact_quote,
-                        support_status="fully_supported",
+                        support_status=support_status,
                         generation_mode="extractive",
-                        verified=True,
+                        verified=is_verified,
                     )
                     session.add(card)
                     session.commit()

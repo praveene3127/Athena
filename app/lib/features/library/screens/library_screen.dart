@@ -38,6 +38,7 @@ import 'package:athena/core/api/local_client_factory.dart';
 import 'package:athena/core/widgets/athena_avatar.dart';
 
 import 'package:athena/core/widgets/athena_logo.dart';
+import 'package:athena/core/state/machines.dart';
 import 'package:athena/services/local_database.dart';
 
 import 'package:athena/features/settings/widgets/byok_settings_sheet.dart';
@@ -116,25 +117,37 @@ class _LibraryScreenState extends ConsumerState<LibraryScreen>
   }
 
   Future<void> _checkServerConnectionAndAutoDiscover() async {
-    if (kIsWeb || !AppConfig.isCustomServerConfigured) return;
+    final modeNotifier = ref.read(connectionModeProvider.notifier);
+    if (!kIsWeb && !AppConfig.isCustomServerConfigured) {
+      modeNotifier.setMode(ConnectionMode.standaloneOnDevice);
+      return;
+    }
     try {
       final client = ref.read(apiClientProvider);
       final health = await client.checkHealth();
-      if (health['status'] == 'ok') return;
+      if (health['status'] == 'ok') {
+        modeNotifier.setMode(ConnectionMode.companionConnected);
+        return;
+      }
     } catch (e) {
       debugPrint('Athena caught error: $e');
+      modeNotifier.setMode(ConnectionMode.companionDegradedOffline);
     }
 
     try {
       final found = await LanDiscovery.discoverServer(timeoutMs: 600);
       if (found != null && found.isNotEmpty && mounted) {
         await AppConfig.setBaseUrl(found);
+        modeNotifier.setMode(ConnectionMode.companionConnected);
         ref.invalidate(documentsProvider);
         _checkAIConfiguration();
         _checkForUpdates();
+      } else {
+        modeNotifier.setMode(ConnectionMode.companionDegradedOffline);
       }
     } catch (e) {
       debugPrint('Athena caught error: $e');
+      modeNotifier.setMode(ConnectionMode.companionDegradedOffline);
     }
   }
 
@@ -1566,6 +1579,64 @@ class _LibraryScreenState extends ConsumerState<LibraryScreen>
                                         ? Colors.amberAccent
                                         : context.tokens.ink,
                                   ),
+                                ),
+                              );
+                            },
+                          ),
+
+                          Consumer(
+                            builder: (context, ref, _) {
+                              final mode = ref.watch(connectionModeProvider);
+                              if (mode == ConnectionMode.standaloneOnDevice) {
+                                return const SizedBox.shrink();
+                              }
+                              final isOnline =
+                                  mode == ConnectionMode.companionConnected;
+                              return Container(
+                                margin: const EdgeInsets.only(right: 8),
+                                padding: const EdgeInsets.symmetric(
+                                  horizontal: 8,
+                                  vertical: 4,
+                                ),
+                                decoration: BoxDecoration(
+                                  color: (isOnline
+                                          ? const Color(0xFF10B981)
+                                          : Colors.amber)
+                                      .withValues(alpha: 0.12),
+                                  borderRadius: BorderRadius.circular(12),
+                                  border: Border.all(
+                                    color: (isOnline
+                                            ? const Color(0xFF10B981)
+                                            : Colors.amber)
+                                        .withValues(alpha: 0.3),
+                                  ),
+                                ),
+                                child: Row(
+                                  mainAxisSize: MainAxisSize.min,
+                                  children: [
+                                    Container(
+                                      width: 6,
+                                      height: 6,
+                                      decoration: BoxDecoration(
+                                        color: isOnline
+                                            ? const Color(0xFF10B981)
+                                            : Colors.amber,
+                                        shape: BoxShape.circle,
+                                      ),
+                                    ),
+                                    const SizedBox(width: 5),
+                                    Text(
+                                      isOnline ? 'Companion' : 'Offline',
+                                      style: TextStyle(
+                                        fontFamily: AppTheme.fontUI,
+                                        fontSize: 11,
+                                        fontWeight: FontWeight.w600,
+                                        color: isOnline
+                                            ? const Color(0xFF10B981)
+                                            : Colors.amber,
+                                      ),
+                                    ),
+                                  ],
                                 ),
                               );
                             },

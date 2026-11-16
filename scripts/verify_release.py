@@ -26,15 +26,42 @@ ROOT_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 BACKEND_DIR = os.path.join(ROOT_DIR, "backend")
 APP_DIR = os.path.join(ROOT_DIR, "app")
 RUST_CORE_DIR = os.path.join(BACKEND_DIR, "rust_core")
-VENV_PYTHON = os.path.join(ROOT_DIR, ".venv", "Scripts", "python.exe")
-if not os.path.isfile(VENV_PYTHON):
-    VENV_PYTHON = sys.executable
 
-FLUTTER_BAT = r"C:\src\flutter\bin\flutter.bat"
-if not os.path.isfile(FLUTTER_BAT):
+# Cross-platform Python resolver
+if sys.platform == "win32":
+    candidate_py = os.path.join(ROOT_DIR, ".venv", "Scripts", "python.exe")
+else:
+    candidate_py = os.path.join(ROOT_DIR, ".venv", "bin", "python")
+VENV_PYTHON = candidate_py if os.path.isfile(candidate_py) else sys.executable
+
+# Cross-platform Flutter resolver
+flutter_which = shutil.which("flutter")
+if flutter_which:
+    FLUTTER_BAT = flutter_which
+elif sys.platform == "win32" and os.path.isfile(r"C:\src\flutter\bin\flutter.bat"):
+    FLUTTER_BAT = r"C:\src\flutter\bin\flutter.bat"
+else:
     FLUTTER_BAT = "flutter"
 
 sys.path.insert(0, BACKEND_DIR)
+
+
+def print_preflight_matrix():
+    print("=" * 70)
+    print(" PREFLIGHT ENVIRONMENT MATRIX")
+    print("=" * 70)
+    print(f"  * Platform:          {sys.platform} ({os.name})")
+    print(f"  * Python Executable: {sys.executable} (v{sys.version_info.major}.{sys.version_info.minor}.{sys.version_info.micro})")
+    print(f"  * Resolved Python:   {VENV_PYTHON}")
+    print(f"  * Resolved Flutter:  {FLUTTER_BAT}")
+    print(f"  * Cargo in PATH:     {shutil.which('cargo') or 'Not Found (Will gracefully skip Gate 3)'}")
+    try:
+        import pytest
+        pytest_status = f"Available (v{pytest.__version__})"
+    except ImportError:
+        pytest_status = "Not installed in active Python"
+    print(f"  * Pytest:            {pytest_status}")
+    print("=" * 70 + "\n")
 
 
 PASSED_GATES: List[Tuple[int, str]] = []
@@ -304,8 +331,11 @@ def gate_4_technical_words():
 def gate_5_api_matrix():
     log_gate(5, "API Matrix & Security Contract")
 
-    from fastapi.testclient import TestClient
-    from app.main import app
+    try:
+        from fastapi.testclient import TestClient
+        from app.main import app
+    except ImportError as e:
+        fail_gate(5, "API Matrix & Security Contract", f"Preflight check failed: missing required backend dependency: {e}")
 
     with TestClient(app) as client:
         # 1. Health check
@@ -519,12 +549,59 @@ def gate_8_invariants():
 
 
 # ==============================================================================
+# GATE 9: CONTRACT <-> MODEL SCHEMA DRIFT AUDIT (D9)
+# ==============================================================================
+def gate_9_schema_drift():
+    log_gate(9, "Contract <-> Model Schema Drift Audit (D9)")
+
+    contract_path = os.path.join(ROOT_DIR, "contracts", "athena-contract.json")
+    if not os.path.isfile(contract_path):
+        fail_gate(9, "Schema Drift", f"Missing contract file: {contract_path}")
+
+    with open(contract_path, "r", encoding="utf-8") as f:
+        contract = json.load(f)
+
+    schemas = contract.get("schemas", {})
+    if not schemas:
+        fail_gate(9, "Schema Drift", "No 'schemas' key in contracts/athena-contract.json")
+
+    from app.models import Document, ReadingChunk
+    doc_fields = getattr(Document, "model_fields", getattr(Document, "__fields__", {}))
+    chunk_fields = getattr(ReadingChunk, "model_fields", getattr(ReadingChunk, "__fields__", {}))
+
+    for f_name in schemas.get("Document", []):
+        if f_name not in doc_fields and not hasattr(Document, f_name):
+            fail_gate(9, "Schema Drift", f"Document contract field '{f_name}' missing from backend SQLModel!")
+        print(f"  + Verified Document SQLModel field: {f_name}")
+
+    for f_name in schemas.get("ReadingChunk", []):
+        if f_name not in chunk_fields and not hasattr(ReadingChunk, f_name):
+            fail_gate(9, "Schema Drift", f"ReadingChunk contract field '{f_name}' missing from backend SQLModel!")
+        print(f"  + Verified ReadingChunk SQLModel field: {f_name}")
+
+    # Check Dart models
+    dart_doc_path = os.path.join(APP_DIR, "lib", "models", "document.dart")
+    with open(dart_doc_path, "r", encoding="utf-8") as f:
+        dart_doc_src = f.read()
+
+    core_dart_doc_fields = ["id", "title", "status", "pageCount", "processedPage"]
+    for f_name in core_dart_doc_fields:
+        if f_name not in dart_doc_src and f_name.lower() not in dart_doc_src.lower():
+            fail_gate(9, "Schema Drift", f"Dart Document model missing field reference '{f_name}'")
+        print(f"  + Verified Document Dart field: {f_name}")
+
+    pass_gate(9, "Contract <-> Model Schema Drift Audit")
+
+
+# ==============================================================================
 # MAIN ENTRYPOINT
 # ==============================================================================
 def main():
     print("*" * 70)
     print("        ATHENA RELEASE VERIFICATION GATE (verify_release.py)")
     print("*" * 70)
+
+    print_preflight_matrix()
 
     gate_1_version_consistency()
     gate_2_static_grep()
@@ -534,6 +611,7 @@ def main():
     gate_6_pytest()
     gate_7_flutter()
     gate_8_invariants()
+    gate_9_schema_drift()
 
     print("=" * 70)
     if SKIPPED_GATES:
@@ -541,7 +619,7 @@ def main():
         for num, title, reason in SKIPPED_GATES:
             print(f"  * Gate {num}: {title} -> SKIPPED ({reason})")
     else:
-        print("  >>> ALL 8 GATES PASSED! ATHENA IS 100% PRODUCTION READY <<<")
+        print(f"  >>> ALL {len(PASSED_GATES)} GATES PASSED! ATHENA IS 100% PRODUCTION READY <<<")
     print("=" * 70)
     sys.exit(0)
 

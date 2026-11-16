@@ -136,3 +136,22 @@ Controls the persisted notes and quotes library.
 - `populated`: Cards and quotes present and grouped by document title.
 - `syncing`: Ingestion or unsave update in flight.
 - `cleared`: All saved notes and quotes cleared.
+
+---
+
+## 11. State Machine Implementation & Enforcement Coverage Map
+
+Every state machine defined in [`contracts/state-machines.json`](../contracts/state-machines.json) is strictly implemented and validated across the codebase:
+
+| State Machine | Specification ID | Python Server Implementation / Enforcement | Dart Client Implementation / Enforcement |
+| :--- | :--- | :--- | :--- |
+| **`DocumentLifecycle`** | ISM-02 / SM-01 | [`backend/app/state/machines.py`](file:///backend/app/state/machines.py)<br>[`backend/app/models.py`](file:///backend/app/models.py)<br>[`backend/app/services/ingestion/jobs.py`](file:///backend/app/services/ingestion/jobs.py) | [`app/lib/core/state/machines.dart`](file:///app/lib/core/state/machines.dart)<br>[`app/lib/services/local_database.dart`](file:///app/lib/services/local_database.dart)<br>[`app/lib/services/ingestion_job_coordinator.dart`](file:///app/lib/services/ingestion_job_coordinator.dart) |
+| **`ContextEnrichment`** | SM-07 | [`backend/app/models.py`](file:///backend/app/models.py)<br>[`backend/app/services/marginalia/pipeline.py`](file:///backend/app/services/marginalia/pipeline.py)<br>[`backend/app/services/ingestion/jobs.py`](file:///backend/app/services/ingestion/jobs.py) | [`app/lib/services/local_context_service.dart`](file:///app/lib/services/local_context_service.dart) |
+| **`IngestionWorkerFgs`** | SM-02 | *N/A (Client-only FGS)* | [`app/lib/services/foreground_service.dart`](file:///app/lib/services/foreground_service.dart)<br>[`app/lib/services/ingestion_job_coordinator.dart`](file:///app/lib/services/ingestion_job_coordinator.dart) |
+| **`AppearanceSettings`** | ISM-01 / SM-04 | *N/A (UI Theme)* | [`app/lib/core/theme/theme.dart`](file:///app/lib/core/theme/theme.dart)<br>[`app/lib/core/theme/theme_mode_notifier.dart`](file:///app/lib/core/theme/theme_mode_notifier.dart) |
+| **`ConnectionMode`** | ISM-03 / S-02 | [`backend/app/routers/system.py`](file:///backend/app/routers/system.py) (`/api/pair-info`) | [`app/lib/core/state/machines.dart`](file:///app/lib/core/state/machines.dart)<br>[`app/lib/features/library/screens/library_screen.dart`](file:///app/lib/features/library/screens/library_screen.dart) |
+| **`ReaderViewport`** | ISM-05 | *N/A (Presentation layer)* | [`app/lib/features/reader/screens/reader_screen.dart`](file:///app/lib/features/reader/screens/reader_screen.dart)<br>[`app/lib/features/reader/controllers/reader_controller.dart`](file:///app/lib/features/reader/controllers/reader_controller.dart) |
+| **`CardSlotSynthesis`** | ISM-08 / SM-08 | [`backend/app/services/marginalia/pipeline.py`](file:///backend/app/services/marginalia/pipeline.py) | [`app/lib/core/state/machines.dart`](file:///app/lib/core/state/machines.dart)<br>[`app/lib/features/reader/screens/reader_screen.dart`](file:///app/lib/features/reader/screens/reader_screen.dart) |
+| **`CardUserState`** | ISM-08 / SM-09 | [`backend/app/state/machines.py`](file:///backend/app/state/machines.py)<br>[`backend/app/routers/cards.py`](file:///backend/app/routers/cards.py) | [`app/lib/core/state/machines.dart`](file:///app/lib/core/state/machines.dart)<br>[`app/lib/services/local_database.dart`](file:///app/lib/services/local_database.dart) |
+| **`AIProviderSlot`** | ISM-07 / SM-12 | [`backend/app/services/marginalia/providers.py`](file:///backend/app/services/marginalia/providers.py)<br>[`backend/app/config.py`](file:///backend/app/config.py) | [`app/lib/features/settings/widgets/byok_settings_sheet.dart`](file:///app/lib/features/settings/widgets/byok_settings_sheet.dart) |
+| **`SavedVault`** | ISM-08 | [`backend/app/routers/cards.py`](file:///backend/app/routers/cards.py) (`/api/saved`, `/clear`) | [`app/lib/services/local_database.dart`](file:///app/lib/services/local_database.dart)<br>[`app/lib/features/saved/screens/saved_screen.dart`](file:///app/lib/features/saved/screens/saved_screen.dart) |

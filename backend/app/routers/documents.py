@@ -13,7 +13,7 @@ import httpx
 from fastapi import APIRouter, Depends, File, Query, Request, UploadFile
 from fastapi.responses import Response, StreamingResponse
 from pydantic import BaseModel
-from sqlmodel import Session, select, func
+from sqlmodel import Session, select, func, delete
 import pymupdf
 
 from app.config import (
@@ -79,6 +79,9 @@ STAGE_LABELS: Dict[str, str] = {
     "finding_concepts": "Finding useful concepts",
     "preparing_context": "Preparing context",
     "done": "Ready",
+    "paused": "Paused",
+    "interrupted": "Interrupted",
+    "partially_readable": "Partially readable",
 }
 
 
@@ -273,10 +276,10 @@ def upload_document_from_url(
 def create_sample_document(session: Session = Depends(get_session)) -> Dict[str, Any]:
     """Generates or retrieves starter sample book for instant reading."""
     existing = session.exec(
-        select(Document).where(Document.filename == "sample.pdf", Document.status == "ready")
+        select(Document).where(Document.filename == "sample.pdf", Document.status != "deleted")
     ).first()
     if existing:
-        return {"id": existing.id, "document_id": existing.id, "status": existing.status}
+        return {"id": existing.id, "document_id": existing.id, "status": existing.effective_lifecycle_status}
 
     sample_source = Path(BASE_DIR) / "samples" / "sample.pdf"
     if not sample_source.exists():
@@ -324,18 +327,23 @@ def list_documents(session: Session = Depends(get_session)) -> List[Dict[str, An
     docs = session.exec(statement).all()
     results = []
     for d in docs:
-        effective_status = "ready" if (d.status == "ready" or (d.status != "failed" and d.stage == "done" and d.percent == 100)) else d.status
+        r_state = session.get(ReadingState, d.id)
+        curr_idx = r_state.current_chunk_index if r_state else 1
+        c_count = session.exec(select(func.count(ReadingChunk.id)).where(ReadingChunk.document_id == d.id)).one()
         results.append({
             "id": d.id,
             "title": d.title or d.filename,
             "filename": d.filename,
-            "status": effective_status,
+            "status": d.effective_lifecycle_status,
             "stage": d.stage,
             "stage_label": STAGE_LABELS.get(d.stage, "Processing..."),
             "percent": d.percent,
             "error_code": d.error_code,
             "error_message": d.error_message,
             "page_count": d.page_count,
+            "processed_page": d.processed_page,
+            "chunk_count": c_count,
+            "current_chunk_index": curr_idx,
             "layout_warning": d.layout_warning,
             "context_status": d.context_status,
             "created_at": d.created_at.isoformat(),
@@ -350,15 +358,21 @@ def get_document(id: str, session: Session = Depends(get_session)) -> Dict[str, 
     doc = session.get(Document, id)
     if not doc:
         raise AppException("NOT_FOUND", status_code=404)
-    effective_status = "ready" if (doc.status == "ready" or (doc.stage == "done" and doc.percent == 100)) else doc.status
+    r_state = session.get(ReadingState, doc.id)
+    curr_idx = r_state.current_chunk_index if r_state else 1
+    c_count = session.exec(select(func.count(ReadingChunk.id)).where(ReadingChunk.document_id == doc.id)).one()
     return {
         "id": doc.id,
         "title": doc.title,
         "filename": doc.filename,
-        "status": effective_status,
+        "status": doc.effective_lifecycle_status,
         "stage": doc.stage,
+        "stage_label": STAGE_LABELS.get(doc.stage, "Processing..."),
         "percent": doc.percent,
         "page_count": doc.page_count,
+        "processed_page": doc.processed_page,
+        "chunk_count": c_count,
+        "current_chunk_index": curr_idx,
         "layout_warning": doc.layout_warning,
         "context_status": doc.context_status,
         "created_at": doc.created_at.isoformat(),
@@ -373,8 +387,6 @@ def get_document_status(id: str, session: Session = Depends(get_session)) -> Dic
     if not doc:
         raise AppException("NOT_FOUND", status_code=404)
 
-    effective_status = "ready" if (doc.status == "ready" or (doc.stage == "done" and doc.percent == 100)) else doc.status
-
     error_obj = None
     if doc.error_code:
         error_obj = {
@@ -384,10 +396,13 @@ def get_document_status(id: str, session: Session = Depends(get_session)) -> Dic
 
     return {
         "document_id": doc.id,
-        "status": effective_status,
+        "status": doc.effective_lifecycle_status,
         "stage": doc.stage,
         "stage_label": STAGE_LABELS.get(doc.stage, "Processing..."),
         "percent": doc.percent,
+        "page_count": doc.page_count,
+        "processed_page": doc.processed_page,
+        "last_checkpoint_page": getattr(doc, "last_checkpoint_page", 0) or doc.processed_page,
         "error": error_obj,
         "context_status": doc.context_status,
     }
@@ -415,6 +430,9 @@ def resume_document_process(id: str, session: Session = Depends(get_session)) ->
     if doc.status not in ("paused", "interrupted", "failed", "partially_readable"):
         raise AppException("CONFLICT", f"Document in status {doc.status} cannot be resumed", status_code=409)
 
+    if doc.processed_page and doc.processed_page > 0:
+        checkpoint = doc.processed_page
+        session.exec(delete(ReadingChunk).where(ReadingChunk.document_id == id, ReadingChunk.page_start > checkpoint))
     doc.status = "queued"
     doc.stage = "chunking" if (doc.processed_page and doc.processed_page > 0) else "validating"
     doc.error_code = None
@@ -432,6 +450,12 @@ def force_ingest_document(id: str, session: Session = Depends(get_session)) -> D
     doc = session.get(Document, id)
     if not doc:
         raise AppException("NOT_FOUND", status_code=404)
+    if doc.status not in ("unsupported", "failed"):
+        raise AppException(
+            "CONFLICT",
+            f"Document in status '{doc.status}' cannot be force-ingested. Only unsupported or failed documents can be force-ingested.",
+            status_code=409,
+        )
     force_requeue_document(id)
     return {"status": "queued", "document_id": id}
 
@@ -580,18 +604,31 @@ def generate_card_for_chunk_endpoint(
 
 
 
+@router.post("/{id}/cancel")
+def cancel_document(id: str, session: Session = Depends(get_session)) -> Dict[str, Any]:
+    """Cancels an active or queued document processing job."""
+    doc = session.get(Document, id)
+    if not doc:
+        raise AppException("NOT_FOUND", status_code=404)
+    if doc.status in {"ready", "deleted"}:
+        return {"id": id, "status": doc.status, "message": "Document is not currently processing"}
+    doc.status = "failed"
+    doc.stage = "cancelled"
+    doc.error_code = "CANCELLED"
+    doc.error_message = "Ingestion cancelled by user"
+    doc.updated_at = utc_now()
+    session.add(doc)
+    session.commit()
+    session.refresh(doc)
+    return {"id": doc.id, "status": doc.status, "stage": doc.stage, "message": "Job cancelled"}
+
+
 @router.delete("/{id}")
 def delete_document(id: str, request: Request = None, session: Session = Depends(get_session)) -> Dict[str, str]:
     """Deletes document rows and physical disk files."""
     doc = session.get(Document, id)
     if not doc:
         raise AppException("NOT_FOUND", status_code=404)
-    if doc.status in {"queued", "processing"}:
-        raise AppException(
-            "CONFLICT",
-            "A document cannot be deleted while it is processing.",
-            status_code=409,
-        )
 
     # Bulk SQL deletes: remove related rows efficiently
     from sqlalchemy import text
@@ -613,7 +650,6 @@ def delete_document(id: str, request: Request = None, session: Session = Depends
         session.delete(doc)
     session.commit()
 
-
     # Clean disk files
     for ext in (".pdf", ".epub"):
         p = UPLOADS_DIR / f"{id}{ext}"
@@ -626,21 +662,120 @@ def delete_document(id: str, request: Request = None, session: Session = Depends
     if ledger_path.exists():
         ledger_path.unlink()
 
+    # Clean binary tape files (.athena.bin / .bin)
+    for d in (UPLOADS_DIR, RAW_DIR):
+        for f_ext in (f"{id}.athena.bin", f"{id}.bin"):
+            tp = d / f_ext
+            if tp.exists():
+                try:
+                    tp.unlink()
+                except Exception:
+                    pass
+
     # Evict document from marginalia pipeline if active
     try:
         if request and hasattr(request, "app") and hasattr(request.app.state, "pipeline"):
             p = getattr(request.app.state, "pipeline", None)
             if p and hasattr(p, "evict_document"):
                 p.evict_document(id)
-        from app.services.marginalia.pipeline import pipeline_instance
-        if pipeline_instance:
-            pipeline_instance.evict_document(id)
     except Exception as e:
         logger.debug("Pipeline eviction on delete error: %s", e)
 
     return {"status": "deleted", "document_id": id}
 
 
+
+
+def get_macro_zone(role: str) -> str:
+    r = (role or "").lower()
+    if r in ("cover", "halftitle", "titlepage", "title_page", "copyright", "dedication", "epigraph", "toc", "listoffigures", "praise", "alsoby", "foreword", "preface", "introduction"):
+        return "front"
+    if r in ("acknowledgments", "acknowledgements", "notes", "endnotes", "glossary", "bibliography", "references", "index", "bookindex", "aboutauthor", "adcard"):
+        return "back"
+    return "body"
+
+
+def is_role_in_feed(role: str) -> bool:
+    r = (role or "").lower()
+    return r in {
+        "preface", "foreword", "introduction", "prologue",
+        "part", "chapter", "epilogue", "afterword", "appendix", "unknown"
+    }
+
+
+def build_document_structure(chunks: List[ReadingChunk], has_toc: bool = False) -> Dict[str, Any]:
+    if not chunks:
+        return {
+            "digest": "Empty document",
+            "zones": [],
+            "sections": [],
+        }
+
+    sections: List[Dict[str, Any]] = []
+    for c in chunks:
+        role = getattr(c, "section_role", "chapter") or "chapter"
+        title = getattr(c, "section_title", None) or (role.replace("_", " ").title() if role != "chapter" else "Chapter")
+        seq = c.sequence
+        zone = get_macro_zone(role)
+        in_feed = is_role_in_feed(role)
+
+        if sections and sections[-1]["role"] == role and sections[-1]["title"] == title:
+            sections[-1]["to_seq"] = seq
+        else:
+            sections.append({
+                "role": role,
+                "zone": zone,
+                "title": title,
+                "from_seq": seq,
+                "to_seq": seq,
+                "in_feed": in_feed,
+            })
+
+    zones: List[Dict[str, Any]] = []
+    for s in sections:
+        z = s["zone"]
+        label = "Front Matter" if z == "front" else ("Back Matter" if z == "back" else "Body")
+        if zones and zones[-1]["zone"] == z:
+            zones[-1]["to_seq"] = s["to_seq"]
+        else:
+            zones.append({
+                "zone": z,
+                "from_seq": s["from_seq"],
+                "to_seq": s["to_seq"],
+                "label": label,
+            })
+
+    chap_count = sum(1 for s in sections if s["role"] in ("chapter", "part"))
+    parts: List[str] = []
+    if chap_count > 0:
+        parts.append(f"{chap_count} chapter{'s' if chap_count != 1 else ''}")
+
+    other_roles = [s["role"] for s in sections if s["role"] not in ("chapter", "part")]
+    highlights: List[str] = []
+    if any(r == "introduction" for r in other_roles):
+        highlights.append("Introduction")
+    if any(r == "preface" for r in other_roles):
+        highlights.append("Preface")
+    if any(r in ("acknowledgments", "acknowledgements") for r in other_roles):
+        highlights.append("Acknowledgments")
+    if any(r in ("notes", "endnotes") for r in other_roles):
+        highlights.append("Notes")
+    if any(r in ("index", "bookindex") for r in other_roles):
+        highlights.append("Index")
+
+    if highlights:
+        parts.append(" & ".join(highlights))
+
+    if has_toc or any(r == "toc" for r in other_roles):
+        parts.append("Contents detected")
+
+    digest = " · ".join(parts) if parts else f"{len(sections)} sections"
+
+    return {
+        "digest": digest,
+        "zones": zones,
+        "sections": sections,
+    }
 
 
 @router.get("/{id}/reader")
@@ -767,6 +902,9 @@ async def get_reader(
             "text": chunk.raw_text,
             "page_reference": page_ref,
             "section_title": chunk.section_title,
+            "section_role": getattr(chunk, "section_role", "chapter") or "chapter",
+            "page_start": getattr(chunk, "page_start", 1) or 1,
+            "page_end": getattr(chunk, "page_end", 1) or 1,
             "boundary_method": getattr(chunk, "boundary_method", "paragraph"),
         }
         items.append(c_item)
@@ -776,6 +914,15 @@ async def get_reader(
     reading_state = session.get(ReadingState, id)
     saved_chunk_index = reading_state.current_chunk_index if reading_state else None
     saved_reading_mode = reading_state.reading_mode if reading_state else None
+
+    has_toc = False
+    try:
+        chaps = session.exec(select(DocumentChapter).where(DocumentChapter.doc_id == id)).all()
+        has_toc = len(chaps) > 0
+    except Exception:
+        pass
+
+    structure = build_document_structure(chunks, has_toc=has_toc)
 
     return {
         "document": {
@@ -788,6 +935,7 @@ async def get_reader(
             "current_chunk_index": saved_chunk_index,
             "reading_mode": saved_reading_mode,
         },
+        "structure": structure,
         "items": items,
         "chunks": chunk_items,
         "cards": all_cards,
@@ -810,18 +958,8 @@ def get_document_tape(id: str, request: Request, session: Session = Depends(get_
     try:
         from athena_rust_core import rust_encode_binary_tape
         texts = [c.raw_text for c in chunks]
-        pages = []
-        for c in chunks:
-            p = 1
-            if c.source_pages_json:
-                try:
-                    parsed = json.loads(c.source_pages_json)
-                    if parsed and isinstance(parsed, list):
-                        p = int(parsed[0])
-                except Exception:
-                    pass
-            pages.append(p)
-        simhash_lows = [0] * len(chunks)
+        pages = [getattr(c, "page_start", 1) or 1 for c in chunks]
+        simhash_lows = [getattr(c, "simhash_low", 0) or 0 for c in chunks]
         tape_bytes = rust_encode_binary_tape(texts, pages, simhash_lows)
     except Exception as rust_err:
         logger.debug("Rust binary tape encoding fallback: %s", rust_err)
@@ -837,15 +975,8 @@ def get_document_tape(id: str, request: Request, session: Session = Depends(get_
         current_offset = 0
         for i, p in enumerate(payloads):
             p_len = len(p)
-            page = 1
-            if chunks[i].source_pages_json:
-                try:
-                    parsed = json.loads(chunks[i].source_pages_json)
-                    if parsed and isinstance(parsed, list):
-                        page = int(parsed[0])
-                except Exception:
-                    pass
-            simhash_low = 0
+            page = getattr(chunks[i], "page_start", 1) or 1
+            simhash_low = getattr(chunks[i], "simhash_low", 0) or 0
             index_entries.append(struct.pack(">IIII", current_offset, p_len, page, simhash_low))
             current_offset += p_len
 
@@ -905,6 +1036,7 @@ def search_document(
 ) -> Dict[str, Any]:
     """
     Runs Hybrid Intelligent Search (BM25 + Dense + RRF k=60) over verified document chunks.
+    Uses SQLite FTS5 for fast primary retrieval before reciprocal rank fusion.
     """
     doc = session.get(Document, id)
     if not doc:
@@ -914,15 +1046,22 @@ def search_document(
     if not query:
         return {"document_id": id, "query": "", "results": []}
 
-    chunks = session.exec(
-        select(ReadingChunk).where(ReadingChunk.document_id == id).order_by(ReadingChunk.sequence)
-    ).all()
+    from app.services.marginalia.search import search_fts5, HybridSearchService
+    fts5_hits = search_fts5(id, query, top_k=max(50, top_k * 4))
+    if fts5_hits:
+        candidate_ids = [hit[0] for hit in fts5_hits]
+        chunks = session.exec(
+            select(ReadingChunk).where(ReadingChunk.id.in_(candidate_ids)).order_by(ReadingChunk.sequence)
+        ).all()
+    else:
+        chunks = session.exec(
+            select(ReadingChunk).where(ReadingChunk.document_id == id).order_by(ReadingChunk.sequence)
+        ).all()
 
     if not chunks:
         return {"document_id": id, "query": query, "results": []}
 
-    from app.services.marginalia.search import HybridSearchService
-    search_svc = HybridSearchService(chunks)
+    search_svc = HybridSearchService(chunks, document_id=id)
     results = search_svc.search(query=query, top_k=top_k)
 
     return {
@@ -1155,87 +1294,113 @@ async def stream_document_events(id: str, request: Request):
 def get_document_chapters(
     id: str, session: Session = Depends(get_session)
 ) -> List[Dict[str, Any]]:
-    """Returns Table of Contents mapped directly to chunk sequence indices."""
-    chapters = session.exec(
+    """Returns Table of Contents mapped directly to chunk sequence indices with section_role and macro-zones."""
+    from app.services.ingestion.blocks import detect_section_role_from_title
+
+    doc_chapters = session.exec(
         select(DocumentChapter)
         .where(DocumentChapter.doc_id == id)
         .order_by(DocumentChapter.start_chunk_index, DocumentChapter.id)
     ).all()
-    if chapters:
-        return [
-            {
-                "id": ch.id,
-                "level": ch.level,
-                "title": ch.title,
-                "start_page": max(1, ch.start_page if ch.start_page > 0 else 1),
-                "start_chunk_index": ch.start_chunk_index,
-            }
-            for ch in chapters
-        ]
 
-    # Auto-detect chapters from chunk text when no PDF outline exists
-    import re
     chunks = session.exec(
         select(ReadingChunk)
         .where(ReadingChunk.document_id == id)
         .order_by(ReadingChunk.sequence)
     ).all()
+
+    # Filter out fake TOC chapters if any corrupted title (e.g. matching comma-separated index lists)
+    re_index_line = re.compile(r"^[A-Za-z][^,\n]{1,40}(?:,\s*\d+){2,}")
+    valid_doc_chapters = [
+        ch for ch in doc_chapters
+        if not re_index_line.match(ch.title.strip())
+    ]
+
     if not chunks:
-        return []
+        result = []
+        for ch in valid_doc_chapters:
+            role = detect_section_role_from_title(ch.title)
+            zone = get_macro_zone(role)
+            result.append({
+                "id": ch.id,
+                "level": ch.level,
+                "title": ch.title,
+                "section_role": role,
+                "zone": zone,
+                "start_page": max(1, ch.start_page if ch.start_page > 0 else 1),
+                "start_chunk_index": ch.start_chunk_index,
+            })
+        return result
 
-    heading_pattern = re.compile(
-        r"^(?:CHAPTER\s+[\dIVXLCDM]+[^\r\n]*|PART\s+[\dIVXLCDM]+[^\r\n]*|ACT\s+[\dIVXLCDM]+[^\r\n]*|BOOK\s+[\dIVXLCDM]+[^\r\n]*|INTRODUCTION[^\r\n]*|PROLOGUE[^\r\n]*|EPILOGUE[^\r\n]*|SECTION\s+[\dIVXLCDM]+[^\r\n]*|#\s+[^\r\n]+)",
-        re.IGNORECASE,
-    )
-    detected = []
+    chunk_by_seq = {c.sequence: c for c in chunks}
+
+    # Identify boundary transitions where (chunk.section_title, chunk.section_role) changes
+    transitions: List[Dict[str, Any]] = []
+    prev_key = None
     for chunk in chunks:
-        raw = (chunk.raw_text or "").strip()
-        first_line = raw.split("\n")[0].strip() if raw else ""
-        m = heading_pattern.match(first_line)
-        if m:
-            clean_title = m.group(0).lstrip("#").strip()
-            page = 1
-            if chunk.source_pages_json:
-                try:
-                    pages = json.loads(chunk.source_pages_json) if isinstance(chunk.source_pages_json, str) else chunk.source_pages_json
-                    if isinstance(pages, list) and pages:
-                        page = pages[0]
-                except Exception:
-                    pass
-            detected.append({
-                "id": chunk.id,
-                "level": 1,
-                "title": clean_title,
-                "start_page": max(1, page),
+        role = getattr(chunk, "section_role", "chapter") or "chapter"
+        title = chunk.section_title or (role.replace("_", " ").title() if role != "chapter" else "Chapter")
+        key = (title, role)
+        if key != prev_key:
+            prev_key = key
+            zone = get_macro_zone(role)
+            transitions.append({
+                "title": title,
+                "section_role": role,
+                "zone": zone,
                 "start_chunk_index": chunk.sequence,
+                "start_page": getattr(chunk, "page_start", 1) or 1,
             })
 
-    if detected:
-        return detected
+    if valid_doc_chapters:
+        doc_chap_seqs = {ch.start_chunk_index for ch in valid_doc_chapters}
+        doc_chap_titles = {re.sub(r"[^\w\s]", "", ch.title).lower().strip() for ch in valid_doc_chapters}
 
-    # Fallback to logical section checkpoints for long documents (>10 chunks)
-    if len(chunks) > 10:
-        step = max(8, len(chunks) // 8)
-        for i in range(0, len(chunks), step):
-            chunk = chunks[i]
-            page = 1
-            if chunk.source_pages_json:
-                try:
-                    pages = json.loads(chunk.source_pages_json) if isinstance(chunk.source_pages_json, str) else chunk.source_pages_json
-                    if isinstance(pages, list) and pages:
-                        page = pages[0]
-                except Exception:
-                    pass
-            detected.append({
-                "id": f"sec-{chunk.sequence}",
-                "level": 1,
-                "title": f"Section {(i // step) + 1} (Chunk {chunk.sequence})",
-                "start_page": max(1, page),
-                "start_chunk_index": chunk.sequence,
+        result = []
+        for ch in valid_doc_chapters:
+            chunk = chunk_by_seq.get(ch.start_chunk_index)
+            role = (getattr(chunk, "section_role", None) if chunk else None) or detect_section_role_from_title(ch.title)
+            zone = get_macro_zone(role)
+            p_start = (getattr(chunk, "page_start", None) if chunk else None) or max(1, ch.start_page if ch.start_page > 0 else 1)
+            result.append({
+                "id": ch.id,
+                "level": ch.level,
+                "title": ch.title,
+                "section_role": role,
+                "zone": zone,
+                "start_page": p_start,
+                "start_chunk_index": ch.start_chunk_index,
             })
-        return detected
 
-    return []
+        for tr in transitions:
+            tr_norm = re.sub(r"[^\w\s]", "", tr["title"]).lower().strip()
+            if tr["start_chunk_index"] not in doc_chap_seqs and tr_norm not in doc_chap_titles:
+                if tr["zone"] in ("front", "back") or tr["section_role"] in ("introduction", "preface", "acknowledgments", "notes", "index", "appendix"):
+                    result.append({
+                        "id": f"sec-{tr['start_chunk_index']}",
+                        "level": 1,
+                        "title": tr["title"],
+                        "section_role": tr["section_role"],
+                        "zone": tr["zone"],
+                        "start_page": tr["start_page"],
+                        "start_chunk_index": tr["start_chunk_index"],
+                    })
+
+        result.sort(key=lambda x: x["start_chunk_index"])
+        return result
+
+    result = []
+    for tr in transitions:
+        result.append({
+            "id": f"sec-{tr['start_chunk_index']}",
+            "level": 1,
+            "title": tr["title"],
+            "section_role": tr["section_role"],
+            "zone": tr["zone"],
+            "start_page": tr["start_page"],
+            "start_chunk_index": tr["start_chunk_index"],
+        })
+    return result
 
 
 @router.get("/{id}/export-markdown")

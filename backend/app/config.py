@@ -1,5 +1,5 @@
 from pathlib import Path
-from typing import Optional
+from typing import Any, Optional
 from dotenv import load_dotenv
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
@@ -30,7 +30,7 @@ class Settings(BaseSettings):
     # Ingestion & Limits
     MAX_UPLOAD_SIZE_BYTES: int = 500 * 1024 * 1024  # 500 MB
     MAX_PAGE_COUNT: int = 3000
-    MIN_PROSE_WORDS: int = 350
+    MIN_PROSE_WORDS: int = 250
     MIN_SENTENCE_COUNT: int = 6
 
     # AI & Proxy Keys
@@ -135,7 +135,7 @@ ATHENA_CONTEXT_PROXY_TOKEN: Optional[str] = settings.ATHENA_CONTEXT_PROXY_TOKEN
 WIKI_CONTACT: str = settings.WIKI_CONTACT
 
 
-def is_llm_configured() -> bool:
+def is_llm_configured(session: Optional[Any] = None) -> bool:
     """Returns True if at least one configured provider key is non-empty (env or SQLite ai_settings)."""
     if any(key and key.strip() for key in (
         GEMINI_API_KEY_PRIMARY,
@@ -147,10 +147,27 @@ def is_llm_configured() -> bool:
         from app.db import engine
         from app.models import AISettings
         from sqlmodel import Session, select
-        with Session(engine) as s:
-            saved = s.exec(select(AISettings).where(AISettings.id == "global")).first()
-            if saved and (saved.primary_api_key or saved.primary_provider == "custom"):
+        from app.security import decrypt_secret
+
+        def _check_saved(saved: Optional[AISettings]) -> bool:
+            if not saved:
+                return False
+            if saved.primary_provider == "custom":
                 return True
+            for raw_k in (saved.primary_api_key, getattr(saved, "secondary_api_key", None)):
+                if raw_k:
+                    dec = decrypt_secret(raw_k)
+                    if dec and len(dec.strip()) > 0:
+                        return True
+            return False
+
+        if session is not None:
+            saved = session.exec(select(AISettings).where(AISettings.id == "global")).first()
+            return _check_saved(saved)
+        else:
+            with Session(engine) as s:
+                saved = s.exec(select(AISettings).where(AISettings.id == "global")).first()
+                return _check_saved(saved)
     except Exception:
         pass
     return False

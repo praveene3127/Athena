@@ -126,6 +126,8 @@ class ReaderItem {
   final String? pageReference;
   final String? sectionTitle;
   final String? sectionRole;
+  final int? pageStart;
+  final int? pageEnd;
   // Context card fields (Phase 5)
   final String? insertAfter;
   final String? sourceChunkId;
@@ -151,6 +153,8 @@ class ReaderItem {
     this.pageReference,
     this.sectionTitle,
     this.sectionRole,
+    this.pageStart,
+    this.pageEnd,
     this.insertAfter,
     this.sourceChunkId,
     this.cardType,
@@ -191,6 +195,8 @@ class ReaderItem {
     String? pageReference,
     String? sectionTitle,
     String? sectionRole,
+    int? pageStart,
+    int? pageEnd,
     String? insertAfter,
     String? sourceChunkId,
     String? cardType,
@@ -215,6 +221,8 @@ class ReaderItem {
       pageReference: pageReference ?? this.pageReference,
       sectionTitle: sectionTitle ?? this.sectionTitle,
       sectionRole: sectionRole ?? this.sectionRole,
+      pageStart: pageStart ?? this.pageStart,
+      pageEnd: pageEnd ?? this.pageEnd,
       insertAfter: insertAfter ?? this.insertAfter,
       sourceChunkId: sourceChunkId ?? this.sourceChunkId,
       cardType: cardType ?? this.cardType,
@@ -244,6 +252,8 @@ class ReaderItem {
       pageReference: json['page_reference']?.toString(),
       sectionTitle: json['section_title']?.toString(),
       sectionRole: json['section_role']?.toString() ?? json['sectionRole']?.toString(),
+      pageStart: (json['page_start'] as num?)?.toInt(),
+      pageEnd: (json['page_end'] as num?)?.toInt(),
       insertAfter: insertAfter,
       sourceChunkId: sourceChunkId,
       cardType: json['card_type']?.toString(),
@@ -296,6 +306,7 @@ class ReaderData {
   final List<ReaderItem> items;
   final List<ReaderItem> cards;
   final Map<String, Map<String, dynamic>> chunkEditsMap;
+  final Map<String, dynamic>? structure;
 
   const ReaderData({
     required this.docId,
@@ -314,6 +325,7 @@ class ReaderData {
     required this.items,
     this.cards = const [],
     this.chunkEditsMap = const {},
+    this.structure,
   });
 
   ReaderData copyWith({
@@ -333,6 +345,7 @@ class ReaderData {
     List<ReaderItem>? items,
     List<ReaderItem>? cards,
     Map<String, Map<String, dynamic>>? chunkEditsMap,
+    Map<String, dynamic>? structure,
   }) {
     return ReaderData(
       docId: docId ?? this.docId,
@@ -351,6 +364,7 @@ class ReaderData {
       items: items ?? this.items,
       cards: cards ?? this.cards,
       chunkEditsMap: chunkEditsMap ?? this.chunkEditsMap,
+      structure: structure ?? this.structure,
     );
   }
 
@@ -398,6 +412,9 @@ class ReaderData {
               ReaderItem.fromJson(e.map((k, v) => MapEntry(k.toString(), v))))
           .toList(),
       chunkEditsMap: chunkEditsMap,
+      structure: (json['structure'] is Map)
+          ? Map<String, dynamic>.from(json['structure'] as Map)
+          : null,
     );
   }
 }

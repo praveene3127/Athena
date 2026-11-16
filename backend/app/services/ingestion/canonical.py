@@ -85,15 +85,24 @@ def assemble_canonical_text(
     if not units:
         return "", []
 
-    # Semantic Zone Partitioning: Exclude printed TOC entries, noise, and footnotes while preserving substantive preface/foreword prose (RC-04)
+    # Semantic Zone Partitioning: Exclude printed TOC entries, noise, footnotes, and back-matter indexes (RC-04)
+    preserved_roles = {
+        "preface", "foreword", "prologue", "introduction", "part", "chapter",
+        "epilogue", "afterword", "appendix", "acknowledgments", "acknowledgements",
+        "dedication", "notes", "endnotes", "bibliography", "references"
+    }
+
     def _is_droppable_unit(u: Dict[str, Any]) -> bool:
         u_type = u.get("type")
         if u_type in ("contents_entry", "noise", "footnote"):
             return True
+        role = (u.get("section_role") or "").lower()
+        if role in preserved_roles:
+            return False
         if u_type in ("front_matter", "back_matter"):
             text_low = u.get("text", "").lower()
-            if any(term in text_low for term in ("preface", "foreword", "prologue", "introduction")):
-                if len(text_low.split()) >= 40:
+            if any(term in text_low for term in ("preface", "foreword", "prologue", "introduction", "acknowledgments", "acknowledgements")):
+                if len(text_low.split()) >= 20:
                     return False
             return True
         return False
@@ -148,6 +157,8 @@ def assemble_canonical_text(
             "page_end": u.get("page_end", 1),
             "type": u.get("type", "paragraph"),
             "heading": u.get("type") == "heading",
+            "section_title": u.get("section_title"),
+            "section_role": u.get("section_role", "chapter"),
             "bbox": u.get("bbox"),
             "font_size": u.get("font_size"),
             "is_bold": u.get("is_bold", False),

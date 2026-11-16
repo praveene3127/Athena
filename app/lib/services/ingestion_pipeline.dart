@@ -3556,10 +3556,37 @@ class TocDetector {
       }
     }
 
+    // Index page check: An index page is never a TOC
+    final hasIndexHeader = RegExp(r'^\s*(?:general\s+|subject\s+|author\s+)?index\s*$', caseSensitive: false);
+    final commaIndexLineRe = RegExp(r'^[A-Za-z][^,\n]{1,40}(?:,\s*\d+){2,}');
+    final firstLinesList = rawPageText.split('\n').map((l) => l.trim()).where((l) => l.isNotEmpty).toList();
+    if (firstLinesList.isNotEmpty && hasIndexHeader.hasMatch(firstLinesList.first)) {
+      return const TocDetectionResult(isToc: false, entries: []);
+    }
+    int commaIndexLines = 0;
+    for (final l in firstLinesList) {
+      if (commaIndexLineRe.hasMatch(l)) {
+        commaIndexLines++;
+      }
+    }
+    if (commaIndexLines >= 3) {
+      return const TocDetectionResult(isToc: false, entries: []);
+    }
+
+    // Never classify a page in the back 25% of a document as a TOC unless explicit Contents header exists
+    if (pageNum != null && totalPages != null && totalPages > 0) {
+      final isBack25 = pageNum > (totalPages * 0.75).floor();
+      if (isBack25 && !hasContentsHeader) {
+        return const TocDetectionResult(isToc: false, entries: []);
+      }
+    }
+
     // Only run TocDetector on pages in the first 15% of the book (or up to page 30)
     // OR pages with an explicit Contents / Table of Contents heading (S-1)
     if (pageNum != null && totalPages != null && totalPages > 0) {
-      final isEarlyPage = pageNum <= 30 || pageNum <= (totalPages * 0.15).ceil();
+      final isEarlyPage = totalPages <= 30
+          ? (pageNum <= 5)
+          : (pageNum <= 30 || pageNum <= (totalPages * 0.15).ceil());
       if (!isEarlyPage && !hasContentsHeader && !isContinuation) {
         return const TocDetectionResult(isToc: false, entries: []);
       }

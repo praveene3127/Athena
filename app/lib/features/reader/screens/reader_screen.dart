@@ -366,7 +366,40 @@ class _ReaderScreenState extends ConsumerState<ReaderScreen>
     if (!mounted) return;
     try {
       final docMap = await LocalDatabase.instance.getDocument(widget.documentId);
-      if (docMap == null) return;
+      if (docMap == null) {
+        // Companion server path: poll server for status & chunks
+        final client = ref.read(apiClientProvider);
+        final statusMap = await client.getDocumentStatus(widget.documentId);
+        final status = statusMap['status']?.toString() ?? 'ready';
+        final processedPages = (statusMap['processed_pages'] as num?)?.toInt() ??
+            (statusMap['processed_page'] as num?)?.toInt() ??
+            _lastReaderData?.processedPages;
+        final pageCount = (statusMap['page_count'] as num?)?.toInt() ?? _lastReaderData?.pageCount ?? 0;
+
+        final statusChanged = status != _lastReaderData?.status;
+        final pagesChanged = processedPages != _lastReaderData?.processedPages;
+
+        if (statusChanged || pagesChanged || _lastReaderData == null) {
+          final readerJson = await client.getReader(widget.documentId);
+          final remoteData = ReaderData.fromJson(readerJson);
+
+          if (!mounted) return;
+          setState(() {
+            _lastReaderData = remoteData.copyWith(
+              status: status,
+              processedPages: processedPages,
+              pageCount: pageCount,
+            );
+            _recomputeCachedFeed();
+          });
+        }
+
+        if (status == 'ready' || status == 'failed' || status == 'unsupported') {
+          _partialSyncTimer?.cancel();
+          _partialSyncTimer = null;
+        }
+        return;
+      }
       final status = docMap['status']?.toString() ?? 'ready';
       final processedPages = (docMap['processed_pages'] as num?)?.toInt() ??
           (docMap['processed_page'] as num?)?.toInt() ??

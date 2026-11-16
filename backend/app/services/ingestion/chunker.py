@@ -286,6 +286,9 @@ def _make_reading_atoms(
     """Create safe paragraph/sentence units; headings stay with their opening text."""
     atoms: List[Dict[str, Any]] = []
     index = 0
+    active_section_title: Optional[str] = None
+    active_section_role: str = "chapter"
+
     while index < len(units):
         unit = units[index]
 
@@ -300,9 +303,14 @@ def _make_reading_atoms(
                 section_title = f"{section_title}: {units[index]['text'].strip()}"
                 index += 1
 
+            active_section_title = section_title
+            active_section_role = unit.get("section_role") or "chapter"
+
             if index < len(units):
                 body = units[index]
                 body_text = body["text"]
+                if body.get("section_role"):
+                    active_section_role = body["section_role"]
                 if body["type"] == UnitType.CONTENTS_ENTRY:
                     index += 1
                     atoms.append(
@@ -313,8 +321,8 @@ def _make_reading_atoms(
                             "paragraph_id": index - 1,
                             "boundary_after": "paragraph",
                             "starts_section": True,
-                            "section_title": section_title,
-                            "section_role": unit.get("section_role") or body.get("section_role") or "chapter",
+                            "section_title": active_section_title,
+                            "section_role": active_section_role,
                         }
                     )
                     continue
@@ -338,8 +346,8 @@ def _make_reading_atoms(
                             "paragraph_id": index,
                             "boundary_after": "sentence" if len(relative_slices) > 1 else "paragraph",
                             "starts_section": part_index == 0,
-                            "section_title": section_title if part_index == 0 else None,
-                            "section_role": unit.get("section_role") or body.get("section_role") or "chapter",
+                            "section_title": active_section_title,
+                            "section_role": active_section_role,
                         }
                     )
                 index += 1
@@ -354,13 +362,18 @@ def _make_reading_atoms(
                     "paragraph_id": index - 1,
                     "boundary_after": "paragraph",
                     "starts_section": True,
-                    "section_title": section_title,
-                    "section_role": unit.get("section_role", "chapter"),
+                    "section_title": active_section_title,
+                    "section_role": active_section_role,
                 }
             )
             continue
 
         paragraph_text = unit["text"]
+        if unit.get("section_title"):
+            active_section_title = unit["section_title"]
+        if unit.get("section_role"):
+            active_section_role = unit["section_role"]
+
         word_count = _word_count(paragraph_text)
         if word_count > _FEED_MAX_WORDS or len(paragraph_text) > MAX_CHUNK_CHARS:
             relative_slices = _split_oversized_unit(
@@ -380,8 +393,8 @@ def _make_reading_atoms(
                     "paragraph_id": index,
                     "boundary_after": "sentence" if len(relative_slices) > 1 else "paragraph",
                     "starts_section": False,
-                    "section_title": None,
-                    "section_role": unit.get("section_role", "chapter"),
+                    "section_title": active_section_title,
+                    "section_role": active_section_role,
                 }
             )
         index += 1
@@ -576,7 +589,9 @@ def chunk_document(
             "document_id": doc_id,
             "sequence": seq,
             "section_title": section_title,
-            "section_role": section_role,
+            "section_role": section_role or "chapter",
+            "page_start": pages[0] if pages else 1,
+            "page_end": pages[-1] if pages else 1,
             "raw_text": raw_text,
             "source_pages_json": pages,
             "start_offset": c_start,

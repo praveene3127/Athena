@@ -103,12 +103,88 @@ class SectionRole:
         return not cls.is_readable(role)
 
 
+def detect_section_role_from_title(val: Optional[str]) -> str:
+    """Canonical heading & role matcher matching Dart SectionRole.fromString."""
+    if not val or not val.strip():
+        return SectionRole.UNKNOWN
+    clean = val.strip().lower()
+    for role in [
+        SectionRole.COVER, SectionRole.HALF_TITLE, SectionRole.TITLE_PAGE,
+        SectionRole.COPYRIGHT, SectionRole.DEDICATION, SectionRole.EPIGRAPH,
+        SectionRole.TOC, SectionRole.LIST_OF_FIGURES, SectionRole.PRAISE,
+        SectionRole.ALSO_BY, SectionRole.FOREWORD, SectionRole.PREFACE,
+        SectionRole.ACKNOWLEDGMENTS, SectionRole.INTRODUCTION, SectionRole.PROLOGUE,
+        SectionRole.PART, SectionRole.CHAPTER, SectionRole.EPILOGUE,
+        SectionRole.AFTERWORD, SectionRole.APPENDIX, SectionRole.NOTES,
+        SectionRole.GLOSSARY, SectionRole.BIBLIOGRAPHY, SectionRole.INDEX,
+        SectionRole.ABOUT_AUTHOR, SectionRole.AD_CARD
+    ]:
+        if role.lower() == clean:
+            return role
+
+    words = [w for w in re.split(r"[^a-z0-9]+", clean) if w]
+    if not words:
+        return SectionRole.UNKNOWN
+
+    first = words[0]
+    if any(w in ("contents", "toc") for w in words):
+        return SectionRole.TOC
+    if any(w == "preface" for w in words):
+        return SectionRole.PREFACE
+    if any(w == "foreword" for w in words):
+        return SectionRole.FOREWORD
+    if any(w == "dedication" for w in words):
+        return SectionRole.DEDICATION
+    if any(w == "epigraph" for w in words):
+        return SectionRole.EPIGRAPH
+    if any(w in ("prologue", "prolog") for w in words):
+        return SectionRole.PROLOGUE
+    if any(w in ("epilogue", "epilog") for w in words):
+        return SectionRole.EPILOGUE
+    if any(w == "afterword" for w in words):
+        return SectionRole.AFTERWORD
+    if any(w == "appendix" for w in words):
+        return SectionRole.APPENDIX
+    if any(w == "copyright" for w in words):
+        return SectionRole.COPYRIGHT
+    if any(w == "glossary" for w in words):
+        return SectionRole.GLOSSARY
+    if any(w in ("notes", "endnotes") for w in words):
+        return SectionRole.NOTES
+    if any(w.startswith("biblio") or w in ("references", "citations") for w in words):
+        return SectionRole.BIBLIOGRAPHY
+
+    # acknowledgments: token starts with 'acknowledg' or equals 'thanks'
+    if any(w.startswith("acknowledg") or w == "thanks" for w in words):
+        return SectionRole.ACKNOWLEDGMENTS
+
+    # introduction: token equals 'introduction' or 'intro'
+    if any(w in ("introduction", "intro") for w in words):
+        return SectionRole.INTRODUCTION
+
+    # part: first token equals 'part'
+    if first == "part":
+        return SectionRole.PART
+
+    # bookIndex: token equals 'index' (and not 'index_split')
+    if any(w == "index" and "index_split" not in clean for w in words):
+        return SectionRole.INDEX
+
+    # chapter: first token equals 'chapter' or 'ch'
+    if first in ("chapter", "ch"):
+        return SectionRole.CHAPTER
+
+    return SectionRole.UNKNOWN
+
+
 # Regexes for lists, numbers, and contents entries
 RE_LIST_BULLET = re.compile(r"^([•*\-–—▪▫◦]|\d+[\.\)]|\([a-zA-Z0-9]+\))\s+")
 RE_CONTENTS_LEADER = re.compile(r"(\.{3,}|_{3,}|\s{4,})\s*\d+$")
 RE_DIGITS = re.compile(r"\d+")
 RE_PUNCTUATION_END = re.compile(r"[.!?:\”\"']$")
 RE_LINE_HYPHEN = re.compile(r"([A-Za-z]+)-\s*$")
+RE_INDEX_HEADER = re.compile(r"^\s*(?:general\s+|subject\s+|author\s+)?index\s*$", re.IGNORECASE)
+RE_INDEX_LINE = re.compile(r"^[A-Za-z][^,\n]{1,40}(?:,\s*\d+){2,}")
 
 
 def _looks_like_two_columns(blocks: List[Dict[str, Any]], page_width: float) -> bool:
@@ -288,9 +364,6 @@ def detect_printed_toc_page(
     A page is classified as TOC if it meets >= 2 of these rules (or Rule 1 with >= 2 page-numbered entries).
     Only applies to front matter (first 25% of the book, or first 30 pages).
     """
-    if total_pages > 0 and page_num > max(30, int(total_pages * 0.25)):
-        return False, []
-
     all_lines: List[Dict[str, Any]] = []
     for b in blocks:
         for l in b.get("lines", []):
@@ -303,12 +376,26 @@ def detect_printed_toc_page(
 
     line_texts = [l["text"].strip() for l in all_lines]
 
+    # Index check: If page has Index header OR >= 3 comma-separated page list lines, strictly INDEX, NEVER TOC
+    has_index_header = any(RE_INDEX_HEADER.match(t) for t in line_texts[:4])
+    index_list_lines = sum(1 for t in line_texts if RE_INDEX_LINE.match(t))
+    if has_index_header or index_list_lines >= 3:
+        return False, []
+
     # Rule 1: Header trigger in the first 4 lines
     rule1_header = False
     for t in line_texts[:4]:
         if RE_TOC_HEADER.search(t):
             rule1_header = True
             break
+
+    # Back 25% check: Never classify a page in the back 25% of a document as a TOC unless it has an explicit Contents header!
+    is_back_25 = total_pages > 0 and page_num > int(total_pages * 0.75)
+    if is_back_25 and not rule1_header:
+        return False, []
+
+    if total_pages > 0 and page_num > max(30, int(total_pages * 0.25)) and not rule1_header:
+        return False, []
 
     # Rule 2: Line-end digit ratio near right margin
     digit_lines_count = 0
@@ -481,6 +568,7 @@ def extract_document_structure(
     # 3. Stage 3: Reading Order & Column Gutter Detection
     page_ordered_blocks: List[List[Dict[str, Any]]] = []
     is_multi_column_doc = False
+    body_started = False
     multi_col_page_count = 0
     uncertain_order_page_count = 0
 
@@ -556,7 +644,17 @@ def extract_document_structure(
 
         # Edge AI Front-Matter & Noise Page Detection (Gopher grammar density + FastEmbed ONNX)
         page_full_raw = "\n".join(page_all_texts)
-        is_front_matter_page = is_front_matter_or_noise_page(page_idx, total_pages, page_full_raw)
+        has_body_heading = any(
+            detect_section_role_from_title(t.split("\n")[0].strip()) in (SectionRole.CHAPTER, SectionRole.PART, SectionRole.INTRODUCTION)
+            for t in page_all_texts
+        )
+        if has_body_heading:
+            body_started = True
+
+        if body_started:
+            is_front_matter_page = False
+        else:
+            is_front_matter_page = is_front_matter_or_noise_page(page_idx, total_pages, page_full_raw)
 
         # Back-Matter Page Detection (last 20% of pages containing Index, Bibliography, etc.)
         is_back_matter_page = False
@@ -573,7 +671,36 @@ def extract_document_structure(
         for b in p_blocks:
             ph = b["page_height"]
             pw = b["page_width"]
-            lines = b["lines"]
+            lines = list(b["lines"])
+            if not lines:
+                continue
+
+            # Check if first line of block is an explicit standalone section heading
+            first_line_str = lines[0]["text"].strip()
+            first_line_role = detect_section_role_from_title(first_line_str)
+            if (
+                len(lines) > 1
+                and first_line_role not in (SectionRole.UNKNOWN, SectionRole.TOC)
+                and len(first_line_str.split()) <= 8
+                and not first_line_str.endswith((".", ";"))
+            ):
+                heading_line = lines[0]
+                heading_span = heading_line["spans"][0] if heading_line.get("spans") else None
+                h_size = float(heading_span.get("size", body_size)) if heading_span else body_size
+                h_bold = bool(int(heading_span.get("flags", 0)) & 16) if heading_span else False
+                typed_page.append({
+                    "type": BlockType.HEADING,
+                    "bbox": heading_line["bbox"],
+                    "lines": [heading_line],
+                    "text": first_line_str,
+                    "font_size": h_size,
+                    "is_bold": h_bold,
+                    "page": page_num,
+                    "page_width": pw,
+                    "page_height": ph,
+                })
+                lines = lines[1:]
+
             block_text = " ".join(l["text"] for l in lines).strip()
             if not block_text:
                 continue
@@ -610,7 +737,17 @@ def extract_document_structure(
             words = block_text.split()
             word_count = len(words)
 
-            if is_toc_page:
+            clean_first = lines[0]["text"].strip() if lines else block_text.split("\n")[0].strip()
+            role_candidate = detect_section_role_from_title(clean_first)
+            is_explicit_section_heading = (
+                role_candidate not in (SectionRole.UNKNOWN, SectionRole.TOC)
+                and word_count <= 14
+                and not block_text.endswith((".", ";"))
+            )
+
+            if is_explicit_section_heading:
+                b_type = BlockType.HEADING
+            elif is_toc_page:
                 b_type = BlockType.CONTENTS_ENTRY
             elif is_front_matter_page:
                 b_type = BlockType.FRONT_MATTER
@@ -780,6 +917,21 @@ def extract_document_structure(
                 continue
 
         merged_units.append(b)
+
+    # 9. Carry active_section_title and active_section_role across all units
+    active_section_title: Optional[str] = None
+    active_section_role: str = "chapter"
+
+    for b in merged_units:
+        if b["type"] == BlockType.HEADING:
+            clean_title = re.sub(r"[\s\:\-]+$", "", b["text"]).strip()
+            active_section_title = clean_title
+            active_section_role = detect_section_role_from_title(clean_title)
+            b["section_title"] = active_section_title
+            b["section_role"] = active_section_role
+        else:
+            b["section_title"] = active_section_title
+            b["section_role"] = active_section_role
 
     return {
         "body_size": body_size,

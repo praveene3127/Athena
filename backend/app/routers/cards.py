@@ -7,6 +7,7 @@ from sqlmodel import Session, select
 from app.db import get_session
 from app.errors import AppException
 from app.models import ContextCard, Document, ReadingChunk
+from app.state.machines import apply_transition
 
 router = APIRouter(tags=["cards"])
 
@@ -131,6 +132,8 @@ def save_card(id: str, session: Session = Depends(get_session)) -> Dict[str, Any
     card = session.get(ContextCard, id)
     if not card:
         raise AppException("NOT_FOUND", "Card not found", status_code=404)
+    cur_state = "dismissed" if card.dismissed else ("saved" if card.saved else "unseen")
+    apply_transition("CardUserState", id, cur_state, "saved", reason="user_save")
     card.saved = True
     card.dismissed = False
     session.add(card)
@@ -143,6 +146,8 @@ def unsave_card(id: str, session: Session = Depends(get_session)) -> Dict[str, A
     card = session.get(ContextCard, id)
     if not card:
         raise AppException("NOT_FOUND", "Card not found", status_code=404)
+    cur_state = "saved" if card.saved else "unseen"
+    apply_transition("CardUserState", id, cur_state, "viewed", reason="user_unsave")
     card.saved = False
     session.add(card)
     session.commit()
@@ -154,7 +159,10 @@ def dismiss_card(id: str, session: Session = Depends(get_session)) -> Dict[str, 
     card = session.get(ContextCard, id)
     if not card:
         raise AppException("NOT_FOUND", "Card not found", status_code=404)
+    cur_state = "saved" if card.saved else ("dismissed" if card.dismissed else "unseen")
+    apply_transition("CardUserState", id, cur_state, "dismissed", reason="user_dismiss")
     card.dismissed = True
+    card.saved = False
     session.add(card)
     session.commit()
     return {"id": card.id, "dismissed": True}
@@ -165,17 +173,28 @@ def restore_card(id: str, session: Session = Depends(get_session)) -> Dict[str, 
     card = session.get(ContextCard, id)
     if not card:
         raise AppException("NOT_FOUND", "Card not found", status_code=404)
+    cur_state = "dismissed" if card.dismissed else "unseen"
+    apply_transition("CardUserState", id, cur_state, "viewed", reason="user_restore")
     card.dismissed = False
     session.add(card)
     session.commit()
     return {"id": card.id, "dismissed": False}
 
 
+@router.post("/api/saved/clear")
+def clear_saved_cards(session: Session = Depends(get_session)) -> Dict[str, Any]:
+    """Atomically unsaves all saved cards and quotes in one transaction."""
+    from sqlalchemy import text
+    session.execute(text("UPDATE context_cards SET saved = 0 WHERE saved = 1"))
+    session.commit()
+    return {"status": "cleared", "message": "All saved items cleared"}
+
+
 @router.get("/api/saved")
 def get_saved_cards(session: Session = Depends(get_session)) -> List[Dict[str, Any]]:
     """Returns saved cards with document and chunk context."""
     cards = session.exec(
-        select(ContextCard).where(ContextCard.saved == True)
+        select(ContextCard).where(ContextCard.saved == True, ContextCard.dismissed == False)
     ).all()
 
     results: List[Dict[str, Any]] = []

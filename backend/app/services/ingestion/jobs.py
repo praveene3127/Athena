@@ -18,6 +18,8 @@ from app.services.ingestion.integrity import verify_integrity
 from app.services.marginalia.concepts import extract_concepts
 from app.services.marginalia.cards import generate_context_cards
 from app.services.edge.bouncer import classify_document_purpose
+from app.services.edge.novelty import compute_simhash_low
+from app.state.machines import apply_transition
 
 logger = logging.getLogger(__name__)
 
@@ -26,9 +28,9 @@ _executor = ThreadPoolExecutor(max_workers=1)
 
 
 def cleanup_interrupted_jobs() -> None:
-    """Marks any lingering 'queued' or 'processing' documents as paused or failed INTERRUPTED on startup."""
+    """Marks any lingering 'queued', 'processing', or 'partially_readable' documents as paused or failed INTERRUPTED on startup."""
     with Session(engine) as session:
-        statement = select(Document).where(Document.status.in_(["queued", "processing"]))
+        statement = select(Document).where(Document.status.in_(["queued", "processing", "partially_readable"]))
         stale_docs = session.exec(statement).all()
         for doc in stale_docs:
             if doc.processed_page and doc.processed_page > 0:
@@ -64,7 +66,7 @@ def _update_doc_progress(
             if hasattr(doc, "context_status"):
                 doc.context_status = stage
         else:
-            doc.status = status
+            doc.status = apply_transition("DocumentLifecycle", doc_id, doc.status, status, reason=f"stage={stage}")
         doc.updated_at = utc_now()
         session.add(doc)
         session.commit()
@@ -120,7 +122,7 @@ def process_document_job(doc_id: str) -> None:
             )
 
             # Stage-0 Document Bouncer: Admission & Genre Triage Gate
-            if doc.error_message != "FORCE_ACCEPTED":
+            if not doc.force_accept:
                 pages_meta = extracted.get("triage", {}).get("pages", [])
                 sample_texts = [extracted.get("canonical_text", "")]
                 bouncer_result = classify_document_purpose(
@@ -171,42 +173,72 @@ def process_document_job(doc_id: str) -> None:
             session.exec(delete(DocumentChapter).where(DocumentChapter.doc_id == doc_id))
 
             # Persist chunks as ReadingChunk rows
+            total_pages = doc.page_count or 1
+            has_partial = total_pages > 16
+
+            early_chunks = []
+            later_chunks = []
             for cd in chunk_dicts:
+                pages = cd.get("source_pages_json") or []
+                if isinstance(pages, str):
+                    try:
+                        pages = json.loads(pages)
+                    except Exception:
+                        pages = []
+                p_start = int(pages[0]) if pages else int(cd.get("page_start", 1))
+                p_end = int(pages[-1]) if pages else int(cd.get("page_end", p_start))
+                raw_text = cd["raw_text"]
+                simhash_low = compute_simhash_low(raw_text)
+
                 chunk_row = ReadingChunk(
                     id=cd["id"],
                     document_id=doc_id,
                     sequence=cd["sequence"],
-                    section_title=cd["section_title"],
-                    raw_text=cd["raw_text"],
-                    source_pages_json=json.dumps(cd["source_pages_json"]),
+                    section_title=cd.get("section_title"),
+                    section_role=cd.get("section_role") or "chapter",
+                    page_start=p_start,
+                    page_end=p_end,
+                    simhash_low=simhash_low,
+                    raw_text=raw_text,
+                    source_pages_json=json.dumps(pages),
                     start_offset=cd["start_offset"],
                     end_offset=cd["end_offset"],
                     checksum=cd["checksum"],
                     boundary_method=cd.get("boundary_method", "paragraph"),
                     canonical_sha256=cd.get("canonical_sha256"),
                 )
-                session.add(chunk_row)
-            session.commit()
+                if has_partial and p_start <= 16:
+                    early_chunks.append(chunk_row)
+                else:
+                    later_chunks.append(chunk_row)
 
-            # Sync to SQLite C-engine FTS5 virtual table
-            try:
-                from sqlalchemy import text
-                session.execute(text("DELETE FROM reading_chunks_fts WHERE document_id = :doc_id"), {"doc_id": doc_id})
-                for cd in chunk_dicts:
-                    session.execute(
-                        text("INSERT INTO reading_chunks_fts (chunk_id, document_id, sequence, section_title, raw_text) "
-                             "VALUES (:chunk_id, :document_id, :sequence, :section_title, :raw_text)"),
-                        {
-                            "chunk_id": cd["id"],
-                            "document_id": doc_id,
-                            "sequence": cd["sequence"],
-                            "section_title": cd.get("section_title") or "",
-                            "raw_text": cd["raw_text"],
-                        }
-                    )
+            if has_partial and early_chunks:
+                for c in early_chunks:
+                    session.add(c)
+                doc.processed_page = 16
+                doc.last_checkpoint_page = 16
+                doc.status = "partially_readable"
+                doc.stage = "chunking"
+                doc.percent = 60
+                doc.updated_at = utc_now()
+                session.add(doc)
                 session.commit()
-            except Exception:
-                pass
+
+                for c in later_chunks:
+                    session.add(c)
+                doc.processed_page = total_pages
+                doc.last_checkpoint_page = total_pages
+                doc.updated_at = utc_now()
+                session.add(doc)
+                session.commit()
+            else:
+                for c in (early_chunks + later_chunks):
+                    session.add(c)
+                doc.processed_page = total_pages
+                doc.last_checkpoint_page = total_pages
+                doc.updated_at = utc_now()
+                session.add(doc)
+                session.commit()
 
             # Build page to chunk index mapping and save TOC chapters
             raw_toc = extracted.get("raw_toc", [])
@@ -225,7 +257,7 @@ def process_document_job(doc_id: str) -> None:
                         page_to_first_chunk[p0] = seq
 
             if raw_toc:
-                chapters_data = extract_toc_with_chunk_mapping(raw_toc, page_to_first_chunk)
+                chapters_data = extract_toc_with_chunk_mapping(raw_toc, page_to_first_chunk, chunks=chunk_dicts)
                 for ch in chapters_data:
                     chap_row = DocumentChapter(
                         doc_id=doc_id,
@@ -272,6 +304,9 @@ def process_document_job(doc_id: str) -> None:
             doc.reconstructed_checksum = integrity_result["reconstructed_checksum"]
             doc.canonical_sha256 = integrity_result["original_checksum"]
             doc.status = "ready"  # Immediately readable upon integrity verification
+            doc.stage = "done"
+            doc.percent = 100
+            doc.updated_at = utc_now()
             session.add(doc)
             session.commit()
 
@@ -403,7 +438,15 @@ def _run_isolated_document_job(doc_id: str) -> None:
                     if doc:
                         current_percent = doc.percent or 0
                         current_page = doc.processed_page or 0
-                        if current_percent != last_percent or current_page != last_page:
+                        heartbeat_active = False
+                        if doc.updated_at:
+                            from datetime import datetime, timezone
+                            dt = doc.updated_at
+                            if dt.tzinfo is None:
+                                dt = dt.replace(tzinfo=timezone.utc)
+                            if (datetime.now(timezone.utc) - dt).total_seconds() < 30:
+                                heartbeat_active = True
+                        if current_percent != last_percent or current_page != last_page or heartbeat_active:
                             last_percent = current_percent
                             last_page = current_page
                             last_progress_time = now
@@ -494,11 +537,18 @@ def reset_and_requeue_document(doc_id: str) -> None:
 
 
 def force_requeue_document(doc_id: str) -> None:
-    """Deletes existing derived items, sets FORCE_ACCEPTED marker, and force-requeues the document."""
+    """Deletes existing derived items, sets force_accept flag, and force-requeues the document."""
     with Session(engine) as session:
         doc = session.get(Document, doc_id)
         if not doc:
             raise AppException("NOT_FOUND", status_code=404)
+
+        if doc.status not in ("unsupported", "failed"):
+            raise AppException(
+                "CONFLICT",
+                f"Document in status '{doc.status}' cannot be force-ingested. Only unsupported or failed documents can be force-ingested.",
+                status_code=409,
+            )
 
         # Clean existing derived items
         session.exec(delete(ReadingChunk).where(ReadingChunk.document_id == doc_id))
@@ -506,12 +556,13 @@ def force_requeue_document(doc_id: str) -> None:
         session.exec(delete(ContextCard).where(ContextCard.document_id == doc_id))
         session.exec(delete(DocumentChapter).where(DocumentChapter.doc_id == doc_id))
 
-        # Reset document status with FORCE_ACCEPTED marker
+        # Reset document status with force_accept flag
         doc.status = "queued"
         doc.stage = "validating"
         doc.percent = 0
         doc.error_code = None
-        doc.error_message = "FORCE_ACCEPTED"
+        doc.error_message = None
+        doc.force_accept = True
         doc.canonical_text = None
         doc.spans_json = None
         doc.integrity_verified = False
