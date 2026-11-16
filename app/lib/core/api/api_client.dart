@@ -1971,7 +1971,9 @@ class ApiClient {
     // Provider settings are non-secret; credentials are kept in OS secure storage.
     final prefs = await SharedPreferences.getInstance();
     await prefs.setString('athena_ai_primary_provider', primaryProvider);
-    if (primaryApiKey != null && !primaryApiKey.contains('...')) {
+    if (primaryApiKey != null &&
+        !primaryApiKey.contains('...') &&
+        !primaryApiKey.contains('••••')) {
       await SecureStorageService.instance
           .setAIKey('athena_ai_primary_api_key', primaryApiKey);
     }
@@ -1984,7 +1986,9 @@ class ApiClient {
     if (fallbackProvider != null) {
       await prefs.setString('athena_ai_fallback_provider', fallbackProvider);
     }
-    if (fallbackApiKey != null && !fallbackApiKey.contains('...')) {
+    if (fallbackApiKey != null &&
+        !fallbackApiKey.contains('...') &&
+        !fallbackApiKey.contains('••••')) {
       await SecureStorageService.instance
           .setAIKey('athena_ai_fallback_api_key', fallbackApiKey);
     }
@@ -2002,17 +2006,23 @@ class ApiClient {
           '/api/settings/ai-config',
           data: {
             'primary_provider': primaryProvider,
-            if (primaryApiKey != null) 'primary_api_key': primaryApiKey,
+            if (primaryApiKey != null &&
+                !primaryApiKey.contains('...') &&
+                !primaryApiKey.contains('••••'))
+              'primary_api_key': primaryApiKey,
             if (primaryModel != null) 'primary_model': primaryModel,
             if (primaryBaseUrl != null) 'primary_base_url': primaryBaseUrl,
             if (fallbackProvider != null) 'fallback_provider': fallbackProvider,
-            if (fallbackApiKey != null) 'fallback_api_key': fallbackApiKey,
+            if (fallbackApiKey != null &&
+                !fallbackApiKey.contains('...') &&
+                !fallbackApiKey.contains('••••'))
+              'fallback_api_key': fallbackApiKey,
             if (fallbackModel != null) 'fallback_model': fallbackModel,
             if (fallbackBaseUrl != null) 'fallback_base_url': fallbackBaseUrl,
           },
           options: Options(
-            sendTimeout: const Duration(seconds: 3),
-            receiveTimeout: const Duration(seconds: 4),
+            sendTimeout: const Duration(seconds: 4),
+            receiveTimeout: const Duration(seconds: 6),
           ),
         );
         return response.data as Map<String, dynamic>;
@@ -2032,18 +2042,15 @@ class ApiClient {
     final pKey = provider.toLowerCase();
     final cleanKey = (apiKey ?? '').trim();
 
-    if (pKey != 'custom' && (cleanKey.isEmpty || cleanKey.contains('...'))) {
-      return const [];
-    }
-
-    // 1. Try companion backend
-    if (_hasReachableBackend && kIsWeb) {
+    // 1. Try companion backend if reachable (even if key is empty or masked, backend matches saved credential)
+    if (_hasReachableBackend) {
       try {
         final response = await dio.post(
           '/api/settings/fetch-models',
           data: {
             'provider': provider,
-            if (cleanKey.isNotEmpty) 'api_key': cleanKey,
+            if (cleanKey.isNotEmpty && !cleanKey.contains('...') && !cleanKey.contains('••••'))
+              'api_key': cleanKey,
             if (baseUrl != null) 'base_url': baseUrl,
           },
           options: Options(
@@ -2062,6 +2069,10 @@ class ApiClient {
       } catch (e) {
         debugPrint('Athena caught error: $e');
       }
+    }
+
+    if (pKey != 'custom' && (cleanKey.isEmpty || cleanKey.contains('...') || cleanKey.contains('••••'))) {
+      return const [];
     }
 
     // 2. Direct on-device models discovery for Gemini
@@ -2298,19 +2309,20 @@ class ApiClient {
     final cleanKey = (apiKey ?? '').trim();
 
     // 1. Try companion engine backend first if configured and reachable
-    if (_hasReachableBackend && kIsWeb) {
+    if (_hasReachableBackend) {
       try {
         final response = await dio.post(
           '/api/settings/test-connection',
           data: {
             'provider': provider,
-            if (cleanKey.isNotEmpty) 'api_key': cleanKey,
+            if (cleanKey.isNotEmpty && !cleanKey.contains('...') && !cleanKey.contains('••••'))
+              'api_key': cleanKey,
             if (model != null) 'model': model,
             if (baseUrl != null) 'base_url': baseUrl,
           },
           options: Options(
-            sendTimeout: const Duration(seconds: 3),
-            receiveTimeout: const Duration(seconds: 4),
+            sendTimeout: const Duration(seconds: 4),
+            receiveTimeout: const Duration(seconds: 6),
           ),
         );
         if (response.data is Map<String, dynamic>) {

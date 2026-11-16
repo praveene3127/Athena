@@ -511,12 +511,23 @@ class ReadAheadPipeline:
                     ).first()
                     chapter_title = chapter.title if chapter else None
 
+                    ref_cites = [
+                        {
+                            "title": str(e.get("title") or concept.name)[:300],
+                            "publisher": str(e.get("publisher") or e.get("source") or "Academic Research").lower(),
+                            "url": e.get("url") or "https://crossref.org",
+                        }
+                        for e in evidence_list
+                        if e.get("url")
+                    ]
+
                     grounded = self.llm_service.generate_grounded_context(
                         concept_name=concept.name,
                         passage_text=chunk.raw_text,
                         neighbors_text=neighbors_text,
                         previous_context=prev_context_str,
                         external_evidence=evidence_text,
+                        reference_citations=ref_cites,
                         doc_title=doc.title if doc else None,
                         chapter_title=chapter_title,
                         forced_slot=active_slot,

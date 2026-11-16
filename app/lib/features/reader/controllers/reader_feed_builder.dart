@@ -115,9 +115,9 @@ FeedBuildResult buildFeedResult({
 
     final matchedCards = cardsBySeq[seq];
     if (matchedCards != null && showContextCards) {
-      // GAP-02: Enforce minChunkGapBetweenCards
+      // GAP-02: Enforce minChunkGapBetweenCards unless explicitly generated for this sequence
       final gap = seq - lastCardChunkSeq;
-      if (gap >= minChunkGapBetweenCards) {
+      if (gap >= minChunkGapBetweenCards || dynamicCardsBySeq.containsKey(seq)) {
         for (final card in matchedCards) {
           if (!dismissedCardIds.contains(card.id)) {
             feedItems.add(card);

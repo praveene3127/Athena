@@ -794,13 +794,19 @@ class LLMService:
                 if ep_type == "gemini":
                     models_to_try = [m for m in [self.model, ep_model] if m]
                     if not models_to_try:
-                        models_to_try = [ep_model]
+                        try:
+                            discovered = [m.name for m in client.models.list() if getattr(m, "supported_actions", None) and "generateContent" in m.supported_actions]
+                            models_to_try = [d.replace("models/", "") for d in discovered[:2]] if discovered else []
+                        except Exception:
+                            models_to_try = []
 
                     last_err = None
                     for candidate_model in models_to_try:
+                        clean_candidate = candidate_model.replace("models/", "")
+                        # Try with search grounding tool first
                         try:
                             gemini_response = client.models.generate_content(
-                                model=candidate_model,
+                                model=clean_candidate,
                                 contents=prompt,
                                 config=genai_types.GenerateContentConfig(
                                     tools=[genai_types.Tool(google_search=genai_types.GoogleSearch())],
@@ -809,14 +815,24 @@ class LLMService:
                             if gemini_response and gemini_response.text:
                                 raw_text = (gemini_response.text or "").strip()
                                 break
-                        except Exception as error:
-                            last_err = error
-                            logger.warning(
-                                "Gemini grounded context failed on %s (%s); trying fallback model if available",
-                                candidate_model,
-                                type(error).__name__,
-                            )
-                            continue
+                        except Exception as search_err:
+                            logger.info("Gemini Search grounding unavailable (%s), retrying without search tool...", type(search_err).__name__)
+                            try:
+                                gemini_response = client.models.generate_content(
+                                    model=clean_candidate,
+                                    contents=prompt,
+                                )
+                                if gemini_response and gemini_response.text:
+                                    raw_text = (gemini_response.text or "").strip()
+                                    break
+                            except Exception as error:
+                                last_err = error
+                                logger.warning(
+                                    "Gemini grounded context failed on %s (%s); trying fallback model if available",
+                                    clean_candidate,
+                                    type(error).__name__,
+                                )
+                                continue
                     if not raw_text and last_err:
                         raise last_err
                 else:

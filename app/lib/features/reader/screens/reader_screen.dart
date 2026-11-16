@@ -1332,7 +1332,15 @@ class _ReaderScreenState extends ConsumerState<ReaderScreen>
         : chunks.first;
     final chunkSeq = currentChunk.sequence ?? 1;
 
-    if (_cardsByChunkSeq.containsKey(chunkSeq)) return;
+    if (_cardsByChunkSeq.containsKey(chunkSeq)) {
+      final existingCard = _cardsByChunkSeq[chunkSeq]!;
+      final cardIdx = _cachedFeedItems.indexWhere(
+          (i) => i.isContextCard && (i.id == existingCard.id || i.sourceChunkId == currentChunk.id));
+      if (cardIdx >= 0) {
+        _jumpTo(cardIdx, _cachedFeedItems.length);
+      }
+      return;
+    }
 
     setState(() => _isGeneratingCard = true);
     HapticFeedback.lightImpact();
@@ -1356,6 +1364,7 @@ class _ReaderScreenState extends ConsumerState<ReaderScreen>
                 chunkSeq,
                 chunkId: currentChunk.id,
                 feedIndex: _currentIndex,
+                forceNew: true,
               );
           if (serverCard != null) {
             cardMap = Map<String, Object?>.from(serverCard);
@@ -1387,6 +1396,7 @@ class _ReaderScreenState extends ConsumerState<ReaderScreen>
         if (mounted) {
           setState(() {
             _cardsByChunkSeq[chunkSeq] = cardItem;
+            _cardSlotStates[chunkSeq] = const CardSlotState(CardSlotStatus.ready);
             _recomputeCachedFeed();
             _isGeneratingCard = false;
           });
@@ -1402,9 +1412,8 @@ class _ReaderScreenState extends ConsumerState<ReaderScreen>
           setState(() => _isGeneratingCard = false);
           ScaffoldMessenger.of(context).showSnackBar(
             const SnackBar(
-              content: Text(
-                  'No verified academic evidence found for this passage.'),
-              duration: Duration(seconds: 2),
+              content: Text('Could not generate AI card for this passage. Check your AI settings or API key.'),
+              duration: Duration(seconds: 3),
             ),
           );
         }

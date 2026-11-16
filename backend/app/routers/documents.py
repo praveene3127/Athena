@@ -824,6 +824,7 @@ async def get_reader(
 
     # Fetch active (non-dismissed) context cards for the window
     chunk_ids = [c.id for c in chunks]
+    chunk_seq_by_id = {c.id: c.sequence for c in chunks}
     cards = []
     if chunk_ids:
         cards = session.exec(
@@ -844,8 +845,8 @@ async def get_reader(
                 citations = json.loads(card.citations_json)
             except Exception:
                 citations = []
-        seq_num = None
-        if card.source_chunk_id:
+        seq_num = chunk_seq_by_id.get(card.source_chunk_id)
+        if seq_num is None and card.source_chunk_id:
             m = re.search(r"-c(\d+)$", card.source_chunk_id)
             if m:
                 seq_num = int(m.group(1))

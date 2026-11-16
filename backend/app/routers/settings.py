@@ -226,6 +226,19 @@ async def save_ai_config(
     saved.primary_model = payload.primary_model or ""
     saved.primary_base_url = payload.primary_base_url
 
+    # Dynamic live model auto-discovery if primary_model is empty
+    if not saved.primary_model and (saved.primary_api_key or saved.primary_provider.lower() == "custom"):
+        try:
+            live_models = await fetch_provider_models(
+                provider=saved.primary_provider,
+                api_key=decrypt_secret(saved.primary_api_key) if saved.primary_api_key else None,
+                base_url=saved.primary_base_url,
+            )
+            if live_models:
+                saved.primary_model = live_models[0]["id"]
+        except Exception as dm_err:
+            logger.info("Could not auto-discover primary live model: %s", dm_err)
+
     # Fallback provider & key update
     if not payload.fallback_provider:
         saved.fallback_provider = None
@@ -252,6 +265,19 @@ async def save_ai_config(
         saved.fallback_provider = payload.fallback_provider
         saved.fallback_model = payload.fallback_model
         saved.fallback_base_url = payload.fallback_base_url
+
+        # Dynamic live model auto-discovery if fallback_model is empty
+        if not saved.fallback_model and (saved.fallback_api_key or (saved.fallback_provider or "").lower() == "custom"):
+            try:
+                live_fb_models = await fetch_provider_models(
+                    provider=saved.fallback_provider,
+                    api_key=decrypt_secret(saved.fallback_api_key) if saved.fallback_api_key else None,
+                    base_url=saved.fallback_base_url,
+                )
+                if live_fb_models:
+                    saved.fallback_model = live_fb_models[0]["id"]
+            except Exception as fb_err:
+                logger.info("Could not auto-discover fallback live model: %s", fb_err)
     saved.updated_at = utc_now()
 
     session.add(saved)

@@ -3,6 +3,7 @@ import 'package:flutter/services.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 import 'package:athena/core/api/api_client.dart';
+import 'package:athena/core/config/config.dart';
 import 'package:athena/core/theme/theme.dart';
 import 'package:athena/models/ai_provider.dart';
 import 'package:athena/services/secure_storage_service.dart';
@@ -122,6 +123,11 @@ class _BYOKSettingsSheetState extends State<BYOKSettingsSheet> {
   final _serverUrlController = TextEditingController();
   final _pairingTokenController = TextEditingController();
 
+  bool _hasSavedServerKey = false;
+  String? _maskedServerKey;
+  bool _hasSavedFallbackServerKey = false;
+  String? _maskedFallbackServerKey;
+
   // Fallback AI Engine state
   bool _expandFallback = false;
   String _fallbackProvider = 'groq';
@@ -197,24 +203,34 @@ class _BYOKSettingsSheetState extends State<BYOKSettingsSheet> {
           (config.fallbackBaseUrl ?? '');
 
       if (!mounted) return;
+      final serverHasKey = config.isConfigured ||
+          (config.primaryApiKeyMasked != null && config.primaryApiKeyMasked!.isNotEmpty);
+      final serverHasFbKey = config.fallbackApiKeyMasked != null &&
+          config.fallbackApiKeyMasked!.isNotEmpty;
+
       setState(() {
+        _hasSavedServerKey = serverHasKey;
+        _maskedServerKey = config.primaryApiKeyMasked;
+        _hasSavedFallbackServerKey = serverHasFbKey;
+        _maskedFallbackServerKey = config.fallbackApiKeyMasked;
+
         _provider = savedProvider;
         _keyController.text = savedKey;
         _baseUrlController.text = savedBaseUrl;
         _serverUrlController.text = serverUrl;
         _pairingTokenController.text = pairingToken;
         _serverExpanded = widget.initialExpandServer;
-        _selectedModel = savedModel;
-        _models = savedModel != null && savedModel.isNotEmpty
-            ? [AIModelOption(id: savedModel, name: savedModel)]
+        _selectedModel = savedModel ?? (config.primaryModel.isNotEmpty ? config.primaryModel : null);
+        _models = _selectedModel != null && _selectedModel!.isNotEmpty
+            ? [AIModelOption(id: _selectedModel!, name: _selectedModel!)]
             : [];
 
         _fallbackProvider = savedFallbackProvider;
         _fallbackKeyController.text = savedFallbackKey;
         _fallbackBaseUrlController.text = savedFallbackBaseUrl;
-        _fallbackSelectedModel = savedFallbackModel;
-        _fallbackModels = savedFallbackModel != null && savedFallbackModel.isNotEmpty
-            ? [AIModelOption(id: savedFallbackModel, name: savedFallbackModel)]
+        _fallbackSelectedModel = savedFallbackModel ?? (config.fallbackModel?.isNotEmpty == true ? config.fallbackModel : null);
+        _fallbackModels = _fallbackSelectedModel != null && _fallbackSelectedModel!.isNotEmpty
+            ? [AIModelOption(id: _fallbackSelectedModel!, name: _fallbackSelectedModel!)]
             : [];
 
         _loading = false;
@@ -274,7 +290,7 @@ class _BYOKSettingsSheetState extends State<BYOKSettingsSheet> {
 
   Future<void> _testConnectionAndFetchLiveModels() async {
     final key = _keyController.text.trim();
-    if (_provider != 'custom' && key.isEmpty) {
+    if (_provider != 'custom' && key.isEmpty && !_hasSavedServerKey) {
       setState(() {
         _testOk = false;
         _testMessage = 'Please enter or paste an API key to test.';
@@ -294,17 +310,18 @@ class _BYOKSettingsSheetState extends State<BYOKSettingsSheet> {
       final baseUrl = _baseUrlController.text.trim().isNotEmpty
           ? _baseUrlController.text.trim()
           : null;
+      final effectiveKey = key.isNotEmpty ? key : null;
 
       final res = await _api.testAIConnection(
         provider: _provider,
-        apiKey: key,
+        apiKey: effectiveKey,
         model: _selectedModel,
         baseUrl: baseUrl,
       );
 
       final liveModels = await _api.fetchModels(
         provider: _provider,
-        apiKey: key,
+        apiKey: effectiveKey,
         baseUrl: baseUrl,
       );
 
@@ -350,7 +367,7 @@ class _BYOKSettingsSheetState extends State<BYOKSettingsSheet> {
 
   Future<void> _testFallbackConnection() async {
     final key = _fallbackKeyController.text.trim();
-    if (key.isEmpty && _fallbackProvider != 'custom') {
+    if (key.isEmpty && _fallbackProvider != 'custom' && !_hasSavedFallbackServerKey) {
       setState(() {
         _fallbackTestOk = false;
         _fallbackTestMessage =
@@ -415,6 +432,28 @@ class _BYOKSettingsSheetState extends State<BYOKSettingsSheet> {
     final key = _keyController.text.trim();
     final baseUrl = _baseUrlController.text.trim();
     final fallbackKey = _fallbackKeyController.text.trim();
+
+    // 1. Auto-discover live models if key is present or server has key, but no model is selected yet
+    if ((key.isNotEmpty || _hasSavedServerKey) && (_selectedModel == null || _selectedModel!.isEmpty)) {
+      await _testConnectionAndFetchLiveModels();
+      if (!mounted) return;
+      if (_models.isEmpty) {
+        setState(() => _saving = false);
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text(_testMessage ?? 'Could not discover live models. Please check your API key and connection.'),
+            backgroundColor: Colors.redAccent,
+          ),
+        );
+        return;
+      }
+    }
+
+    if ((fallbackKey.isNotEmpty || _hasSavedFallbackServerKey) && (_fallbackSelectedModel == null || _fallbackSelectedModel!.isEmpty)) {
+      await _testFallbackConnection();
+      if (!mounted) return;
+    }
+
     final fallbackModel = _fallbackSelectedModel;
     final hasFallback = fallbackKey.isNotEmpty || (fallbackModel != null && fallbackModel.isNotEmpty);
 
@@ -431,10 +470,12 @@ class _BYOKSettingsSheetState extends State<BYOKSettingsSheet> {
             ? _fallbackBaseUrlController.text.trim()
             : null,
       );
-      await SecureStorageService.instance
-          .setBackendUrl(_serverUrlController.text.trim());
-      await SecureStorageService.instance
-          .setPairingToken(_pairingTokenController.text.trim());
+      final serverUrl = _serverUrlController.text.trim();
+      final pairingToken = _pairingTokenController.text.trim();
+      await SecureStorageService.instance.setBackendUrl(serverUrl);
+      await SecureStorageService.instance.setPairingToken(pairingToken);
+      await AppConfig.setBaseUrl(serverUrl);
+      await AppConfig.setPairingToken(pairingToken);
 
       if (!mounted) return;
       setState(() => _saving = false);
@@ -444,7 +485,7 @@ class _BYOKSettingsSheetState extends State<BYOKSettingsSheet> {
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(
           content: Text(
-            key.isEmpty
+            key.isEmpty && !_hasSavedServerKey
                 ? 'Saved on-device (Offline mode).'
                 : 'AI Engine Settings updated and saved successfully.',
           ),
@@ -831,8 +872,9 @@ class _BYOKSettingsSheetState extends State<BYOKSettingsSheet> {
                         },
                         decoration: _buildInputDecoration(
                           isDark,
-                          hintText:
-                              _provider == 'gemini' ? 'AIzaSy...' : 'sk-...',
+                          hintText: (_keyController.text.isEmpty && _hasSavedServerKey && _maskedServerKey != null)
+                              ? 'Saved: $_maskedServerKey'
+                              : (_provider == 'gemini' ? 'AIzaSy...' : 'sk-...'),
                           suffixIcon: Row(
                             mainAxisSize: MainAxisSize.min,
                             children: [
@@ -1293,7 +1335,9 @@ class _BYOKSettingsSheetState extends State<BYOKSettingsSheet> {
                                 autocorrect: false,
                                 decoration: _buildInputDecoration(
                                   isDark,
-                                  hintText: 'Enter fallback API key...',
+                                  hintText: (_fallbackKeyController.text.isEmpty && _hasSavedFallbackServerKey && _maskedFallbackServerKey != null)
+                                      ? 'Saved: $_maskedFallbackServerKey'
+                                      : 'Enter fallback API key...',
                                   suffixIcon: IconButton(
                                     icon: Icon(
                                       _obscureFallbackKey

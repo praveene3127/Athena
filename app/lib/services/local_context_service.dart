@@ -938,8 +938,9 @@ Respond ONLY with valid JSON with this exact schema:
     try {
       String? rawResponse;
       if (pKey == 'gemini') {
+        final cleanModel = model.startsWith('models/') ? model.substring(7) : model;
         final url =
-            'https://generativelanguage.googleapis.com/v1beta/models/$model:generateContent';
+            'https://generativelanguage.googleapis.com/v1beta/models/$cleanModel:generateContent';
         final res = await client.post(
           url,
           options: Options(headers: {
