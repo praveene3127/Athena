@@ -84,6 +84,8 @@ class CardPlan {
       if (words.length < 28) continue;
       if (words.length <= 14 || c['type'] == 'heading') continue;
       if (!DocumentIngestionPipeline.computePageQuality(text).isAcceptable) continue;
+      final sentences = text.split(RegExp(r'(?<=[.!?…。！？।॥؟])\s+')).where((s) => s.trim().split(RegExp(r'\s+')).length >= 4).toList();
+      if (sentences.length < 2) continue;
 
       final secTitle =
           (c['section_title'] as String?)?.trim() ?? role.displayLabel;
@@ -196,6 +198,14 @@ class LocalContextService {
     'table', 'figure', 'figures', 'edition', 'press', 'publisher', 'author',
     'introduction', 'conclusion', 'prologue', 'epilogue', 'appendix', 'index',
     'text', 'texts', 'note', 'notes', 'list', 'lists', 'member', 'members',
+    // Generic Nouns & Trivial Words (Algorithm 6)
+    'years', 'people', 'person', 'thing', 'things', 'lives', 'problem', 'makes',
+    'keep', 'world', 'her', 'now', 'well', 'good', 'way', 'state', 'place',
+    'case', 'fact', 'time', 'times', 'year', 'name', 'word', 'words', 'title',
+    // Roman Numerals (Algorithm 6)
+    'i', 'ii', 'iii', 'iv', 'v', 'vi', 'vii', 'viii', 'ix', 'x',
+    'xi', 'xii', 'xiii', 'xiv', 'xv', 'xvi', 'xvii', 'xviii', 'xix', 'xx',
+    'xxi', 'xxii', 'xxiii', 'xxiv', 'xxv', 'xxvi', 'xxvii', 'xxviii', 'xxix', 'xxx',
     'seminar', 'seminars', 'lecture', 'lectures', 'abbreviation', 'abbreviations',
     'bibliographic', 'contents', 'series', 'bollingen', 'university',
     // Days

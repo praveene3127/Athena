@@ -434,6 +434,18 @@ def classify_document_purpose(
     raw_words = re.findall(r"[^\W\d_]+", full_text)
     total_words = len(raw_words)
 
+    if pdf_path is not None and (total_words < 250 or not full_text):
+        try:
+            import fitz
+            with fitz.open(pdf_path) as _d:
+                doc_full = " ".join(p.get_text() for p in _d)
+                doc_raw_words = re.findall(r"[^\W\d_]+", doc_full)
+                if len(doc_raw_words) > total_words:
+                    total_words = len(doc_raw_words)
+                    full_text = doc_full
+        except Exception:
+            pass
+
     # Rule: Landscape Presentation Slide Deck Check
     landscape_ratio = 0.0
     if pages_meta:

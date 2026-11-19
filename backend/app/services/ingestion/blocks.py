@@ -170,8 +170,8 @@ def detect_section_role_from_title(val: Optional[str]) -> str:
     if any(w == "index" and "index_split" not in clean for w in words):
         return SectionRole.INDEX
 
-    # chapter: first token equals 'chapter' or 'ch'
-    if first in ("chapter", "ch"):
+    # chapter: first token equals 'chapter', 'ch', 'chapitre', 'kapitel', or standalone Roman numeral
+    if first in ("chapter", "ch", "chapitre", "kapitel") or (re.match(r"^[ivxlcdm]+$", clean) and len(words) == 1):
         return SectionRole.CHAPTER
 
     return SectionRole.UNKNOWN
@@ -327,6 +327,360 @@ def _order_page_blocks(
 
     ordered.extend(order_band(remaining))
     return ordered, True, has_ambiguous_overlap
+
+
+def levenshtein_distance(s1: str, s2: str, max_dist: int = 2) -> int:
+    """Bounded Wagner-Fischer Levenshtein distance for fuzzy matching OCR headers."""
+    if s1 == s2:
+        return 0
+    if abs(len(s1) - len(s2)) > max_dist:
+        return max_dist + 1
+    prev = list(range(len(s2) + 1))
+    for i, c1 in enumerate(s1):
+        curr = [i + 1] * (len(s2) + 1)
+        for j, c2 in enumerate(s2):
+            cost = 0 if c1 == c2 else 1
+            curr[j + 1] = min(curr[j] + 1, prev[j + 1] + 1, prev[j] + cost)
+        prev = curr
+    return prev[len(s2)]
+
+
+def jaccard_similarity(s1: str, s2: str) -> float:
+    """Computes alphanumeric word or character trigram Jaccard similarity."""
+    w1 = set(re.findall(r"\w+", s1.lower()))
+    w2 = set(re.findall(r"\w+", s2.lower()))
+    w1 = {w for w in w1 if len(w) >= 2}
+    w2 = {w for w in w2 if len(w) >= 2}
+    if not w1 or not w2:
+        g1 = set(s1.lower()[i:i+3] for i in range(max(0, len(s1) - 2)))
+        g2 = set(s2.lower()[i:i+3] for i in range(max(0, len(s2) - 2)))
+        if not g1 or not g2:
+            return 0.0
+        return len(g1 & g2) / len(g1 | g2)
+    return len(w1 & w2) / len(w1 | w2)
+
+
+def longest_increasing_subsequence(seq: List[int]) -> List[int]:
+    """Computes strictly increasing Longest Increasing Subsequence of integers."""
+    if not seq:
+        return []
+    import bisect
+    tails: List[int] = []
+    tail_indices: List[int] = []
+    parent = [-1] * len(seq)
+    for i, x in enumerate(seq):
+        idx = bisect.bisect_left(tails, x)
+        if idx < len(tails):
+            tails[idx] = x
+            tail_indices[idx] = i
+        else:
+            tails.append(x)
+            tail_indices.append(i)
+        if idx > 0:
+            parent[i] = tail_indices[idx - 1]
+    lis: List[int] = []
+    curr = tail_indices[-1] if tail_indices else -1
+    while curr != -1:
+        lis.append(seq[curr])
+        curr = parent[curr]
+    return lis[::-1]
+
+
+def detect_xrce_link_toc(
+    page_raw_blocks: List[List[Dict[str, Any]]],
+    total_pages: int,
+    body_size: float = 11.0,
+) -> Tuple[Set[int], List[Dict[str, Any]]]:
+    """
+    Algorithm 1: Déjean & Meunier (XRCE) Functional Link Algorithm with LIS.
+    Identifies TOC pages and entries by detecting candidate lines on early pages
+    that functionally link (via fuzzy text matching) to headings on strictly later pages,
+    forming a Longest Increasing Subsequence (LIS) >= 3.
+    Also merges multi-line wrapped TOC entries and infers tree level from indentation.
+    """
+    toc_pages: Set[int] = set()
+    all_entries: List[Dict[str, Any]] = []
+    if total_pages < 4 or not page_raw_blocks:
+        return toc_pages, all_entries
+
+    max_cand_page = min(30, max(5, int(0.20 * total_pages)))
+
+    # Collect target headings from subsequent pages
+    page_headings: Dict[int, List[Tuple[str, float]]] = {}
+    for p_idx in range(len(page_raw_blocks)):
+        p_num = p_idx + 1
+        h_lines: List[Tuple[str, float]] = []
+        for b in page_raw_blocks[p_idx]:
+            for l in b.get("lines", []):
+                txt = l.get("text", "").strip()
+                words = txt.split()
+                if not txt or len(words) > 16 or len(words) < 1:
+                    continue
+                clean_t = re.sub(r"^[0-9\.\-\:\s]+", "", txt).strip()
+                if len(clean_t) < 4:
+                    continue
+                sz = float(l.get("spans", [{}])[0].get("size", body_size)) if l.get("spans") else body_size
+                h_lines.append((clean_t.lower(), sz))
+        page_headings[p_num] = h_lines
+
+    for p_idx in range(min(max_cand_page, len(page_raw_blocks))):
+        p_num = p_idx + 1
+        blocks = page_raw_blocks[p_idx]
+        lines: List[Dict[str, Any]] = []
+        for b in blocks:
+            for l in b.get("lines", []):
+                t = l.get("text", "").strip()
+                if t:
+                    lines.append(l)
+
+        if len(lines) < 3:
+            continue
+
+        candidates: List[Tuple[int, Dict[str, Any], str]] = []
+        for l_idx, l in enumerate(lines):
+            t = l.get("text", "").strip()
+            words = t.split()
+            if len(words) < 2 or len(words) > 14:
+                continue
+            if RE_PUNCTUATION_END.search(t) and len(words) > 6:
+                continue
+            clean_cand = re.sub(r"[\.\s\-_]+(?:\d+|[ivxlcdm]+)\s*$", "", t, flags=re.I).strip()
+            clean_cand = re.sub(r"^[0-9\.\-\:\s]+", "", clean_cand).strip()
+            if len(clean_cand) >= 4 and len(clean_cand.split()) >= 2:
+                candidates.append((l_idx, l, clean_cand.lower()))
+
+        if len(candidates) < 3:
+            continue
+
+        matched_targets: List[Tuple[int, int, Dict[str, Any], str]] = []
+        for l_idx, l, cand_text in candidates:
+            cand_words = set(re.findall(r"\w+", cand_text))
+            if not cand_words:
+                continue
+            best_target: Optional[int] = None
+            for tgt_num in range(p_num + 1, total_pages + 1):
+                headings = page_headings.get(tgt_num, [])
+                for h_text, h_sz in headings:
+                    sim = jaccard_similarity(cand_text, h_text)
+                    if sim >= 0.50 or (len(cand_words) >= 2 and cand_text in h_text) or (len(h_text.split()) >= 2 and h_text in cand_text):
+                        best_target = tgt_num
+                        break
+                if best_target is not None:
+                    break
+            if best_target is not None:
+                matched_targets.append((best_target, l_idx, l, cand_text))
+
+        target_pages = [mt[0] for mt in matched_targets]
+        lis = longest_increasing_subsequence(target_pages)
+
+        if len(lis) >= 3:
+            toc_pages.add(p_num)
+            left_coords = [mt[2]["bbox"][0] for mt in matched_targets if "bbox" in mt[2]]
+            min_left = min(left_coords) if left_coords else 0.0
+            l_idx_to_target = {mt[1]: (mt[0], mt[3]) for mt in matched_targets}
+
+            curr_entry: Optional[Dict[str, Any]] = None
+            for l_idx, l in enumerate(lines):
+                t = l.get("text", "").strip()
+                lx0 = l.get("bbox", [0, 0, 0, 0])[0]
+                if l_idx in l_idx_to_target:
+                    tgt_p, _ = l_idx_to_target[l_idx]
+                    lvl = 1 if (lx0 - min_left) < 1.5 * body_size else 2
+                    m_end_num = RE_TRAILING_NUMBER.search(t)
+                    printed_p = int(m_end_num.group(1)) if (m_end_num and m_end_num.group(1).isdigit()) else tgt_p
+                    curr_entry = {
+                        "level": lvl,
+                        "title": re.sub(r"[\.\s\-_]+(?:\d+|[ivxlcdm]+)\s*$", "", t, flags=re.I).strip(),
+                        "page": tgt_p,
+                        "printed_page": printed_p,
+                    }
+                    all_entries.append(curr_entry)
+                elif curr_entry is not None:
+                    words = t.split()
+                    is_cont = (lx0 > min_left + 0.35 * body_size) or (not RE_TRAILING_NUMBER.search(curr_entry["title"]))
+                    if is_cont and len(words) <= 12 and not RE_PUNCTUATION_END.search(t):
+                        clean_cont = re.sub(r"[\.\s\-_]+(?:\d+|[ivxlcdm]+)\s*$", "", t, flags=re.I).strip()
+                        curr_entry["title"] = f"{curr_entry['title']} {clean_cont}".strip()
+                        m_end_num = RE_TRAILING_NUMBER.search(t)
+                        if m_end_num and m_end_num.group(1).isdigit():
+                            curr_entry["printed_page"] = int(m_end_num.group(1))
+                    else:
+                        curr_entry = None
+
+    return toc_pages, all_entries
+
+
+def detect_sliding_window_furniture(
+    page_ordered_blocks: List[List[Dict[str, Any]]],
+    total_pages: int,
+) -> Set[Tuple[int, int]]:
+    """
+    Algorithm 2: 8-Page Sliding-Window Running Header / Footer Removal.
+    Checks top 8% and bottom 8% vertical bands across a sliding window of 8 pages.
+    Separates odd and even pages. Any non-sentence line repeating on >= 3 out of 5 consecutive
+    odd pages OR >= 3 out of 5 consecutive even pages (Levenshtein <= 2) is flagged as furniture.
+    Returns set of (page_num, block_idx).
+    """
+    furniture_blocks: Set[Tuple[int, int]] = set()
+    if total_pages < 3:
+        return furniture_blocks
+
+    page_margin_items: Dict[int, List[Tuple[int, bool, str]]] = {}
+
+    for p_idx, p_blocks in enumerate(page_ordered_blocks):
+        p_num = p_idx + 1
+        items: List[Tuple[int, bool, str]] = []
+        for b_idx, b in enumerate(p_blocks):
+            ph = b.get("page_height", 800.0)
+            y0, y1 = b["bbox"][1], b["bbox"][3]
+            in_header = y1 <= 0.08 * ph
+            in_footer = y0 >= 0.92 * ph
+            if not (in_header or in_footer):
+                continue
+
+            full_text = " ".join(l["text"] for l in b.get("lines", [])).strip()
+            if not full_text:
+                continue
+
+            if re.match(r"^(?:page\s+)?(?:\d+|[ivxlcdm]+)$", full_text, re.IGNORECASE):
+                items.append((b_idx, in_header, "#lone_page#"))
+                continue
+
+            words = full_text.split()
+            if len(words) > 14 or RE_PUNCTUATION_END.search(full_text):
+                continue
+
+            sig = re.sub(r"\d+", "#", full_text).strip().lower()
+            if len(sig) >= 2:
+                items.append((b_idx, in_header, sig))
+
+        page_margin_items[p_num] = items
+
+    for p_num in range(1, total_pages + 1):
+        items = page_margin_items.get(p_num, [])
+        is_odd = (p_num % 2 == 1)
+        for b_idx, in_header, sig in items:
+            if sig == "#lone_page#":
+                furniture_blocks.add((p_num, b_idx))
+                continue
+
+            match_pages: Set[int] = {p_num}
+            win_start = max(1, p_num - 7)
+            win_end = min(total_pages, p_num + 7)
+            for other_p in range(win_start, win_end + 1):
+                if other_p == p_num or (other_p % 2 == 1) != is_odd:
+                    continue
+                other_items = page_margin_items.get(other_p, [])
+                for _, other_in_header, other_sig in other_items:
+                    if other_in_header == in_header:
+                        if other_sig == sig or levenshtein_distance(sig, other_sig, max_dist=2) <= 2:
+                            match_pages.add(other_p)
+                            break
+
+            if len(match_pages) >= 3:
+                furniture_blocks.add((p_num, b_idx))
+
+    return furniture_blocks
+
+
+def classify_page_species(
+    page_num: int,
+    total_pages: int,
+    p_blocks: List[Dict[str, Any]],
+    body_size: float,
+    body_start_page: Optional[int] = None,
+) -> Tuple[str, bool]:
+    """
+    Algorithm 4: Structural Page-Species Classifier.
+    Classifies pages by measurable geometry & statistical species:
+    - Index Species: back 25%, high ratio of Term, num, num lines or A-Z progression -> SectionRole.INDEX
+    - Bibliography / Endnotes: back 25%, hanging indents or numbered citations with (19xx)/(20xx)
+    - Display / Title / Blank: early pages with 0 wrapped prose paragraphs -> SectionRole.TITLE_PAGE / COPYRIGHT
+    - Logical Pagination Boundary: locked by Roman -> Arabic 1 reset.
+    Returns (section_role, is_matter).
+    """
+    all_lines: List[Dict[str, Any]] = []
+    for b in p_blocks:
+        for l in b.get("lines", []):
+            if l.get("text", "").strip():
+                all_lines.append(l)
+
+    line_texts = [l["text"].strip() for l in all_lines]
+    total_words = sum(len(t.split()) for t in line_texts)
+
+    if total_words < 6:
+        return (SectionRole.HALF_TITLE if page_num <= 3 else SectionRole.TITLE_PAGE), True
+
+    # 1. Back 25% Checks (Index, Bibliography, Endnotes)
+    is_back_25 = total_pages > 0 and page_num > int(total_pages * 0.75)
+    if is_back_25:
+        has_index_header = any(RE_INDEX_HEADER.match(t) for t in line_texts[:4])
+        index_list_lines = sum(1 for t in line_texts if RE_INDEX_LINE.match(t))
+        letter_headers = [t.upper() for t in line_texts if re.match(r"^[A-Z]$", t)]
+        has_alpha_prog = (
+            len(letter_headers) >= 3
+            and all(letter_headers[i] < letter_headers[i + 1] for i in range(len(letter_headers) - 1))
+        )
+        if has_index_header or index_list_lines >= 3 or has_alpha_prog:
+            return SectionRole.INDEX, True
+
+        hanging_indent_count = 0
+        citation_year_count = 0
+        has_notes_header = any(re.match(r"^(?:end)?notes\b", t, re.I) for t in line_texts[:3])
+        has_biblio_header = any(re.match(r"^(?:selected\s+)?bibliography\b|^works\s+cited\b|^references\b", t, re.I) for t in line_texts[:3])
+
+        for b in p_blocks:
+            b_lines = b.get("lines", [])
+            if len(b_lines) >= 2:
+                l0_x0 = b_lines[0].get("bbox", [0])[0]
+                l1_x0 = b_lines[1].get("bbox", [0])[0]
+                if l1_x0 > l0_x0 + 0.35 * body_size:
+                    hanging_indent_count += 1
+            for l in b_lines:
+                t = l.get("text", "")
+                if re.search(r"\b(?:19|20)\d{2}\b", t) and re.match(r"^\s*(?:\[\d+\]|\d+\.|\*)\s+", t):
+                    citation_year_count += 1
+
+        if has_notes_header or (citation_year_count >= 3 and not has_biblio_header):
+            return SectionRole.NOTES, True
+        if has_biblio_header or hanging_indent_count >= 2 or citation_year_count >= 3:
+            return SectionRole.BIBLIOGRAPHY, True
+
+    # 2. Early Display / Title / Imprint Pages
+    is_early_page = total_pages > 0 and page_num <= min(15, max(5, int(total_pages * 0.15)))
+    if is_early_page:
+        pw = p_blocks[0].get("page_width", 600.0) if p_blocks else 600.0
+        wide_lines = 0
+        for l in all_lines:
+            bbox = l.get("bbox", [0, 0, 0, 0])
+            w = bbox[2] - bbox[0]
+            words_in_l = len(l.get("text", "").split())
+            if w >= 0.65 * pw and words_in_l >= 8:
+                wide_lines += 1
+
+        avg_words = total_words / max(1, len(all_lines))
+        if wide_lines == 0 and (avg_words <= 8 or len(all_lines) <= 4) and total_words < 80:
+            full_raw_low = " ".join(line_texts).lower()
+            if any(term in full_raw_low for term in ("all rights reserved", "isbn", "cataloging", "published by", "printed in", "copyright")):
+                return SectionRole.COPYRIGHT, True
+            if any(term in full_raw_low for term in ("dedicated to", "for my", "in memory of", "to my")):
+                return SectionRole.DEDICATION, True
+            return SectionRole.TITLE_PAGE, True
+
+    # 3. Logical Pagination Boundary Check
+    if body_start_page is not None and page_num < body_start_page:
+        full_raw_low = " ".join(line_texts[:5]).lower()
+        if "preface" in full_raw_low:
+            return SectionRole.PREFACE, False
+        if "foreword" in full_raw_low:
+            return SectionRole.FOREWORD, False
+        if "introduction" in full_raw_low:
+            return SectionRole.INTRODUCTION, False
+        if "acknowledg" in full_raw_low:
+            return SectionRole.ACKNOWLEDGMENTS, False
+        return SectionRole.UNKNOWN, True
+
+    return SectionRole.CHAPTER, False
 
 
 RE_TOC_HEADER = re.compile(
@@ -497,6 +851,8 @@ def extract_document_structure(
     font_char_counts: Counter = Counter()
     document_words: Set[str] = set()
     page_raw_blocks: List[List[Dict[str, Any]]] = []
+    margin_page_labels: Dict[int, str] = {}
+    is_ocr_layer_doc = False
 
     for page_idx in range(total_pages):
         page = doc[page_idx]
@@ -508,6 +864,34 @@ def extract_document_structure(
             else page.get_text("dict", flags=mupdf_flags)
         )
         p_blocks: List[Dict[str, Any]] = []
+
+        # First pass over page blocks to compute core text column [colLeft, colRight] (Algorithm 3)
+        all_span_x0s: List[float] = []
+        all_span_x1s: List[float] = []
+        line_height_variances: List[float] = []
+
+        for b in page_dict.get("blocks", []):
+            if b.get("type") == 0:
+                for l in b.get("lines", []):
+                    span_sizes = [float(s.get("size", 10.0)) for s in l.get("spans", [])]
+                    if len(span_sizes) >= 2:
+                        avg_sz = sum(span_sizes) / len(span_sizes)
+                        var = sum((sz - avg_sz) ** 2 for sz in span_sizes) / len(span_sizes)
+                        line_height_variances.append(var)
+                    for s in l.get("spans", []):
+                        stxt = s.get("text", "").strip()
+                        if len(stxt) >= 3 and "bbox" in s:
+                            all_span_x0s.append(s["bbox"][0])
+                            all_span_x1s.append(s["bbox"][2])
+
+        all_span_x0s.sort()
+        all_span_x1s.sort()
+        pw_page = page.rect.width
+        col_left = all_span_x0s[int(len(all_span_x0s) * 0.15)] if len(all_span_x0s) >= 5 else 0.15 * pw_page
+        col_right = all_span_x1s[int(len(all_span_x1s) * 0.85)] if len(all_span_x1s) >= 5 else 0.85 * pw_page
+
+        if line_height_variances and (sum(line_height_variances) / len(line_height_variances)) > 3.0:
+            is_ocr_layer_doc = True
 
         for b in page_dict.get("blocks", []):
             if b.get("type") == 0:  # Text block
@@ -524,11 +908,9 @@ def extract_document_structure(
                             s_clean["raw_text"] = txt
                             spans_data.append(s_clean)
 
-                            # Statistics
                             sz = round(float(s.get("size", 10.0)), 1)
                             font_char_counts[sz] += len(repaired_txt.strip())
 
-                            # Vocabulary
                             words = re.findall(r"\b[A-Za-z]+\b", repaired_txt.lower())
                             document_words.update(words)
 
@@ -537,9 +919,24 @@ def extract_document_structure(
                         stripped_l = line_text.strip()
                         pw = page.rect.width
                         lx0, ly0, lx1, ly1 = l["bbox"]
-                        # Gate H: Strip standalone margin line numbers in outer 12% margins (peer review / drafts)
-                        if re.match(r"^\d{1,4}$", stripped_l) and (lx1 < 0.12 * pw or lx0 > 0.88 * pw):
-                            continue
+
+                        # Algorithm 3: Outer-Gutter Margin Numbers Isolation
+                        # Strip isolated tiny numeric/paragraph-marker fragments sitting outside core column
+                        if re.match(r"^[¶§]?\s*\d{1,4}\s*$", stripped_l):
+                            is_outer_gutter = (
+                                lx1 < (col_left - 1.5 * 10.0)
+                                or lx0 > (col_right + 1.5 * 10.0)
+                                or lx1 < 0.14 * pw
+                                or lx0 > 0.86 * pw
+                            )
+                            if is_outer_gutter:
+                                continue
+
+                        # Track margin page labels (for logical pagination boundary detection)
+                        if (ly1 <= 0.08 * page.rect.height or ly0 >= 0.92 * page.rect.height) and re.match(r"^(?:page\s+)?(\d+|[ivxlcdm]+)$", stripped_l, re.I):
+                            m_num = re.match(r"^(?:page\s+)?(\d+|[ivxlcdm]+)$", stripped_l, re.I)
+                            if m_num:
+                                margin_page_labels[page_idx + 1] = m_num.group(1).lower()
 
                         lines_data.append({
                             "bbox": l["bbox"],
@@ -565,6 +962,24 @@ def extract_document_structure(
     if font_char_counts:
         body_size = font_char_counts.most_common(1)[0][0]
 
+    # Algorithm 4: Logical Pagination Boundary - Detect where Roman resets to Arabic 1
+    roman_set = {
+        "i", "ii", "iii", "iv", "v", "vi", "vii", "viii", "ix", "x",
+        "xi", "xii", "xiii", "xiv", "xv", "xvi", "xvii", "xviii", "xix", "xx",
+        "xxi", "xxii", "xxiii", "xxiv", "xxv", "xxvi", "xxvii", "xxviii", "xxix", "xxx",
+        "xl", "l", "lx", "lxx", "lxxx", "xc", "c",
+    }
+    body_start_page: Optional[int] = None
+    had_roman = False
+    for p_num in sorted(margin_page_labels.keys()):
+        val = margin_page_labels[p_num].lower().strip()
+        if val in roman_set:
+            had_roman = True
+        elif val == "1" or val == "01":
+            if had_roman or p_num > 1:
+                body_start_page = p_num
+                break
+
     # 3. Stage 3: Reading Order & Column Gutter Detection
     page_ordered_blocks: List[List[Dict[str, Any]]] = []
     is_multi_column_doc = False
@@ -589,12 +1004,17 @@ def extract_document_structure(
     if total_pages > 0 and (multi_col_page_count / total_pages) >= 0.3:
         is_multi_column_doc = True
 
-    # 4. Stage 4: Detect Running Headers / Footers and Printed TOC Pages
-    # Look in top 12% and bottom 12% bands, separate odd vs even pages
+    # 4. Stage 4: Detect Running Headers / Footers and Table of Contents Pages
+    # Algorithm 1: XRCE Link-Based Functional Link TOC Detection
+    xrce_toc_pages, xrce_entries = detect_xrce_link_toc(page_ordered_blocks, total_pages, body_size)
+
+    # Algorithm 2: 8-Page Sliding-Window Running Furniture
+    sliding_furniture = detect_sliding_window_furniture(page_ordered_blocks, total_pages)
+
+    all_printed_toc_entries: List[Dict[str, Any]] = list(xrce_entries)
+    toc_pages_set: Set[int] = set(xrce_toc_pages)
     odd_margin_signatures: Dict[str, Set[int]] = {}
     even_margin_signatures: Dict[str, Set[int]] = {}
-    all_printed_toc_entries: List[Dict[str, Any]] = []
-    toc_pages_set: Set[int] = set()
 
     for page_idx, p_blocks in enumerate(page_ordered_blocks):
         page_num = page_idx + 1
@@ -616,17 +1036,26 @@ def extract_document_structure(
 
             if in_header_band or in_footer_band:
                 full_text = " ".join(l["text"] for l in b["lines"]).strip()
-                # Normalize digits to #
                 sig = RE_DIGITS.sub("#", full_text).lower().strip()
                 if sig:
                     target_dict.setdefault(sig, set()).add(page_num)
 
-    # Threshold for recurring headers/footers: >= 25% of odd or even pages
+    # Deduplicate TOC entries
+    seen_toc_keys: Set[Tuple[str, int]] = set()
+    deduped_toc_entries: List[Dict[str, Any]] = []
+    for te in all_printed_toc_entries:
+        key = (re.sub(r"[^\w\s]", "", te.get("title", "")).strip().lower(), te.get("page", 0))
+        if key not in seen_toc_keys:
+            seen_toc_keys.add(key)
+            deduped_toc_entries.append(te)
+    all_printed_toc_entries = deduped_toc_entries
+
     header_threshold_odd = max(2, int((total_pages / 2) * 0.25))
     header_threshold_even = max(2, int((total_pages / 2) * 0.25))
 
-    # 5. Type Every Block & Filter Headers
+    # 5. Type Every Block, Filter Running Headers, and Detach Footnotes (Algorithm 3)
     typed_blocks_by_page: List[List[Dict[str, Any]]] = []
+    detached_page_footnotes: Dict[int, List[str]] = {}
 
     for page_idx, p_blocks in enumerate(page_ordered_blocks):
         page_num = page_idx + 1
@@ -634,52 +1063,76 @@ def extract_document_structure(
         active_signatures = odd_margin_signatures if is_odd else even_margin_signatures
         threshold = header_threshold_odd if is_odd else header_threshold_even
 
-        # Check if page is a Table of Contents / Front Matter page
         is_toc_page = page_num in toc_pages_set
         page_all_texts = [" ".join(l["text"] for l in b["lines"]).strip() for b in p_blocks]
         if not is_toc_page:
-            has_toc_header = any(re.search(r"^(?:table\s+of\s+)?contents\b", t, re.IGNORECASE) for t in page_all_texts[:3])
+            has_toc_header = any(RE_TOC_HEADER.search(t) for t in page_all_texts[:3])
             chapter_matches_on_page = sum(1 for t in page_all_texts if re.match(r"^(?:chapter|section|part)\s+\d+", t, re.IGNORECASE))
             is_toc_page = has_toc_header or (chapter_matches_on_page >= 3)
+            if is_toc_page:
+                toc_pages_set.add(page_num)
 
-        # Edge AI Front-Matter & Noise Page Detection (Gopher grammar density + FastEmbed ONNX)
+        # Algorithm 4: Page-Species Classifier
+        species_role, species_is_matter = classify_page_species(
+            page_num, total_pages, p_blocks, body_size, body_start_page
+        )
+        is_back_matter_page = (species_role in (SectionRole.INDEX, SectionRole.BIBLIOGRAPHY, SectionRole.NOTES))
+        is_front_matter_page = False
+
+        if body_start_page is not None and page_num >= body_start_page:
+            body_started = True
+
         page_full_raw = "\n".join(page_all_texts)
         has_body_heading = any(
             detect_section_role_from_title(t.split("\n")[0].strip()) in (SectionRole.CHAPTER, SectionRole.PART, SectionRole.INTRODUCTION)
             for t in page_all_texts
         )
-        if has_body_heading:
+        if has_body_heading and (body_start_page is None or page_num >= body_start_page):
             body_started = True
 
         if body_started:
             is_front_matter_page = False
         else:
-            is_front_matter_page = is_front_matter_or_noise_page(page_idx, total_pages, page_full_raw)
-
-        # Back-Matter Page Detection (last 20% of pages containing Index, Bibliography, etc.)
-        is_back_matter_page = False
-        if total_pages > 10 and page_idx >= int(total_pages * 0.80):
-            has_back_matter_header = any(
-                re.search(r"^(?:general\s+)?index\b|^(?:selected\s+)?bibliography\b|^works\s+cited\b|^(?:end)?notes\b", t, re.IGNORECASE)
-                for t in page_all_texts[:3]
-            )
-            if has_back_matter_header:
-                is_back_matter_page = True
+            is_front_matter_page = species_is_matter
 
         typed_page: List[Dict[str, Any]] = []
 
-        for b in p_blocks:
+        for b_idx, b in enumerate(p_blocks):
             ph = b["page_height"]
             pw = b["page_width"]
             lines = list(b["lines"])
             if not lines:
                 continue
 
+            # Check running header/footer (Algorithm 2 sliding window + whole-book fallback)
+            y0, y1 = b["bbox"][1], b["bbox"][3]
+            in_header_band = y1 < 0.12 * ph
+            in_footer_band = y0 > 0.88 * ph
+
+            block_text = " ".join(l["text"] for l in lines).strip()
+            norm_b_text = re.sub(r"[^\w\s]", "", block_text).lower().strip()
+            matches_outline = norm_b_text in outline_titles
+
+            is_running = False
+            if (page_num, b_idx) in sliding_furniture and not matches_outline:
+                is_running = True
+            elif (in_header_band or in_footer_band) and not matches_outline:
+                if re.match(r"^(?:page\s+)?(?:\d+|[ivxlcdm]+)$", block_text, re.IGNORECASE):
+                    is_running = True
+                else:
+                    sig = RE_DIGITS.sub("#", block_text).lower().strip()
+                    if sig and len(active_signatures.get(sig, set())) >= threshold:
+                        is_running = True
+
+            if is_running:
+                continue
+
             # Check if first line of block is an explicit standalone section heading
             first_line_str = lines[0]["text"].strip()
             first_line_role = detect_section_role_from_title(first_line_str)
             if (
-                len(lines) > 1
+                not is_toc_page
+                and len(lines) > 1
                 and first_line_role not in (SectionRole.UNKNOWN, SectionRole.TOC)
                 and len(first_line_str.split()) <= 8
                 and not first_line_str.endswith((".", ";"))
@@ -710,29 +1163,6 @@ def extract_document_structure(
             font_flags = int(first_span.get("flags", 0)) if first_span else 0
             is_bold = bool(font_flags & 16) or ("bold" in str(first_span.get("font", "")).lower())
 
-            # Outline matching check (Highest confidence heading check)
-            norm_b_text = re.sub(r"[^\w\s]", "", block_text).lower().strip()
-            matches_outline = norm_b_text in outline_titles
-
-            # Check running header/footer
-            y0, y1 = b["bbox"][1], b["bbox"][3]
-            in_header_band = y1 < 0.12 * ph
-            in_footer_band = y0 > 0.88 * ph
-
-            is_running = False
-            if (in_header_band or in_footer_band) and not matches_outline:
-                # Page number alone check
-                if re.match(r"^(?:page\s+)?(?:\d+|[ivxlcdm]+)$", block_text, re.IGNORECASE):
-                    is_running = True
-                else:
-                    sig = RE_DIGITS.sub("#", block_text).lower().strip()
-                    if sig and len(active_signatures.get(sig, set())) >= threshold:
-                        is_running = True
-
-            if is_running:
-                # Mark as running header/footer and drop from body text
-                continue
-
             # Classify Block Type
             words = block_text.split()
             word_count = len(words)
@@ -745,14 +1175,23 @@ def extract_document_structure(
                 and not block_text.endswith((".", ";"))
             )
 
-            if is_explicit_section_heading:
-                b_type = BlockType.HEADING
-            elif is_toc_page:
+            # Algorithm 3: Footnote isolation at bottom of page
+            is_footnote_block = (
+                (y0 >= 0.62 * ph and (font_size <= 0.88 * body_size or font_size < body_size - 0.75))
+                or (y0 >= 0.60 * ph and re.match(r"^(\d{1,3}\.|\(\d{1,3}\)|\[\d{1,3}\]|[*†‡§])\s+", block_text))
+            )
+
+            if is_toc_page:
                 b_type = BlockType.CONTENTS_ENTRY
-            elif is_front_matter_page:
-                b_type = BlockType.FRONT_MATTER
+            elif is_explicit_section_heading:
+                b_type = BlockType.HEADING
+            elif is_footnote_block:
+                b_type = BlockType.FOOTNOTE
+                detached_page_footnotes.setdefault(page_num, []).append(block_text)
             elif is_back_matter_page:
                 b_type = BlockType.BACK_MATTER
+            elif is_front_matter_page:
+                b_type = BlockType.FRONT_MATTER
             elif matches_outline or (
                 (font_size >= 1.15 * body_size or (is_bold and font_size >= body_size))
                 and word_count <= 14
@@ -762,11 +1201,6 @@ def extract_document_structure(
                 and word_count <= 10
             ):
                 b_type = BlockType.HEADING
-            elif (
-                (y0 > 0.65 * ph and (font_size <= 0.88 * body_size or font_size < body_size - 0.75))
-                or (y0 > 0.60 * ph and re.match(r"^(\d{1,2}\.|\(\d{1,2}\)|\[\d{1,2}\]|[*†‡§])\s+", block_text))
-            ):
-                b_type = BlockType.FOOTNOTE
             elif RE_CONTENTS_LEADER.search(block_text):
                 b_type = BlockType.CONTENTS_ENTRY
             elif RE_LIST_BULLET.match(block_text):
@@ -784,6 +1218,7 @@ def extract_document_structure(
                 "page": page_num,
                 "page_width": pw,
                 "page_height": ph,
+                "species_role": species_role,
             })
 
         typed_blocks_by_page.append(typed_page)
@@ -832,6 +1267,9 @@ def extract_document_structure(
                 b_type = BlockType.NOISE
 
             if cleaned_block_text:
+                if b_type == BlockType.FOOTNOTE:
+                    detached_page_footnotes.setdefault(b["page"], []).append(cleaned_block_text)
+                    continue
                 reconstructed_blocks.append({
                     "type": b_type,
                     "text": cleaned_block_text,
@@ -840,6 +1278,7 @@ def extract_document_structure(
                     "bbox": b["bbox"],
                     "font_size": b["font_size"],
                     "is_bold": b["is_bold"],
+                    "species_role": b.get("species_role"),
                 })
 
     # 6b. Drop-cap Merger: single uppercase letter block fused with subsequent continuation text
@@ -920,7 +1359,7 @@ def extract_document_structure(
 
     # 9. Carry active_section_title and active_section_role across all units
     active_section_title: Optional[str] = None
-    active_section_role: str = "chapter"
+    active_section_role: str = "matter"
 
     for b in merged_units:
         if b["type"] == BlockType.HEADING:
@@ -929,9 +1368,12 @@ def extract_document_structure(
             active_section_role = detect_section_role_from_title(clean_title)
             b["section_title"] = active_section_title
             b["section_role"] = active_section_role
+        elif b["type"] in (BlockType.FRONT_MATTER, BlockType.BACK_MATTER, BlockType.NOISE):
+            b["section_title"] = None
+            b["section_role"] = b.get("species_role") or ("front_matter" if b["type"] == BlockType.FRONT_MATTER else "back_matter")
         else:
             b["section_title"] = active_section_title
-            b["section_role"] = active_section_role
+            b["section_role"] = active_section_role if active_section_role != "matter" else (b.get("species_role") or "chapter")
 
     return {
         "body_size": body_size,
@@ -940,4 +1382,7 @@ def extract_document_structure(
         "units": merged_units,
         "document_words_count": len(document_words),
         "printed_toc": all_printed_toc_entries,
+        "page_footnotes": detached_page_footnotes,
+        "is_ocr_layer": is_ocr_layer_doc,
+        "toc_pages": sorted(list(toc_pages_set)),
     }

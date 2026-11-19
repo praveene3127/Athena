@@ -381,7 +381,13 @@ class DocumentIngestionPipeline {
             final bool integrityVerified = (canonicalSha256 == reconstructedSha256);
 
             if (message.chapters.isNotEmpty) {
-              unawaited(LocalDatabase.instance.insertDocumentChapters(docId, message.chapters));
+              try {
+                unawaited(LocalDatabase.instance.insertDocumentChapters(docId, message.chapters).catchError((e) {
+                  debugPrint('[Athena] Error saving chapters: $e');
+                }));
+              } catch (e) {
+                debugPrint('[Athena] Error saving chapters: $e');
+              }
             }
 
             final result = IngestionResult(
@@ -1466,21 +1472,52 @@ class DocumentIngestionPipeline {
 
       if (rawFragments.isEmpty) return const [];
 
+      // Algorithm 3: Outer-Gutter Margin Isolation
+      final allLefts = rawFragments.where((f) => f.text.trim().length >= 3).map((f) => f.left).toList()..sort();
+      final allRights = rawFragments.where((f) => f.text.trim().length >= 3).map((f) => f.right).toList()..sort();
+      final colLeft = allLefts.isNotEmpty ? allLefts[(allLefts.length * 0.15).toInt()] : 54.0;
+      final colRight = allRights.isNotEmpty ? allRights[(allRights.length * 0.85).toInt()] : 550.0;
+
+      final filteredFragments = rawFragments.where((f) {
+        final t = f.text.trim();
+        if (RegExp(r'^[¶§]?\s*\d{1,4}\s*$').hasMatch(t)) {
+          final isOuterGutter = (f.right < colLeft - 15.0) ||
+              (f.left > colRight + 15.0) ||
+              (f.right < 0.14 * (pageHeight > 0 ? 600.0 : 600.0)) ||
+              (f.left > 0.86 * (pageHeight > 0 ? 600.0 : 600.0));
+          if (isOuterGutter) return false;
+        }
+        return true;
+      }).toList();
+
+      if (filteredFragments.isEmpty) return const [];
+
       // Sort top-down, left-to-right
-      rawFragments.sort((a, b) {
+      filteredFragments.sort((a, b) {
         final topDiff = a.top.compareTo(b.top);
         return topDiff != 0 ? topDiff : a.left.compareTo(b.left);
       });
 
       final groupedLines = <LineFragment>[];
-      List<LineFragment> currentRow = [rawFragments.first];
+      List<LineFragment> currentRow = [filteredFragments.first];
+      double rowTop = filteredFragments.first.top;
+      double rowBottom = filteredFragments.first.bottom;
 
-      for (int i = 1; i < rawFragments.length; i++) {
-        final curr = rawFragments[i];
+      for (int i = 1; i < filteredFragments.length; i++) {
+        final curr = filteredFragments[i];
         final prev = currentRow.last;
 
-        if ((curr.top - prev.top).abs() <= prev.height * 0.55) {
+        // Algorithm 5: Skew-tolerant vertical overlap grouping
+        final overlapTop = max(curr.top, rowTop);
+        final overlapBottom = min(curr.bottom, rowBottom);
+        final overlapH = overlapBottom - overlapTop;
+        final minH = min(curr.height, prev.height);
+        final overlapRatio = minH > 0 ? overlapH / minH : 0.0;
+
+        if (overlapRatio >= 0.40 || (curr.top - prev.top).abs() <= prev.height * 0.55) {
           currentRow.add(curr);
+          rowTop = min(rowTop, curr.top);
+          rowBottom = max(rowBottom, curr.bottom);
         } else {
           // Flush previous row sorted left-to-right
           currentRow.sort((a, b) => a.left.compareTo(b.left));
@@ -1513,6 +1550,8 @@ class DocumentIngestionPipeline {
           ));
 
           currentRow = [curr];
+          rowTop = curr.top;
+          rowBottom = curr.bottom;
         }
       }
 
@@ -1583,20 +1622,41 @@ class DocumentIngestionPipeline {
   static Set<String> detectFurniture(Map<int, List<LineFragment>> pageLinesMap) =>
       _findRepeatedHeadersFooters(pageLinesMap);
 
+  static int levenshteinDistance(String s1, String s2, {int maxDist = 2}) {
+    if (s1 == s2) return 0;
+    if ((s1.length - s2.length).abs() > maxDist) return maxDist + 1;
+    var prev = List<int>.generate(s2.length + 1, (i) => i);
+    for (int i = 0; i < s1.length; i++) {
+      final curr = List<int>.filled(s2.length + 1, i + 1);
+      for (int j = 0; j < s2.length; j++) {
+        final cost = s1[i] == s2[j] ? 0 : 1;
+        curr[j + 1] = min(curr[j] + 1, min(prev[j + 1] + 1, prev[j] + cost));
+      }
+      prev = curr;
+    }
+    return prev[s2.length];
+  }
+
   static Set<String> _findRepeatedHeadersFooters(
       Map<int, List<LineFragment>> pageLinesMap) {
     final occurrenceCount = <String, int>{};
     final totalPages = pageLinesMap.length;
     if (totalPages < 3) return const {};
 
-    for (final lines in pageLinesMap.values) {
+    final pageMarginItems = <int, List<Map<String, dynamic>>>{};
+
+    for (final entry in pageLinesMap.entries) {
+      final p = entry.key;
+      final lines = entry.value;
       if (lines.isEmpty) continue;
       final seenOnThisPage = <String>{};
+      final pItems = <Map<String, dynamic>>[];
 
       for (final l in lines) {
         final ph = l.pageHeight > 0 ? l.pageHeight : 792.0;
-        final inMargin = (l.top <= 0.08 * ph) || (l.bottom >= 0.92 * ph);
-        if (!inMargin) continue;
+        final inHeader = l.top <= 0.08 * ph;
+        final inFooter = l.bottom >= 0.92 * ph;
+        if (!inHeader && !inFooter) continue;
 
         final t = l.text.trim();
         if (t.length > 80 || t.endsWith('.') || t.endsWith('!') || t.endsWith('?')) {
@@ -1606,17 +1666,56 @@ class DocumentIngestionPipeline {
         final baseKey = _furnitureKey(t);
         if (baseKey.length < 3) continue;
 
-        // Bucket vertical Y to ±4pt
         final yBucket = (l.top / 4).round();
         final fullKey = '$baseKey@$yBucket';
 
         if (seenOnThisPage.add(fullKey)) {
           occurrenceCount[fullKey] = (occurrenceCount[fullKey] ?? 0) + 1;
+          pItems.add({
+            'inHeader': inHeader,
+            'baseKey': baseKey,
+            'yBucket': yBucket,
+            'fullKey': fullKey,
+          });
+        }
+      }
+      pageMarginItems[p] = pItems;
+    }
+
+    final repeated = <String>{};
+
+    // Algorithm 2: 8-Page Sliding-Window Running Header / Footer Removal (Odd/Even pages)
+    for (final p in pageMarginItems.keys) {
+      final isOdd = (p % 2 == 1);
+      final items = pageMarginItems[p] ?? const [];
+      for (final item in items) {
+        final inHeader = item['inHeader'] as bool;
+        final baseKey = item['baseKey'] as String;
+        final fullKey = item['fullKey'] as String;
+
+        final matchPages = <int>{p};
+        final winStart = max(1, p - 7);
+        final winEnd = min(totalPages, p + 7);
+        for (int otherP = winStart; otherP <= winEnd; otherP++) {
+          if (otherP == p || (otherP % 2 == 1) != isOdd) continue;
+          final otherItems = pageMarginItems[otherP] ?? const [];
+          for (final otherItem in otherItems) {
+            if (otherItem['inHeader'] == inHeader) {
+              final otherBase = otherItem['baseKey'] as String;
+              if (otherBase == baseKey || levenshteinDistance(baseKey, otherBase, maxDist: 2) <= 2) {
+                matchPages.add(otherP);
+                break;
+              }
+            }
+          }
+        }
+        if (matchPages.length >= 3) {
+          repeated.add(fullKey);
         }
       }
     }
 
-    final repeated = <String>{};
+    // Whole-book repetition fallback
     for (final entry in occurrenceCount.entries) {
       final minPages = totalPages >= 4 ? 4 : 3;
       if (entry.value >= minPages && (entry.value / totalPages) >= 0.15) {
@@ -3709,6 +3808,186 @@ class TocDetector {
 
     return TocDetectionResult(isToc: isToc, entries: entries);
   }
+
+  static double jaccardSimilarity(String s1, String s2) {
+    final w1 = RegExp(r'\w+').allMatches(s1.toLowerCase()).map((m) => m.group(0)!).where((w) => w.length >= 2).toSet();
+    final w2 = RegExp(r'\w+').allMatches(s2.toLowerCase()).map((m) => m.group(0)!).where((w) => w.length >= 2).toSet();
+    if (w1.isEmpty || w2.isEmpty) {
+      final g1 = <String>{};
+      final g2 = <String>{};
+      for (int i = 0; i <= s1.length - 3; i++) {
+        g1.add(s1.substring(i, i + 3).toLowerCase());
+      }
+      for (int i = 0; i <= s2.length - 3; i++) {
+        g2.add(s2.substring(i, i + 3).toLowerCase());
+      }
+      if (g1.isEmpty || g2.isEmpty) return 0.0;
+      return g1.intersection(g2).length / g1.union(g2).length;
+    }
+    return w1.intersection(w2).length / w1.union(w2).length;
+  }
+
+  static List<int> longestIncreasingSubsequence(List<int> seq) {
+    if (seq.isEmpty) return const [];
+    final tails = <int>[];
+    final tailIndices = <int>[];
+    final parent = List<int>.filled(seq.length, -1);
+    for (int i = 0; i < seq.length; i++) {
+      final x = seq[i];
+      int low = 0, high = tails.length;
+      while (low < high) {
+        final mid = (low + high) ~/ 2;
+        if (tails[mid] < x) {
+          low = mid + 1;
+        } else {
+          high = mid;
+        }
+      }
+      if (low < tails.length) {
+        tails[low] = x;
+        tailIndices[low] = i;
+      } else {
+        tails.add(x);
+        tailIndices.add(i);
+      }
+      if (low > 0) {
+        parent[i] = tailIndices[low - 1];
+      }
+    }
+    final lis = <int>[];
+    int curr = tailIndices.isNotEmpty ? tailIndices.last : -1;
+    while (curr != -1) {
+      lis.add(seq[curr]);
+      curr = parent[curr];
+    }
+    return lis.reversed.toList();
+  }
+
+  static Map<int, List<TocEntry>> detectXrceLinkToc({
+    required Map<int, List<LineFragment>> pageLinesMap,
+    required int totalPages,
+    double bodyFontSize = 12.0,
+  }) {
+    final result = <int, List<TocEntry>>{};
+    if (totalPages < 4) return result;
+    final maxCandPage = min(30, max(5, (totalPages * 0.20).toInt()));
+
+    final pageHeadings = <int, List<String>>{};
+    for (int p = 1; p <= totalPages; p++) {
+      final lines = pageLinesMap[p] ?? const [];
+      final hList = <String>[];
+      for (final l in lines) {
+        final t = l.text.trim();
+        final words = t.split(RegExp(r'\s+')).where((w) => w.isNotEmpty).toList();
+        if (words.isNotEmpty && words.length <= 16) {
+          final clean = t.replaceAll(RegExp(r'^[0-9\.\-\:\s]+'), '').trim().toLowerCase();
+          if (clean.length >= 4 && clean.split(RegExp(r'\s+')).length >= 2) hList.add(clean);
+        }
+      }
+      pageHeadings[p] = hList;
+    }
+
+    for (int p = 1; p <= maxCandPage; p++) {
+      final lines = pageLinesMap[p] ?? const [];
+      if (lines.length < 3) continue;
+
+      final candidates = <Map<String, dynamic>>[];
+      for (int i = 0; i < lines.length; i++) {
+        final l = lines[i];
+        final t = l.text.trim();
+        final words = t.split(RegExp(r'\s+')).where((w) => w.isNotEmpty).toList();
+        if (words.isEmpty || words.length > 14) continue;
+        if (RegExp(r'[.!?:]$').hasMatch(t) && words.length > 6) continue;
+        final clean = t
+            .replaceAll(RegExp(r'[\.\s\-_]+(?:\d+|[ivxlcdm]+)\s*$', caseSensitive: false), '')
+            .replaceAll(RegExp(r'^[0-9\.\-\:\s]+'), '')
+            .trim()
+            .toLowerCase();
+        if (clean.length >= 4 && clean.split(RegExp(r'\s+')).length >= 2) {
+          candidates.add({'index': i, 'line': l, 'clean': clean, 'raw': t});
+        }
+      }
+
+      if (candidates.length < 3) continue;
+
+      final matchedTargets = <Map<String, dynamic>>[];
+      for (final cand in candidates) {
+        final candText = cand['clean'] as String;
+        final candWords = RegExp(r'\w+').allMatches(candText).map((m) => m.group(0)!).toSet();
+        if (candWords.isEmpty) continue;
+        int? bestTarget;
+        for (int tgtP = p + 1; tgtP <= totalPages; tgtP++) {
+          final headings = pageHeadings[tgtP] ?? const [];
+          for (final h in headings) {
+            final sim = jaccardSimilarity(candText, h);
+            if (sim >= 0.50 || (candWords.length >= 2 && candText.contains(h) && h.length >= 4) || (candWords.length >= 2 && h.contains(candText) && candText.length >= 4)) {
+              bestTarget = tgtP;
+              break;
+            }
+          }
+          if (bestTarget != null) break;
+        }
+        if (bestTarget != null) {
+          matchedTargets.add({
+            'targetPage': bestTarget,
+            'index': cand['index'] as int,
+            'line': cand['line'] as LineFragment,
+            'clean': cand['clean'] as String,
+            'raw': cand['raw'] as String,
+          });
+        }
+      }
+
+      final targetPages = matchedTargets.map((m) => m['targetPage'] as int).toList();
+      final lis = longestIncreasingSubsequence(targetPages);
+
+      if (lis.length >= 3) {
+        final entries = <TocEntry>[];
+        final minLeft = matchedTargets.map((m) => (m['line'] as LineFragment).left).reduce(min);
+        final idxToTarget = {for (final m in matchedTargets) (m['index'] as int): m};
+
+        TocEntry? currEntry;
+        for (int i = 0; i < lines.length; i++) {
+          final l = lines[i];
+          final t = l.text.trim();
+          if (idxToTarget.containsKey(i)) {
+            final m = idxToTarget[i]!;
+            final tgtP = m['targetPage'] as int;
+            final lvl = (l.left - minLeft) < 1.5 * bodyFontSize ? 1 : 2;
+            final mEndNum = RegExp(r'\b(\d+|[ivxlcdm]+)\s*$', caseSensitive: false).firstMatch(t);
+            final printedP = (mEndNum != null && int.tryParse(mEndNum.group(1)!) != null)
+                ? int.parse(mEndNum.group(1)!)
+                : tgtP;
+            currEntry = TocEntry(
+              title: t.replaceAll(RegExp(r'[\.\s\-_]+(?:\d+|[ivxlcdm]+)\s*$', caseSensitive: false), '').trim(),
+              pageNumber: tgtP,
+              rawPageLabel: mEndNum?.group(1) ?? '$printedP',
+              level: lvl,
+            );
+            entries.add(currEntry);
+          } else if (currEntry != null) {
+            final words = t.split(RegExp(r'\s+')).where((w) => w.isNotEmpty).toList();
+            final isCont = (l.left > minLeft + 0.35 * bodyFontSize) || !RegExp(r'\d+$').hasMatch(currEntry.title);
+            if (isCont && words.length <= 12 && !RegExp(r'[.!?]$').hasMatch(t)) {
+              final cleanCont = t.replaceAll(RegExp(r'[\.\s\-_]+(?:\d+|[ivxlcdm]+)\s*$', caseSensitive: false), '').trim();
+              entries[entries.length - 1] = TocEntry(
+                title: '${currEntry.title} $cleanCont'.trim(),
+                pageNumber: currEntry.pageNumber,
+                rawPageLabel: currEntry.rawPageLabel,
+                level: currEntry.level,
+              );
+            } else {
+              currEntry = null;
+            }
+          }
+        }
+        if (entries.isNotEmpty) {
+          result[p] = entries;
+        }
+      }
+    }
+    return result;
+  }
 }
 
 class LayoutProfile {
@@ -4166,15 +4445,26 @@ class StructureResolver {
       });
 
       int indexEntryCount = 0;
+      final letterHeaders = <String>[];
+      int citationYearCount = 0;
       for (final l in lines) {
-        if (RegExp(r'^[A-Za-z][^,]{1,40},\s\d').hasMatch(l.text.trim())) {
+        final t = l.text.trim();
+        if (RegExp(r'^[A-Za-z][^,]{1,40}(?:,\s*\d+){2,}').hasMatch(t) || RegExp(r'^[A-Za-z][^,]{1,40},\s*\d+').hasMatch(t)) {
           indexEntryCount++;
         }
+        if (RegExp(r'^[A-Z]$').hasMatch(t)) {
+          letterHeaders.add(t.toUpperCase());
+        }
+        if (RegExp(r'\b(?:19|20)\d{2}\b').hasMatch(t) && RegExp(r'^\s*(?:\[\d+\]|\d+\.|\*)\s+').hasMatch(t)) {
+          citationYearCount++;
+        }
       }
-      final bool isIndexDense =
-          lines.length >= 8 && (indexEntryCount / lines.length >= 0.40);
-      final bool hasBackMarkers = isLatePage &&
-          (hasBackHeading || (hasBackLine && (isIndexDense || words < 120)));
+      final bool hasAlphaProg = letterHeaders.length >= 3 &&
+          List.generate(letterHeaders.length - 1, (i) => letterHeaders[i].compareTo(letterHeaders[i + 1]) < 0).every((b) => b);
+      final bool isIndexSpecies = isLatePage && (heading.contains('index') || indexEntryCount >= 3 || hasAlphaProg);
+      final bool isBiblioSpecies = isLatePage && (heading.contains('biblio') || heading.contains('references') || citationYearCount >= 3);
+      final bool isNotesSpecies = isLatePage && (heading.contains('notes') || (citationYearCount >= 3 && !isBiblioSpecies));
+      final bool hasBackMarkers = isLatePage && (isIndexSpecies || isBiblioSpecies || isNotesSpecies || hasBackHeading || (hasBackLine && words < 120));
 
       final hasReadableFrontHeader = RegExp(
                   r'\b(preface|foreword|introduction|prologue|acknowledgments)\b',
@@ -4189,7 +4479,13 @@ class StructureResolver {
                     .hasMatch(t);
           });
 
-      if (pageNum <= (totalPages * 0.20).ceil() || isEarlyPage) {
+      if (isIndexSpecies) {
+        roles.add(SectionRole.bookIndex);
+      } else if (isBiblioSpecies) {
+        roles.add(SectionRole.bibliography);
+      } else if (isNotesSpecies) {
+        roles.add(SectionRole.notes);
+      } else if (pageNum <= (totalPages * 0.20).ceil() || isEarlyPage) {
         if (isToc) {
           roles.add(SectionRole.toc);
         } else if (hasReadableFrontHeader && !isNonProseMatter) {
@@ -4201,12 +4497,12 @@ class StructureResolver {
         } else {
           roles.add(SectionRole.chapter);
         }
-      } else if (isLatePage && (hasBackMarkers || isIndexDense)) {
-        if (heading.contains('index') || isIndexDense) {
+      } else if (isLatePage && hasBackMarkers) {
+        if (heading.contains('index') || isIndexSpecies) {
           roles.add(SectionRole.bookIndex);
         } else if (heading.contains('glossary')) {
           roles.add(SectionRole.glossary);
-        } else if (heading.contains('bibliography') || heading.contains('references')) {
+        } else if (heading.contains('bibliography') || heading.contains('references') || isBiblioSpecies) {
           roles.add(SectionRole.bibliography);
         } else {
           roles.add(SectionRole.notes);
@@ -4264,15 +4560,27 @@ class StructureResolver {
       });
 
       int indexEntryCount = 0;
+      final letterHeaders = <String>[];
+      int citationYearCount = 0;
       for (final l in lines) {
-        if (RegExp(r'^[A-Za-z][^,]{1,40},\s\d').hasMatch(l.text.trim())) {
+        final t = l.text.trim();
+        if (RegExp(r'^[A-Za-z][^,]{1,40}(?:,\s*\d+){2,}').hasMatch(t) || RegExp(r'^[A-Za-z][^,]{1,40},\s*\d+').hasMatch(t)) {
           indexEntryCount++;
         }
+        if (RegExp(r'^[A-Z]$').hasMatch(t)) {
+          letterHeaders.add(t.toUpperCase());
+        }
+        if (RegExp(r'\b(?:19|20)\d{2}\b').hasMatch(t) && RegExp(r'^\s*(?:\[\d+\]|\d+\.|\*)\s+').hasMatch(t)) {
+          citationYearCount++;
+        }
       }
-      final bool isIndexDense =
-          lines.length >= 8 && (indexEntryCount / lines.length >= 0.40);
+      final bool hasAlphaProg = letterHeaders.length >= 3 &&
+          List.generate(letterHeaders.length - 1, (i) => letterHeaders[i].compareTo(letterHeaders[i + 1]) < 0).every((b) => b);
+      final bool isIndexSpecies = isLatePage && (heading.contains('index') || indexEntryCount >= 3 || hasAlphaProg);
+      final bool isBiblioSpecies = isLatePage && (heading.contains('biblio') || heading.contains('references') || citationYearCount >= 3);
+      final bool isNotesSpecies = isLatePage && (heading.contains('notes') || (citationYearCount >= 3 && !isBiblioSpecies));
       final bool hasBackMarkers = isLatePage &&
-          (hasBackHeading || (hasBackLine && (isIndexDense || words < 120)));
+          (isIndexSpecies || isBiblioSpecies || isNotesSpecies || hasBackHeading || (hasBackLine && words < 120));
 
       // S-2: Readable front markers (preface, foreword, introduction, prologue, acknowledgments)
       final hasReadableFrontHeader = RegExp(
@@ -4343,7 +4651,7 @@ class StructureResolver {
         e[2] = 40.0;
         e[3] = 60.0;
         e[4] = 80.0;
-      } else if (hasBackMarkers || (isLatePage && isIndexDense)) {
+      } else if (hasBackMarkers || (isLatePage && isIndexSpecies)) {
         e[4] = 0.0;
         e[0] = 70.0;
         e[1] = 70.0;

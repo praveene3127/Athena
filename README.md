@@ -11,7 +11,7 @@
   <img src="https://img.shields.io/badge/Rust_Core-PyO3%20%7C%20Rayon-DEA584?logo=rust&logoColor=white" alt="Rust Core" />
   <img src="https://img.shields.io/badge/Zero--JSON-Binary%20Book%20Tape-8B5CF6" alt="Binary Book Tape" />
   <img src="https://img.shields.io/badge/SHA--256-Lossless%20Canonical-10B981" alt="Lossless Canonical" />
-  <img src="https://img.shields.io/badge/Tests-282%20passing-brightgreen" alt="Tests" />
+  <img src="https://img.shields.io/badge/Tests-283%20passing-brightgreen" alt="Tests" />
   <a href="LICENSE"><img src="https://img.shields.io/badge/License-GPLv3-blue.svg" alt="License: GPL v3" /></a>
 </p>
 
@@ -303,7 +303,54 @@ Athena enforces dynamic model discovery with zero hardcoded model identifier lis
 
 ---
 
-## 7. Repository Layout
+## 7. Document Intelligence & Output-Driven Structural Inspection (`BookXRay`)
+
+Athena avoids brittle unit-test gaming by validating real structural document understanding using an unforgiving output-driven inspection engine and 6 proven general document-intelligence algorithms (with **zero book-specific keyword hardcoding**):
+
+### The 6 General Document Intelligence Algorithms
+1. **Algorithm 1 — XRCE Link-Based TOC Detection & Multi-Line Parsing**:
+   - Implements the Déjean & Meunier (XRCE) functional link algorithm: fuzzy-matches candidate early lines against later section headings and searches for a Longest Increasing Subsequence ($\text{LIS} \ge 3$) of target physical pages.
+   - Resilient against OCR-corrupted page tokens (`;)8`, `sG`, `XXll`), missing dot-leaders, and non-English books.
+   - Automatically merges multi-line wrapped TOC continuation lines and infers hierarchical heading levels from horizontal indentation.
+2. **Algorithm 2 — 8-Page Sliding-Window Running Header / Footer Removal**:
+   - Detects and strips chapter-specific odd-page running headers and even-page book titles across an 8-page sliding window (top/bottom $8\%$ bands, $\text{Levenshtein} \le 2$).
+3. **Algorithm 3 — Footnote & Outer-Gutter Margin Isolation**:
+   - Detaches bottom-of-page footnotes ($y \ge 0.62\times h$, smaller font or numeric callout) from the prose stream before cross-page paragraph continuation, preventing mid-sentence splicing.
+   - Strips isolated paragraph and margin numbering fragments sitting in outer gutters before horizontal line assembly.
+4. **Algorithm 4 — Structural Page-Species Classifier**:
+   - Classifies page species using statistical geometry: Index species (A–Z progression / dense comma-separated citation numbers in back $25\%$), Bibliography / Notes (hanging-indent blocks and parenthetical publication dates), and Display Pages (early low-density title/copyright/blank leaves).
+   - Tracks margin page labels to establish the logical Roman-to-Arabic pagination boundary ($i, ii \dots \to 1$).
+5. **Algorithm 5 — Recursive XY-Cut & Skew-Tolerant Grouping**:
+   - Groups words into horizontal rows via vertical $Y$-overlap ratio ($\ge 0.40$), tolerating $1^\circ\text{–}2^\circ$ scan rotation.
+   - Splits spanning chapter titles across multi-column body text and auto-detects scanned OCR layers.
+6. **Algorithm 6 — Output-Verified Marginalia Card Gate**:
+   - Restricts Context Card generation to clean, readable prose chunks ($\ge 2$ full sentences).
+   - Rejects Roman numerals, single generic nouns, and requires topical keyword overlap ($\ge 2$ terms). Honest abstention if no external source verifies.
+
+### BookXRay CLI Output Inspector & Adversarial Gauntlet
+Athena includes standalone structural inspectors in both Python and Dart:
+```bash
+# Python Companion Pipeline Inspector
+python scripts/book_xray.py <path_to_pdf_or_epub>
+
+# Dart Standalone Engine Inspector
+flutter test test/book_xray_test.dart
+
+# Multi-Round Adversarial Book Generator
+python scripts/generate_adversarial_books.py
+```
+
+The inspector evaluates 6 unforgiving criteria on any real or synthetic book:
+- **Book Metadata**: Detected language/script, OCR layer flag, total pages, canonical word count.
+- **Page-by-Page Zone Map**: Front-matter display vs. body prose vs. back-matter index/notes.
+- **Extracted TOC Tree**: Chapter titles, hierarchical levels, and physical page-to-chunk mappings.
+- **Strips Audit**: Detached footnotes, stripped running furniture, and 0 leaked dot-leader TOC lines in prose.
+- **Reading Chunks**: Verbatim inspection of first 3, middle, and last 3 chunks.
+- **Invariant Audit**: Byte-exact SHA-256 match, 0 mid-word cuts, 0 spliced footnotes.
+
+---
+
+## 8. Repository Layout
 
 ```text
 Athena/
@@ -369,7 +416,7 @@ Athena/
 
 ---
 
-## 8. REST API Reference
+## 9. REST API Reference
 
 When running the Companion Engine, the FastAPI server mounts the Flutter Web client at `/` and exposes the REST API under `/api/*`:
 
@@ -409,7 +456,7 @@ When running the Companion Engine, the FastAPI server mounts the Flutter Web cli
 
 ---
 
-## 9. Development & Verification Workflow
+## 10. Development & Verification Workflow
 
 ```bash
 # Backend pytest suite (113 tests)
@@ -418,7 +465,7 @@ pytest backend/tests -q
 # Flutter static analysis (0 issues)
 cd app && flutter analyze
 
-# Flutter unit & widget test suites (169 tests)
+# Flutter unit & widget test suites (170 tests)
 cd app && flutter test
 
 # Comprehensive 9-Gate Release Verification Suite
@@ -433,7 +480,7 @@ cd app && flutter build apk --release
 
 ---
 
-## 10. License
+## 11. License
 
 Athena is licensed under the [GNU General Public License v3.0 (GPL-3.0-or-later)](LICENSE).
 Third-party note: `syncfusion_flutter_pdf` is used under the [Syncfusion Community License](https://www.syncfusion.com/communitylicense).

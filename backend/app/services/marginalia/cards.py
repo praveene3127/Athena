@@ -586,21 +586,46 @@ def generate_context_cards(
         concept_norm = concept.name.strip().lower()
         slug = re.sub(r"[^a-z0-9]+", "_", concept_norm).strip("_")
 
-        # Skip trivial single common words or garbage tokens
-        if len(concept.name.split()) == 1 and (
-            len(concept.name) < 4
-            or concept_norm in {"years", "people", "person", "thing", "things", "lives", "problem", "makes", "keep", "world", "her", "now", "well", "good"}
-        ):
-            concept.status = "skipped_trivial"
+        # Algorithm 6: Strict concept validation
+        from app.services.edge.hygiene import ROMAN_NUMERALS
+        if concept_norm in ROMAN_NUMERALS or re.match(r"^[ivxlcdm]+$", concept_norm, re.I):
+            concept.status = "skipped_roman_numeral"
             continue
 
-        # NOTE: Document-wide concept deduplication REMOVED for warm-start.
-        # Deduplication now happens at claim/evidence level, not concept level.
-        # A concept can appear in multiple cards if each card has distinct evidence/claims.
+        generic_nouns = {
+            "years", "people", "person", "thing", "things", "lives", "problem", "makes",
+            "keep", "world", "her", "now", "well", "good", "way", "chapter", "part",
+            "book", "section", "page", "author", "edition", "volume", "title", "name",
+            "word", "words", "time", "times", "year", "state", "place", "case", "fact"
+        }
+        if concept_norm in generic_nouns or (len(concept.name.split()) == 1 and len(concept.name) < 4):
+            concept.status = "skipped_generic_noun"
+            continue
+
+        # Reject fused tokens
+        if concept.name.isupper() and len(concept.name) > 12 and not any(ch in "AEIOUY" for ch in concept.name):
+            concept.status = "skipped_fused_token"
+            continue
 
         chunk = chunk_map.get(concept.chunk_id or "")
         if not chunk:
             concept.status = "skipped"
+            continue
+
+        # Algorithm 6: Strict chunk eligibility
+        c_role = (chunk.section_role or "").lower()
+        non_reading_roles = {
+            "toc", "index", "bookindex", "book_index", "titlepage", "title_page",
+            "copyright", "dedication", "footnote", "notes", "bibliography", "blank"
+        }
+        if c_role in non_reading_roles:
+            concept.status = "skipped_matter_role"
+            continue
+
+        raw_c_text = chunk.raw_text.strip()
+        c_sentences = [s for s in re.split(r"(?<=[.!?…。！？।॥؟])\s+", raw_c_text) if len(s.strip().split()) >= 4]
+        if len(c_sentences) < 2:
+            concept.status = "skipped_insufficient_sentences"
             continue
 
         # Guardrail 1: Gap check (minimum spacing between cards)

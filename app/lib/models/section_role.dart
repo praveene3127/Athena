@@ -165,8 +165,8 @@ enum SectionRole {
     if (words.any((w) => w == 'index' && w != 'index_split')) {
       return SectionRole.bookIndex;
     }
-    // Chapter: starts with 'chapter' or 'ch'
-    if (first == 'chapter' || first == 'ch') {
+    // Chapter: starts with 'chapter', 'ch', 'chapitre', 'kapitel', or standalone Roman numeral
+    if (first == 'chapter' || first == 'ch' || first == 'chapitre' || first == 'kapitel' || (RegExp(r'^[ivxlcdm]+$').hasMatch(clean) && words.length == 1)) {
       return SectionRole.chapter;
     }
     // Part: first token equals 'part'

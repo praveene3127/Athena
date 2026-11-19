@@ -402,6 +402,9 @@ def extract_document_content(
             "raw_toc": raw_toc,
             "printed_toc": struct.get("printed_toc", []),
             "telemetry": telemetry_data,
+            "page_footnotes": struct.get("page_footnotes", {}),
+            "is_ocr_layer": struct.get("is_ocr_layer", False),
+            "toc_pages": struct.get("toc_pages", []),
         }
     finally:
         if raw_text_file is not None:
